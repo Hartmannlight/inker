@@ -1,5 +1,6 @@
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://buymeacoffee.com/wojo_o)
 
+
 # Inker v0.4.0
 
 Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices (supports firmware 1.7.8) and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
@@ -7,6 +8,11 @@ Self-hosted e-ink device management server built for the homelab community. Work
 Inker is heading in its own direction — focusing on homelab integrations like server monitoring, smart home dashboards, network stats, and self-hosted service displays. TRMNL device compatibility is maintained, but the plugin ecosystem will be Inker-native.
 
 ![Dashboard](https://github.com/user-attachments/assets/fd9affac-5c57-4448-9338-ea8f83add08a)
+
+
+
+Support project that uses inker:
+- https://3dpm.ru/en/open_projects/ESPHome-TRMNL_7+5/
 
 ## Features
 
