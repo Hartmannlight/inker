@@ -149,16 +149,19 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    * This ensures the loaded woff2 fonts are actually used
    */
   private mapFontFamily(fontFamily: string): string {
+    // 'Symbola' is a monochrome symbol/emoji font (installed in the image). It is
+    // listed as a per-glyph fallback so emoji render as black glyphs that survive
+    // the grayscale + Floyd-Steinberg dithering for e-ink (color emoji turn white).
     switch (fontFamily) {
       case 'sans-serif':
-        return "'Inter', sans-serif";
+        return "'Inter', 'Symbola', sans-serif";
       case 'monospace':
-        return "'Roboto Mono', monospace";
+        return "'Roboto Mono', 'Symbola', monospace";
       case 'serif':
-        return "'Merriweather', serif";
+        return "'Merriweather', 'Symbola', serif";
       default:
         // If already a specific font or unknown, return with fallback
-        return fontFamily.includes(',') ? fontFamily : `${fontFamily}, sans-serif`;
+        return fontFamily.includes(',') ? fontFamily : `${fontFamily}, 'Symbola', sans-serif`;
     }
   }
 
@@ -776,9 +779,9 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
           <ellipse cx="${cx - 5}" cy="${cy - 5}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
           <ellipse cx="${cx + 6}" cy="${cy - 5}" rx="${r * 0.6}" ry="${r * 0.45}" fill="${color}"/>
           <ellipse cx="${cx}" cy="${cy - 10}" rx="${r * 0.85}" ry="${r * 0.6}" fill="${color}"/>
-          <text x="${cx - 8}" y="${cy + 12}" font-size="12" fill="${color}">*</text>
-          <text x="${cx}" y="${cy + 16}" font-size="12" fill="${color}">*</text>
-          <text x="${cx + 8}" y="${cy + 10}" font-size="12" fill="${color}">*</text>
+          <text x="${cx - 8}" y="${cy + 12}" font-size="12" font-family="sans-serif" fill="${color}">*</text>
+          <text x="${cx}" y="${cy + 16}" font-size="12" font-family="sans-serif" fill="${color}">*</text>
+          <text x="${cx + 8}" y="${cy + 10}" font-size="12" font-family="sans-serif" fill="${color}">*</text>
         `;
       case 'thunder':
         return `
@@ -2961,7 +2964,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
       html += '<div style="display: flex; align-items: center; gap: 8px;">';
       if (showIcon) {
-        html += `<div style="color: currentColor;">${this.getWeatherIconSvg(condition.icon, iconSize, 'currentColor')}</div>`;
+        html += `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 ${iconSize} ${iconSize}" xmlns="http://www.w3.org/2000/svg" style="color: currentColor;">${this.getWeatherIconSvg(condition.icon, iconSize, 'currentColor')}</svg>`;
       }
       html += '<div style="display: flex; flex-direction: column;">';
       if (showTemperature) {

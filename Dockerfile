@@ -91,7 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     # Chrome headless shell dependencies
     wget ca-certificates openssl unzip \
-    fonts-liberation fonts-noto-color-emoji fonts-noto-cjk fontconfig \
+    fonts-liberation fonts-symbola fonts-noto-cjk fontconfig \
     libnss3 libatk-bridge2.0-0t64 libdrm2 libxkbcommon0 \
     libgbm1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     libasound2t64 libcups2t64 libatk1.0-0t64 libnspr4 libdbus-1-3 \
