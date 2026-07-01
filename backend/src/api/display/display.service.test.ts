@@ -8,17 +8,30 @@ describe('DisplayService', () => {
   let mockPrisma: ReturnType<typeof createMockPrisma>;
   let mockConfig: any;
   let mockDefaultScreenService: any;
+  let mockSleepScreenService: any;
   let mockScreenRendererService: any;
 
   beforeEach(() => {
     mockPrisma = createMockPrisma();
-    mockConfig = { get: createMock().mockReturnValue('http://localhost:3002') };
+    mockConfig = {
+      get: createMock().mockImplementation((key: string) =>
+        key === 'defaultTimezone' ? 'UTC' : 'http://localhost:3002',
+      ),
+    };
     mockDefaultScreenService = {
       getDefaultScreenUrl: createMock().mockReturnValue('/uploads/default-screen.png'),
       getDefaultScreenBase64: createMock().mockResolvedValue('base64data'),
       getDefaultScreenBuffer: createMock().mockResolvedValue(Buffer.from('PNG')),
       getDefaultScreenPreviewBuffer: createMock().mockResolvedValue(Buffer.from('PNG')),
       ensureDefaultScreenExists: createMock().mockResolvedValue(undefined),
+    };
+    mockSleepScreenService = {
+      getSleepScreen: createMock().mockResolvedValue({
+        url: '/assets/sleep-800x480-0700.png',
+        filename: 'sleep-800x480-0700.png',
+      }),
+      getSleepScreenBase64: createMock().mockResolvedValue('base64sleep'),
+      getSleepScreenBuffer: createMock().mockResolvedValue(Buffer.from('SLEEPPNG')),
     };
     mockScreenRendererService = {
       renderScreenDesign: createMock().mockResolvedValue(Buffer.from('PNG')),
@@ -27,6 +40,7 @@ describe('DisplayService', () => {
       mockPrisma as any,
       mockConfig,
       mockDefaultScreenService,
+      mockSleepScreenService,
       mockScreenRendererService,
     );
   });
@@ -286,6 +300,23 @@ describe('DisplayService', () => {
       // Second arg is deviceContext, third is preview=true
       expect(mockScreenRendererService.renderScreenDesign.calls[0][2]).toBe(true);
     });
+
+    it('returns the sleep screen during quiet hours when showSleepScreen is true', async () => {
+      const hhmm = (offsetMin: number) => {
+        const now = new Date();
+        const total = ((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMin) % 1440 + 1440) % 1440;
+        return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+      };
+      mockPrisma.device.findUnique.mockResolvedValue({
+        id: 1, name: 'Test', width: 800, height: 480,
+        sleepStartAt: hhmm(-60), sleepStopAt: hhmm(120), showSleepScreen: true,
+        playlist: { items: [{ duration: 60, screenDesign: { id: 5, widgets: [] } }] },
+      });
+      const result = await service.getCurrentScreenImage(1);
+      expect(mockSleepScreenService.getSleepScreenBuffer.calls.length).toBe(1);
+      expect(mockScreenRendererService.renderScreenDesign.calls.length).toBe(0);
+      expect(result).toBeInstanceOf(Buffer);
+    });
   });
 
   describe('getImageFilename (private)', () => {
@@ -297,6 +328,142 @@ describe('DisplayService', () => {
 
     it('should handle full URLs', () => {
       expect(getFilename('http://localhost/uploads/test.png')).toBe('test.png');
+    });
+  });
+
+  describe('parseTimeToSeconds (private)', () => {
+    const parse = (v: string) => (service as any).parseTimeToSeconds(v);
+
+    it('parses valid HH:MM values', () => {
+      expect(parse('00:00')).toBe(0);
+      expect(parse('07:00')).toBe(25200);
+      expect(parse('22:30')).toBe(81000);
+      expect(parse('23:59')).toBe(86340);
+    });
+
+    it('returns null for invalid values', () => {
+      expect(parse('24:00')).toBeNull();
+      expect(parse('7:00')).toBeNull();
+      expect(parse('12:60')).toBeNull();
+      expect(parse('foo')).toBeNull();
+    });
+  });
+
+  describe('getQuietHoursSeconds (private)', () => {
+    const quiet = (device: any) => (service as any).getQuietHoursSeconds(device);
+    // Build an "HH:MM" string offset by a number of minutes from current UTC time.
+    const hhmmFromNowOffset = (offsetMin: number) => {
+      const now = new Date();
+      const total = ((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMin) % 1440 + 1440) % 1440;
+      const h = Math.floor(total / 60);
+      const m = total % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    it('returns null when sleep times are missing', () => {
+      expect(quiet({ sleepStartAt: null, sleepStopAt: null })).toBeNull();
+      expect(quiet({ sleepStartAt: '22:00', sleepStopAt: null })).toBeNull();
+    });
+
+    it('returns null when start equals stop', () => {
+      expect(quiet({ sleepStartAt: '07:00', sleepStopAt: '07:00' })).toBeNull();
+    });
+
+    it('returns null when now is outside the window', () => {
+      const device = {
+        sleepStartAt: hhmmFromNowOffset(120),
+        sleepStopAt: hhmmFromNowOffset(240),
+      };
+      expect(quiet(device)).toBeNull();
+    });
+
+    it('returns seconds-until-wake when now is inside the window', () => {
+      const device = {
+        sleepStartAt: hhmmFromNowOffset(-60), // started 1h ago
+        sleepStopAt: hhmmFromNowOffset(120), // ends in 2h
+      };
+      const result = quiet(device);
+      expect(result).not.toBeNull();
+      // ~2h until wake (+60s buffer), with slack for the current seconds-in-minute
+      expect(result).toBeGreaterThan(2 * 3600 - 120);
+      expect(result).toBeLessThanOrEqual(2 * 3600 + 120);
+    });
+
+    it('handles windows that wrap past midnight and caps at 24h', () => {
+      const device = {
+        sleepStartAt: hhmmFromNowOffset(-30),
+        sleepStopAt: hhmmFromNowOffset(30),
+      };
+      const result = quiet(device);
+      expect(result).not.toBeNull();
+      expect(result).toBeLessThanOrEqual(86400);
+    });
+  });
+
+  describe('getDisplayContent - quiet hours', () => {
+    const windowAroundNow = () => {
+      const hhmm = (offsetMin: number) => {
+        const now = new Date();
+        const total = ((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMin) % 1440 + 1440) % 1440;
+        return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+      };
+      return { start: hhmm(-60), stop: hhmm(120) };
+    };
+
+    it('serves the sleep screen during quiet hours when showSleepScreen is true', async () => {
+      const { start, stop } = windowAroundNow();
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'Test', playlist: null, refreshRate: 900, refreshPending: false,
+        width: 800, height: 480, sleepStartAt: start, sleepStopAt: stop, showSleepScreen: true,
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: 80, wifi: -50 });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/assets/sleep-');
+      expect(mockSleepScreenService.getSleepScreen.calls.length).toBe(1);
+      expect(result.update_firmware).toBe(false);
+      expect(result.refresh_rate).toBeGreaterThan(2 * 3600 - 120);
+    });
+
+    it('freezes the current screen during quiet hours when showSleepScreen is false', async () => {
+      const { start, stop } = windowAroundNow();
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'Test',
+        playlist: { items: [{ duration: 60, screen: { id: 9, name: 'S', imageUrl: '/uploads/s.png' } }] },
+        refreshRate: 900, refreshPending: false,
+        width: 800, height: 480, sleepStartAt: start, sleepStopAt: stop, showSleepScreen: false,
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: 80, wifi: -50 });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      // Keeps the current screen (no sleep screen) ...
+      expect(result.image_url).toContain('/uploads/s.png');
+      expect(mockSleepScreenService.getSleepScreen.calls.length).toBe(0);
+      // ... but sleeps until the wake time (long refresh rate)
+      expect(result.refresh_rate).toBeGreaterThan(2 * 3600 - 120);
+    });
+
+    it('uses normal refresh_rate outside quiet hours', async () => {
+      const hhmm = (offsetMin: number) => {
+        const now = new Date();
+        const total = ((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMin) % 1440 + 1440) % 1440;
+        return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+      };
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'Test',
+        playlist: { items: [{ duration: 120, screen: { id: 9, name: 'S', imageUrl: '/uploads/s.png' } }] },
+        refreshRate: 900, refreshPending: false,
+        width: 800, height: 480, sleepStartAt: hhmm(120), sleepStopAt: hhmm(240), showSleepScreen: true,
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: 80, wifi: -50 });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/uploads/s.png');
+      expect(mockSleepScreenService.getSleepScreen.calls.length).toBe(0);
+      expect(result.refresh_rate).toBe(120);
     });
   });
 });

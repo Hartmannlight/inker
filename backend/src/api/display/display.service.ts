@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { DefaultScreenService } from './default-screen.service';
+import { SleepScreenService } from './sleep-screen.service';
 import { ScreenRendererService } from '../../screen-designer/services/screen-renderer.service';
 import { PluginsService } from '../../plugins/plugins.service';
 import { SetupService } from '../setup/setup.service';
@@ -26,6 +27,7 @@ export class DisplayService {
     private prisma: PrismaService,
     private config: ConfigService,
     private defaultScreenService: DefaultScreenService,
+    private sleepScreenService: SleepScreenService,
     private screenRendererService: ScreenRendererService,
     private pluginsService: PluginsService,
     private setupService: SetupService,
@@ -198,8 +200,50 @@ export class DisplayService {
     // Check for firmware update
     const firmwareUrl = await this.getFirmwareUpdateUrl(device.firmwareVersion || undefined);
 
-    // Default refresh rate (used for default screens or when no playlist)
-    const defaultRefreshRate = device.refreshRate;
+    // Quiet hours: if the device is within its configured sleep window, return
+    // a refresh_rate equal to the seconds until the wake time, so the device
+    // sleeps the whole night in a single deep-sleep cycle instead of polling.
+    const sleepSeconds = this.getQuietHoursSeconds(device);
+
+    // Sleep-screen mode: show a dedicated sleep screen until the wake time.
+    // (Freeze mode keeps the current screen and is handled via the refresh-rate
+    // overrides below, so we only short-circuit here when a sleep screen is wanted.)
+    if (sleepSeconds !== null && device.showSleepScreen) {
+      const wakeTime = device.sleepStopAt as string;
+      const { url, filename } = await this.sleepScreenService.getSleepScreen(
+        device.width,
+        device.height,
+        wakeTime,
+      );
+      const imageData = useBase64
+        ? await this.sleepScreenService.getSleepScreenBase64(device.width, device.height, wakeTime)
+        : undefined;
+
+      this.logger.log(
+        `Device ${device.name} in quiet hours - serving sleep screen, next poll in ${sleepSeconds}s`,
+      );
+
+      return {
+        status: 0,
+        image_url: `${apiUrl}${url}`,
+        filename,
+        image_url_timeout: 0,
+        image_data: imageData,
+        firmware_url: '',
+        update_firmware: false,
+        refresh_rate: sleepSeconds,
+        reset_firmware: false,
+        special_function: '',
+        temperature_profile: 'default',
+        maximum_compatibility: true,
+        battery: updatedDevice.battery,
+        wifi: updatedDevice.wifi,
+      };
+    }
+
+    // Default refresh rate (used for default screens or when no playlist).
+    // In quiet hours (freeze mode) this is overridden with the sleep duration.
+    const defaultRefreshRate = sleepSeconds ?? device.refreshRate;
 
     // If no playlist or no screens in playlist, return the default welcome screen
     if (!device.playlist || !device.playlist.items || device.playlist.items.length === 0) {
@@ -321,6 +365,11 @@ export class DisplayService {
       effectiveDeviceRate,
     );
 
+    // Quiet hours (freeze mode): keep the current screen but make the device
+    // sleep until the wake time instead of refreshing at the normal interval.
+    const finalRefreshRate = sleepSeconds ?? effectiveRefreshRate;
+    const finalRefreshAt = sleepSeconds !== null ? Date.now() + sleepSeconds * 1000 : nextRefreshAt;
+
     // Handle both regular screens and designed screens
     if (currentScreen.screen) {
       // Regular uploaded screen
@@ -340,12 +389,12 @@ export class DisplayService {
         image_data: useBase64 ? await this.getBase64Image(currentScreen.screen.imageUrl) : undefined,
         firmware_url: firmwareUrl,
         update_firmware: !!firmwareUrl,
-        refresh_rate: effectiveRefreshRate,
+        refresh_rate: finalRefreshRate,
         reset_firmware: false,
         special_function: '',
         temperature_profile: 'default',
         maximum_compatibility: screenChanged,
-        refresh_at: nextRefreshAt,
+        refresh_at: finalRefreshAt,
         battery: updatedDevice.battery,
         wifi: updatedDevice.wifi,
       };
@@ -383,12 +432,12 @@ export class DisplayService {
         image_data: undefined,
         firmware_url: firmwareUrl,
         update_firmware: !!firmwareUrl,
-        refresh_rate: effectiveRefreshRate,
+        refresh_rate: finalRefreshRate,
         reset_firmware: false,
         special_function: '',
         temperature_profile: 'default',
         maximum_compatibility: screenChanged,
-        refresh_at: nextRefreshAt,
+        refresh_at: finalRefreshAt,
         battery: updatedDevice.battery,
         wifi: updatedDevice.wifi,
       };
@@ -413,12 +462,12 @@ export class DisplayService {
         image_data: undefined,
         firmware_url: firmwareUrl,
         update_firmware: !!firmwareUrl,
-        refresh_rate: effectiveRefreshRate,
+        refresh_rate: finalRefreshRate,
         reset_firmware: false,
         special_function: '',
         temperature_profile: 'default',
         maximum_compatibility: screenChanged,
-        refresh_at: nextRefreshAt,
+        refresh_at: finalRefreshAt,
         battery: updatedDevice.battery,
         wifi: updatedDevice.wifi,
       };
@@ -566,6 +615,77 @@ export class DisplayService {
   }
 
   /**
+   * Determine whether the device is currently within its configured quiet-hours
+   * (sleep) window and, if so, how many seconds remain until the wake time.
+   *
+   * Times are stored as "HH:MM" strings and evaluated against the server's
+   * configured DEFAULT_TIMEZONE (the same timezone used by clock/date widgets).
+   * Handles windows that cross midnight (e.g. 22:00–07:00).
+   *
+   * @returns seconds until the wake time when sleeping, otherwise null
+   */
+  private getQuietHoursSeconds(device: {
+    sleepStartAt: string | null;
+    sleepStopAt: string | null;
+  }): number | null {
+    const startSec = device.sleepStartAt ? this.parseTimeToSeconds(device.sleepStartAt) : null;
+    const stopSec = device.sleepStopAt ? this.parseTimeToSeconds(device.sleepStopAt) : null;
+    if (startSec === null || stopSec === null || startSec === stopSec) {
+      return null;
+    }
+
+    const nowSec = this.getSecondsSinceMidnight();
+
+    // Is "now" inside the window? Handle windows that wrap past midnight.
+    const inWindow =
+      startSec < stopSec
+        ? nowSec >= startSec && nowSec < stopSec
+        : nowSec >= startSec || nowSec < stopSec;
+
+    if (!inWindow) {
+      return null;
+    }
+
+    // Seconds until the next occurrence of the stop time, plus a small buffer so
+    // the device wakes just after the window ends. Capped at 24h for safety.
+    const SECONDS_PER_DAY = 86400;
+    const untilWake =
+      (((stopSec - nowSec) % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY || SECONDS_PER_DAY;
+    return Math.min(untilWake + 60, SECONDS_PER_DAY);
+  }
+
+  /**
+   * Parse an "HH:MM" string into seconds since midnight, or null if invalid.
+   */
+  private parseTimeToSeconds(value: string): number | null {
+    const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+    if (!match) {
+      return null;
+    }
+    return parseInt(match[1], 10) * 3600 + parseInt(match[2], 10) * 60;
+  }
+
+  /**
+   * Current seconds since midnight in the configured DEFAULT_TIMEZONE.
+   */
+  private getSecondsSinceMidnight(): number {
+    const timeZone = this.config.get<string>('defaultTimezone', 'UTC');
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date());
+
+    const get = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value || '0', 10);
+    // Intl can emit "24" for the midnight hour in some environments; normalize to 0.
+    const hour = get('hour') % 24;
+    return hour * 3600 + get('minute') * 60 + get('second');
+  }
+
+  /**
    * Check if a screen design contains a clock widget
    */
   private hasClockWidget(screenDesign: any): boolean {
@@ -691,6 +811,18 @@ export class DisplayService {
 
     if (!device) {
       throw new NotFoundException('Device not found');
+    }
+
+    // Reflect quiet hours in the preview: when the device is within its sleep
+    // window with a dedicated sleep screen, show that (it's what the device
+    // displays). Freeze mode keeps the current screen, which the path below
+    // already returns, so it needs no special handling here.
+    if (device.showSleepScreen && this.getQuietHoursSeconds(device) !== null) {
+      return this.sleepScreenService.getSleepScreenBuffer(
+        device.width,
+        device.height,
+        device.sleepStopAt as string,
+      );
     }
 
     // If no playlist or no items, return default screen

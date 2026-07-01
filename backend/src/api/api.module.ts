@@ -4,6 +4,7 @@ import { join } from 'path';
 import { ApiController } from './api.controller';
 import { DisplayService } from './display/display.service';
 import { DefaultScreenService } from './display/default-screen.service';
+import { SleepScreenService } from './display/sleep-screen.service';
 import { SetupService } from './setup/setup.service';
 import { SetupScreenService } from './setup/setup-screen.service';
 import { LogService } from './log/log.service';
@@ -38,7 +39,7 @@ import { PluginsModule } from '../plugins/plugins.module';
     }),
   ],
   controllers: [ApiController],
-  providers: [DisplayService, DefaultScreenService, SetupService, SetupScreenService, LogService],
-  exports: [DisplayService, DefaultScreenService, SetupService, SetupScreenService, LogService],
+  providers: [DisplayService, DefaultScreenService, SleepScreenService, SetupService, SetupScreenService, LogService],
+  exports: [DisplayService, DefaultScreenService, SleepScreenService, SetupService, SetupScreenService, LogService],
 })
 export class ApiModule {}

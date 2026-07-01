@@ -172,6 +172,10 @@ export class DevicesService {
         isActive: updateDeviceDto.isActive,
         width: updateDeviceDto.width,
         height: updateDeviceDto.height,
+        // Quiet hours / sleep schedule (undefined = no change, null = clear/disable)
+        sleepStartAt: updateDeviceDto.sleepStartAt,
+        sleepStopAt: updateDeviceDto.sleepStopAt,
+        showSleepScreen: updateDeviceDto.showSleepScreen,
         // Set refreshPending if playlist changed to trigger immediate device refresh
         ...(playlistChanging && { refreshPending: true }),
       },

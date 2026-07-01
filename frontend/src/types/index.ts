@@ -41,6 +41,12 @@ export interface Device {
   updatedAt: string;
   width?: number;
   height?: number;
+  /** Quiet hours start (HH:MM) — null/undefined disables night sleep */
+  sleepStartAt?: string | null;
+  /** Quiet hours end / wake time (HH:MM) */
+  sleepStopAt?: string | null;
+  /** During quiet hours: show a dedicated sleep screen (true) or freeze the current screen (false) */
+  showSleepScreen?: boolean;
   playlist?: {
     id: number;
     name: string;
@@ -307,6 +313,9 @@ export interface DeviceFormData {
   macAddress: string;
   width?: number;
   height?: number;
+  sleepStartAt?: string | null;
+  sleepStopAt?: string | null;
+  showSleepScreen?: boolean;
 }
 
 export interface ScreenFormData {

@@ -66,4 +66,34 @@ export class UpdateDeviceDto {
   @IsInt()
   @Min(1)
   height?: number;
+
+  @ApiPropertyOptional({
+    example: '22:00',
+    description: 'Quiet hours start time (HH:MM, evaluated in DEFAULT_TIMEZONE). Set to null to disable night sleep.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((object, value) => value !== null)
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'sleepStartAt must be in HH:MM format' })
+  sleepStartAt?: string | null;
+
+  @ApiPropertyOptional({
+    example: '07:00',
+    description: 'Quiet hours end / wake time (HH:MM, evaluated in DEFAULT_TIMEZONE). Set to null to disable night sleep.',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((object, value) => value !== null)
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'sleepStopAt must be in HH:MM format' })
+  sleepStopAt?: string | null;
+
+  @ApiPropertyOptional({
+    example: false,
+    description: 'During quiet hours, show a dedicated sleep screen (true) or keep the current screen frozen (false)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  showSleepScreen?: boolean;
 }

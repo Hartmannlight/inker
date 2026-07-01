@@ -29,6 +29,7 @@ model Device {
   firmwareUpdate  Boolean   @default(true) @map("firmware_update")
   sleepStartAt    String?   @map("sleep_start_at")
   sleepStopAt     String?   @map("sleep_stop_at")
+  showSleepScreen Boolean   @default(false) @map("show_sleep_screen")
   lastSeenAt      DateTime? @map("last_seen_at")
   refreshPending  Boolean   @default(false) @map("refresh_pending")
   lastScreenId    String?   @map("last_screen_id") // Track last displayed screen for ghosting prevention
