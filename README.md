@@ -1,6 +1,6 @@
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://buymeacoffee.com/wojo_o)
 
-# Inker v0.5.0
+# Inker 0.5.0
 
 Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices (supports firmware 1.7.8) and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
 
@@ -110,6 +110,29 @@ docker run -d \
   -v inker_uploads:/app/uploads \
   wojooo/inker:latest
 ```
+
+##  Raspberry Pi / ARM64 (beta)
+
+  Inker's Docker image is multi-architecture — the same tag runs on both x86-64 servers and 64-bit ARM boards like the Raspberry Pi. Docker automatically pulls
+  the correct build for your hardware, so the install command is identical:
+
+  docker run -d \
+    --name inker \
+    --restart unless-stopped \
+    -p 80:80 \
+    -v inker_postgres:/var/lib/postgresql/17/main \
+    -v inker_uploads:/app/uploads \
+    wojooo/inker:latest
+
+  Requirements:
+  - A 64-bit OS (Raspberry Pi OS 64-bit or Debian arm64) — 32-bit installs are not supported.
+  - Raspberry Pi 4 or 5 recommended (screen rendering runs a headless Chromium).
+
+  ▎ Beta: ARM64 support is new and hasn't been fully verified on every Pi setup yet. If something doesn't work, please open an issue with your Pi model and OS
+  ▎ version — feedback is welcome.
+
+  ---
+
 
 ### Build from source
 
