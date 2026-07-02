@@ -87,6 +87,8 @@ docker compose up -d
 
 Open **http://your-server-ip** and log in with PIN `1111`.
 
+> **Database:** Inker now uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the `uploads` volume to back up all your data. (The bundled PostgreSQL volume is retained only as a one-time migration bridge when upgrading from older Postgres-based versions, and will be removed in a future release.)
+
 ## Configuration
 
 | Variable | Description | Default |
@@ -95,8 +97,6 @@ Open **http://your-server-ip** and log in with PIN `1111`.
 | `TZ` | Timezone for widgets | `UTC` |
 | `INKER_PORT` | External port (for custom port mapping, e.g. `INKER_PORT=800`) | `80` |
 | `CORS_ORIGINS` | Allowed CORS origins (comma-separated, or `*` for all) | same-origin |
-| `EXTERNAL_POSTGRES` | Use your own Postgres instead of the bundled one (requires `DATABASE_URL`) | `false` |
-| `DATABASE_URL` | Postgres connection string, used when `EXTERNAL_POSTGRES=true` | bundled DB |
 
 Pass with `-e`:
 ```bash
@@ -110,26 +110,6 @@ docker run -d \
   -v inker_uploads:/app/uploads \
   wojooo/inker:latest
 ```
-
-### Using an external PostgreSQL
-
-By default Inker runs a bundled PostgreSQL inside the container. To use an existing Postgres
-server instead, set `EXTERNAL_POSTGRES=true` and provide a `DATABASE_URL`. The bundled database is
-then skipped, so the `postgres` volume can be dropped:
-
-```bash
-docker run -d \
-  --name inker \
-  --restart unless-stopped \
-  -p 80:80 \
-  -e EXTERNAL_POSTGRES=true \
-  -e DATABASE_URL="postgresql://inker_user:password@db-host:5432/inker_db" \
-  -v inker_uploads:/app/uploads \
-  wojooo/inker:latest
-```
-
-> The target database and user must already exist on your server — Inker creates the tables
-> (schema) on startup but not the database itself.
 
 ### Build from source
 
