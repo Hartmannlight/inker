@@ -1,6 +1,6 @@
 {
   "name": "inker-backend",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Inker Server Backend - E-ink Device Management",
   "main": "dist/main.js",
   "scripts": {
@@ -14,33 +14,33 @@
     "test:watch": "bun test --watch",
     "test:cov": "bun test --coverage",
     "prisma:generate": "bunx prisma generate",
+    "prisma:generate:pg": "bunx prisma generate --schema=prisma/schema.postgres.prisma",
     "prisma:migrate": "bunx prisma migrate dev",
     "prisma:studio": "bunx prisma studio",
     "prisma:seed": "bun run prisma/seed.ts",
-    "db:seed": "bun run prisma:seed"
+    "db:seed": "bun run prisma:seed",
+    "db:migrate-sqlite": "bun run prisma/migrate-to-sqlite.ts"
   },
   "prisma": {
     "seed": "bun run prisma/seed.ts"
   },
   "dependencies": {
-    "@nestjs/bullmq": "^10.0.1",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.1.1",
     "@nestjs/core": "^10.3.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.3.0",
+    "@nestjs/schedule": "^4.1.0",
     "@nestjs/serve-static": "^4.0.0",
     "@nestjs/swagger": "^7.1.17",
     "@nestjs/terminus": "^10.2.0",
     "@nestjs/throttler": "^5.1.0",
-    "@prisma/client": "^5.8.0",
+    "@prisma/client": "^6.2.0",
     "axios": "^1.13.5",
-    "bullmq": "^5.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "compression": "^1.7.4",
     "helmet": "^7.1.0",
-    "ioredis": "^5.3.2",
     "joi": "^17.11.0",
     "liquidjs": "^10.25.1",
     "nest-winston": "^1.9.4",
@@ -68,7 +68,7 @@
     "eslint": "^9.16.0",
     "globals": "^15.13.0",
     "prettier": "^3.1.1",
-    "prisma": "^5.8.0",
+    "prisma": "^6.2.0",
     "supertest": "^6.3.3",
     "ts-loader": "^9.5.4",
     "typescript": "^5.3.3"

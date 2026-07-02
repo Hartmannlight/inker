@@ -1,12 +1,22 @@
-// Inker Database Schema
-generator client {
+// Inker — PostgreSQL *read-only* schema for the one-time SQLite migration.
+//
+// This mirrors the legacy PostgreSQL database shape (pre-0.5.0). It exists solely so the
+// boot-time migrator (prisma/migrate-to-sqlite.ts) can read existing data from the bundled
+// (or external) PostgreSQL instance and import it into SQLite. It generates a SEPARATE
+// Prisma client at node_modules/.prisma/client-postgres — the application runtime never uses
+// it. Remove this file (and the client) in 0.6.0 once the migration window has passed.
+//
+// Reads only — defaults/constraints here are cosmetic and never exercised.
+
+generator clientPostgres {
   provider      = "prisma-client-js"
+  output        = "../node_modules/.prisma/client-postgres"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-arm64-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
 }
 
 model Device {
@@ -29,11 +39,10 @@ model Device {
   firmwareUpdate  Boolean   @default(true) @map("firmware_update")
   sleepStartAt    String?   @map("sleep_start_at")
   sleepStopAt     String?   @map("sleep_stop_at")
-  showSleepScreen Boolean   @default(false) @map("show_sleep_screen")
   lastSeenAt      DateTime? @map("last_seen_at")
   refreshPending  Boolean   @default(false) @map("refresh_pending")
-  lastScreenId    String?   @map("last_screen_id") // Track last displayed screen for ghosting prevention
-  screenStartedAt DateTime? @map("screen_started_at") // When the current screen started displaying
+  lastScreenId    String?   @map("last_screen_id")
+  screenStartedAt DateTime? @map("screen_started_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
@@ -107,7 +116,7 @@ model PlaylistItem {
   screenId       Int?     @map("screen_id")
   screenDesignId Int?     @map("screen_design_id")
   order          Int      @default(0)
-  duration       Int      @default(60) // seconds
+  duration       Int      @default(60)
   createdAt      DateTime @default(now()) @map("created_at")
 
   pluginInstanceId Int?          @map("plugin_instance_id")
@@ -124,8 +133,8 @@ model Extension {
   id          Int      @id @default(autoincrement())
   name        String
   description String?
-  type        String   // webhook, polling, custom
-  config      Json     // JSON configuration
+  type        String
+  config      Json
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
@@ -133,25 +142,20 @@ model Extension {
   @@map("extensions")
 }
 
-// ========================
-// Data Source & Custom Widget Models
-// ========================
-
-// Data Source - external API or RSS feed configuration
 model DataSource {
   id              Int       @id @default(autoincrement())
   name            String
   description     String?
-  type            String    // "json" | "rss"
-  url             String    // API endpoint or RSS feed URL
-  method          String    @default("GET") // HTTP method for JSON APIs
-  headers         Json?     // Custom headers (e.g., API keys)
-  refreshInterval Int       @default(300) @map("refresh_interval") // Seconds between fetches
-  jsonPath        String?   @map("json_path") // JSONPath expression to extract data
+  type            String
+  url             String
+  method          String    @default("GET")
+  headers         Json?
+  refreshInterval Int       @default(300) @map("refresh_interval")
+  jsonPath        String?   @map("json_path")
   isActive        Boolean   @default(true) @map("is_active")
   lastFetchedAt   DateTime? @map("last_fetched_at")
-  lastData        Json?     @map("last_data") // Cached response data
-  lastError       String?   @map("last_error") // Last fetch error message
+  lastData        Json?     @map("last_data")
+  lastError       String?   @map("last_error")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
@@ -160,15 +164,14 @@ model DataSource {
   @@map("data_sources")
 }
 
-// Custom Widget - user-defined widget using data from a DataSource
 model CustomWidget {
   id            Int      @id @default(autoincrement())
   name          String
   description   String?
   dataSourceId  Int      @map("data_source_id")
-  displayType   String   // "template" | "value" | "list" | "title-value"
-  template      String?  // Template string for "template" display type
-  config        Json     // Layout config (fontSize, alignment, etc.) — defaulted to {} in app code (SQLite rejects DB-level Json default)
+  displayType   String
+  template      String?
+  config        Json     @default("{}")
   minWidth      Int      @default(100) @map("min_width")
   minHeight     Int      @default(50) @map("min_height")
   createdAt     DateTime @default(now()) @map("created_at")
@@ -193,7 +196,7 @@ model Firmware {
 model DeviceLog {
   id        Int      @id @default(autoincrement())
   deviceId  Int      @map("device_id")
-  level     String   // info, warning, error
+  level     String
   message   String
   metadata  Json?
   createdAt DateTime @default(now()) @map("created_at")
@@ -203,18 +206,13 @@ model DeviceLog {
   @@map("device_logs")
 }
 
-// ========================
-// Screen Designer Models
-// ========================
-
-// Widget Template - defines available widget types
 model WidgetTemplate {
   id            Int      @id @default(autoincrement())
-  name          String   @unique // e.g., "clock", "weather", "text"
-  label         String   // Display name: "Live Clock", "Weather"
+  name          String   @unique
+  label         String
   description   String?
-  category      String   // "time", "weather", "content", "system"
-  defaultConfig Json     // Default configuration for this widget type
+  category      String
+  defaultConfig Json
   minWidth      Int      @default(100) @map("min_width")
   minHeight     Int      @default(50) @map("min_height")
   createdAt     DateTime @default(now()) @map("created_at")
@@ -224,14 +222,13 @@ model WidgetTemplate {
   @@map("widget_templates")
 }
 
-// Screen Design - a designed screen with widgets
 model ScreenDesign {
   id          Int      @id @default(autoincrement())
   name        String
   description String?
   width       Int      @default(800)
   height      Int      @default(480)
-  background  String   @default("#FFFFFF") // white for e-ink
+  background  String   @default("#FFFFFF")
   isTemplate  Boolean  @default(false) @map("is_template")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
@@ -243,7 +240,6 @@ model ScreenDesign {
   @@map("screen_designs")
 }
 
-// Widget instance on a screen
 model ScreenWidget {
   id             Int      @id @default(autoincrement())
   screenDesignId Int      @map("screen_design_id")
@@ -252,8 +248,8 @@ model ScreenWidget {
   y              Int      @default(0)
   width          Int      @default(200)
   height         Int      @default(100)
-  rotation       Int      @default(0) // Rotation in degrees (0, 90, 180, 270, or any angle)
-  config         Json     // Widget-specific config (timezone, location, etc.)
+  rotation       Int      @default(0)
+  config         Json
   zIndex         Int      @default(0) @map("z_index")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
@@ -264,7 +260,6 @@ model ScreenWidget {
   @@map("screen_widgets")
 }
 
-// Device to Screen Design assignment
 model DeviceScreenAssignment {
   id             Int      @id @default(autoincrement())
   deviceId       Int      @map("device_id")
@@ -279,68 +274,56 @@ model DeviceScreenAssignment {
   @@map("device_screen_assignments")
 }
 
-// Application Settings - key/value store for configuration
 model Setting {
   id        Int      @id @default(autoincrement())
   key       String   @unique
-  value     String   // Stored as encrypted string for sensitive values
+  value     String
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("settings")
 }
 
-// Blocked devices - prevents auto-provisioning of deleted devices
 model BlockedDevice {
   id         Int      @id @default(autoincrement())
   macAddress String   @unique @map("mac_address")
-  reason     String?  // Why device was blocked (e.g., "deleted by admin")
+  reason     String?
   createdAt  DateTime @default(now()) @map("created_at")
 
   @@map("blocked_devices")
 }
 
-// ========================
-// Plugin System Models
-// ========================
-
-// Plugin - a reusable plugin definition (built-in from TRMNL or user-created)
 model Plugin {
   id                   Int      @id @default(autoincrement())
   name                 String
   slug                 String   @unique
   description          String?
-  icon                 String?  // emoji or image URL
-  category             String   @default("custom") // news, productivity, weather, social, finance, system, custom
+  icon                 String?
+  category             String   @default("custom")
 
-  // Data fetching configuration
-  dataStrategy         String   @default("polling") @map("data_strategy") // polling | webhook | static
-  dataUrl              String?  @map("data_url")     // supports {{setting}} interpolation
+  dataStrategy         String   @default("polling") @map("data_strategy")
+  dataUrl              String?  @map("data_url")
   dataMethod           String   @default("GET") @map("data_method")
-  dataHeaders          Json?    @map("data_headers")  // supports {{setting}} interpolation
-  dataPath             String?  @map("data_path")     // JSONPath to extract from response
-  dataTransform        String?  @map("data_transform") // JS script to transform fetched data into locals
-  refreshInterval      Int      @default(300) @map("refresh_interval") // seconds
+  dataHeaders          Json?    @map("data_headers")
+  dataPath             String?  @map("data_path")
+  dataTransform        String?  @map("data_transform")
+  refreshInterval      Int      @default(300) @map("refresh_interval")
 
-  // Liquid templates for 4 layout sizes (matching TRMNL)
   markupFull           String?  @map("markup_full")
   markupHalfHorizontal String?  @map("markup_half_horizontal")
   markupHalfVertical   String?  @map("markup_half_vertical")
   markupQuadrant       String?  @map("markup_quadrant")
 
-  // Settings schema: [{key, label, type, options?, required?, encrypted?, default?}]
   settingsSchema       Json?    @map("settings_schema")
 
-  // OAuth (for plugins that require OAuth2 authentication)
-  oauthProvider        String?  @map("oauth_provider")  // "google" | "spotify" | "strava" etc.
-  oauthScopes          String?  @map("oauth_scopes")    // space-separated scopes
+  oauthProvider        String?  @map("oauth_provider")
+  oauthScopes          String?  @map("oauth_scopes")
 
-  // Metadata
   isInstalled          Boolean  @default(false) @map("is_installed")
   isBuiltin            Boolean  @default(false) @map("is_builtin")
-  source               String   @default("inker") // "inker" | "trmnl"
-  sourceUrl            String?  @map("source_url") // GitHub URL of original plugin
-  sourceHash           String?  @map("source_hash") // hash for detecting updates
+  source               String   @default("inker")
+  sourceUrl            String?  @map("source_url")
+  sourceHash           String?  @map("source_hash")
   version              String?
 
   instances            PluginInstance[]
@@ -350,21 +333,18 @@ model Plugin {
   @@map("plugins")
 }
 
-// Plugin Instance - a configured instance of a plugin (with user settings and cached data)
 model PluginInstance {
   id                   Int      @id @default(autoincrement())
   pluginId             Int      @map("plugin_id")
-  name                 String?  // optional custom name for this instance
+  name                 String?
 
-  settings             Json     // user settings (non-sensitive) — defaulted to {} in app code (SQLite rejects DB-level Json default)
-  settingsEncrypted    Json     @map("settings_encrypted") // encrypted settings (API keys) — defaulted to {} in app code
+  settings             Json     @default("{}")
+  settingsEncrypted    Json     @default("{}") @map("settings_encrypted")
 
-  // OAuth tokens (encrypted)
-  oauthToken           String?  @map("oauth_token")         // encrypted access token
-  oauthRefreshToken    String?  @map("oauth_refresh_token") // encrypted refresh token
+  oauthToken           String?  @map("oauth_token")
+  oauthRefreshToken    String?  @map("oauth_refresh_token")
   oauthExpiresAt       DateTime? @map("oauth_expires_at")
 
-  // Cached data (the locals hash)
   lastData             Json?    @map("last_data")
   lastFetchedAt        DateTime? @map("last_fetched_at")
   lastError            String?  @map("last_error")

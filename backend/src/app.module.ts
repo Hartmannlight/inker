@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { BullModule } from '@nestjs/bullmq';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
@@ -47,18 +47,8 @@ import { validationSchema } from './config/validation.schema';
       }],
     }),
 
-    // Queue management (BullMQ)
-    BullModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        connection: {
-          host: config.get<string>('redis.host', 'localhost'),
-          port: config.get<number>('redis.port', 6379),
-          password: config.get<string>('redis.password'),
-        },
-      }),
-    }),
+    // Scheduled tasks (in-process cron)
+    ScheduleModule.forRoot(),
 
     // Health checks
     TerminusModule,

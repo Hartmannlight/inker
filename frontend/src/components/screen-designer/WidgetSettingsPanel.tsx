@@ -25,6 +25,23 @@ interface WidgetSettingsPanelProps {
 // Get the browser's detected timezone
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+// Compute the current (DST-aware) UTC offset label for an IANA timezone, e.g. "+1:00", "-5:00", "±0:00".
+// Uses the live offset so e.g. London shows +1:00 during BST and +0:00 in winter.
+const getCurrentOffset = (timeZone: string): string => {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'shortOffset' }).formatToParts(new Date());
+    const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+    const match = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+    if (!match) return '±0:00';
+    const hours = parseInt(match[2], 10);
+    const minutes = match[3] ?? '00';
+    if (hours === 0 && minutes === '00') return '±0:00';
+    return `${match[1]}${hours}:${minutes}`;
+  } catch {
+    return '';
+  }
+};
+
 // Timezone data with city aliases for smart search
 // Each timezone has: value (IANA), label (display), offset, region, and searchable city aliases
 interface TimezoneData {
@@ -148,7 +165,7 @@ const getTimezoneOptions = (): { value: string; label: string; hint?: string; is
       for (const tz of regionTimezones) {
         result.push({
           value: tz.value,
-          label: `${tz.label} (UTC${tz.offset})`,
+          label: `${tz.label} (UTC${getCurrentOffset(tz.value)})`,
         });
       }
     }
@@ -204,7 +221,7 @@ const searchTimezones = (query: string): { value: string; label: string; hint?: 
     if (score > 0) {
       matches.push({
         value: tz.value,
-        label: `${tz.label} (UTC${tz.offset})`,
+        label: `${tz.label} (UTC${getCurrentOffset(tz.value)})`,
         hint: matchedCity,
         score,
       });

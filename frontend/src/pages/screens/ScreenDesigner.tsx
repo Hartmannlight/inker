@@ -22,6 +22,8 @@ const CUSTOM_WIDGET_TEMPLATE_OFFSET = 10000;
 const RESOLUTION_PRESETS = [
   { label: 'TRMNL Standard', width: 800, height: 480, description: '800 x 480 px (landscape)' },
   { label: 'TRMNL Portrait', width: 480, height: 800, description: '480 x 800 px (portrait)' },
+  { label: 'TRMNL X', width: 1872, height: 1404, description: '1872 x 1404 px (landscape)' },
+  { label: 'TRMNL X Portrait', width: 1404, height: 1872, description: '1404 x 1872 px (portrait)' },
 ];
 
 export function ScreenDesigner() {
@@ -188,11 +190,15 @@ export function ScreenDesigner() {
   );
 
   /**
-   * Handle using default timezone (local)
+   * Handle using local time. Store the creator's resolved IANA timezone (not the
+   * literal 'local') so the device render matches the designer preview. The backend
+   * resolves 'local' to the server's DEFAULT_TIMEZONE (usually UTC), which would
+   * otherwise offset the clock when the server timezone differs from the creator's.
    */
   const handleTimezoneDefault = useCallback(() => {
     if (pendingWidgetData) {
-      createWidget(pendingWidgetData.template, pendingWidgetData.x, pendingWidgetData.y);
+      const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      createWidget(pendingWidgetData.template, pendingWidgetData.x, pendingWidgetData.y, { timezone: localTimezone });
     }
     setShowTimezoneModal(false);
     setPendingWidgetData(null);

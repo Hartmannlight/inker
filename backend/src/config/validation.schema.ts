@@ -9,11 +9,6 @@ export const validationSchema = Joi.object({
   // Database
   DATABASE_URL: Joi.string().required(),
 
-  // Redis
-  REDIS_HOST: Joi.string().default('localhost'),
-  REDIS_PORT: Joi.number().default(6379),
-  REDIS_PASSWORD: Joi.string().optional().allow(''),
-
   // Rate limiting
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),

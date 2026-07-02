@@ -1,5 +1,10 @@
-#!/bin/sh
+#!/command/with-contenv sh
 set -e
+
+if [ "${EXTERNAL_POSTGRES}" = "true" ]; then
+    echo "[init] EXTERNAL_POSTGRES=true — skipping bundled PostgreSQL init"
+    exit 0
+fi
 
 PGDATA=/var/lib/postgresql/17/main
 PG17_BIN=/usr/lib/postgresql/17/bin

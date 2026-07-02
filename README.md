@@ -1,15 +1,12 @@
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://buymeacoffee.com/wojo_o)
 
-
-# Inker v0.4.0
+# Inker v0.5.0
 
 Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices (supports firmware 1.7.8) and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
 
 Inker is heading in its own direction — focusing on homelab integrations like server monitoring, smart home dashboards, network stats, and self-hosted service displays. TRMNL device compatibility is maintained, but the plugin ecosystem will be Inker-native.
 
 ![Dashboard](https://github.com/user-attachments/assets/fd9affac-5c57-4448-9338-ea8f83add08a)
-
-
 
 Support project that uses inker:
 - https://3dpm.ru/en/open_projects/ESPHome-TRMNL_7+5/
@@ -35,7 +32,6 @@ Support project that uses inker:
 |:-:|:-:|:-:|
 | ![Extensions](https://github.com/user-attachments/assets/534b5104-8f1c-4a42-8c58-f2cef74dbc92) | ![Custom data sources](https://github.com/user-attachments/assets/03ed0dc8-7ae0-44fa-ace7-890b5ec8f385) | ![Custom widgets](https://github.com/user-attachments/assets/0eb10812-568a-46db-b58e-7e82c19ea403) |
 
-
 <div align="center">
 
 | Grafana Plugin |
@@ -48,10 +44,6 @@ Support project that uses inker:
 |:-:|:-:|
 |<img width="800" height="480" alt="image" src="https://github.com/user-attachments/assets/4073360a-470b-4fd2-ae4c-362e71b3467e" />|<img width="800" height="480" alt="image" src="https://github.com/user-attachments/assets/224994f6-27e4-41c0-9a0c-7b88598b6c22" />|
 
-
-
-
-
 ## Quick start & Technical information
 
 ### Docker Run
@@ -62,7 +54,6 @@ docker run -d \
   --restart unless-stopped \
   -p 80:80 \
   -v inker_postgres:/var/lib/postgresql/17/main \
-  -v inker_redis:/data \
   -v inker_uploads:/app/uploads \
   wojooo/inker:latest
 ```
@@ -80,7 +71,6 @@ services:
       - "80:80"
     volumes:
       - postgres_data:/var/lib/postgresql/17/main
-      - redis_data:/data
       - uploads_data:/app/uploads
     environment:
       TZ: UTC
@@ -88,7 +78,6 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   uploads_data:
 ```
 
@@ -106,6 +95,8 @@ Open **http://your-server-ip** and log in with PIN `1111`.
 | `TZ` | Timezone for widgets | `UTC` |
 | `INKER_PORT` | External port (for custom port mapping, e.g. `INKER_PORT=800`) | `80` |
 | `CORS_ORIGINS` | Allowed CORS origins (comma-separated, or `*` for all) | same-origin |
+| `EXTERNAL_POSTGRES` | Use your own Postgres instead of the bundled one (requires `DATABASE_URL`) | `false` |
+| `DATABASE_URL` | Postgres connection string, used when `EXTERNAL_POSTGRES=true` | bundled DB |
 
 Pass with `-e`:
 ```bash
@@ -116,10 +107,29 @@ docker run -d \
   -e ADMIN_PIN="1111" \
   -e TZ=Europe/Warsaw \
   -v inker_postgres:/var/lib/postgresql/17/main \
-  -v inker_redis:/data \
   -v inker_uploads:/app/uploads \
   wojooo/inker:latest
 ```
+
+### Using an external PostgreSQL
+
+By default Inker runs a bundled PostgreSQL inside the container. To use an existing Postgres
+server instead, set `EXTERNAL_POSTGRES=true` and provide a `DATABASE_URL`. The bundled database is
+then skipped, so the `postgres` volume can be dropped:
+
+```bash
+docker run -d \
+  --name inker \
+  --restart unless-stopped \
+  -p 80:80 \
+  -e EXTERNAL_POSTGRES=true \
+  -e DATABASE_URL="postgresql://inker_user:password@db-host:5432/inker_db" \
+  -v inker_uploads:/app/uploads \
+  wojooo/inker:latest
+```
+
+> The target database and user must already exist on your server — Inker creates the tables
+> (schema) on startup but not the database itself.
 
 ### Build from source
 

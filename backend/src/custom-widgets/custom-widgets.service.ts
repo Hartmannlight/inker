@@ -166,14 +166,18 @@ export class CustomWidgetsService {
       throw new NotFoundException('Custom widget not found');
     }
 
-    // Find all screen widget instances that reference this custom widget
-    const orphanedWidgets = await this.prisma.screenWidget.findMany({
+    // Find all screen widget instances that reference this custom widget.
+    // The reference lives in the JSON `config.customWidgetId`. SQLite doesn't support Prisma
+    // JSON-path filtering, so fetch the (few) custom-widget-base instances and filter in JS.
+    const candidateWidgets = await this.prisma.screenWidget.findMany({
       where: {
         template: { name: 'custom-widget-base' },
-        config: { path: ['customWidgetId'], equals: id },
       },
-      select: { id: true, screenDesignId: true },
+      select: { id: true, screenDesignId: true, config: true },
     });
+    const orphanedWidgets = candidateWidgets.filter(
+      (w) => (w.config as { customWidgetId?: number } | null)?.customWidgetId === id,
+    );
 
     // Delete orphaned screen widget instances
     if (orphanedWidgets.length > 0) {

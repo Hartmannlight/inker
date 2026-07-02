@@ -1,0 +1,287 @@
+# Pipeline: Build and push image on main branch
+kind: pipeline
+type: docker
+name: inker-build
+node:
+  type: docker
+  name: builder
+
+concurrency:
+  limit: 1
+
+trigger:
+  branch:
+    - main
+  event:
+    - push
+
+steps:
+  - name: check-changes
+    image: alpine/git
+    commands:
+      - |
+        # Skip if this commit is tagged (release pipeline handles it)
+        git fetch --tags 2>/dev/null || true
+        if git describe --exact-match HEAD 2>/dev/null; then
+          echo "Commit is tagged, skipping (release pipeline will handle)"
+          exit 78
+        fi
+        # Get list of changed files in this commit (use git show for shallow clones)
+        CHANGED=$(git show --name-only --pretty=format: HEAD | grep -v '^$')
+        echo "Changed files:"
+        echo "$CHANGED"
+        echo ""
+        # Check if any source files changed (exclude docs/readme)
+        APP_CHANGES=$(echo "$CHANGED" | grep -v "\.md$" | grep -v "^README" | grep -v "^\.git" || true)
+        if [ -z "$APP_CHANGES" ]; then
+          echo "No source files changed, skipping build"
+          exit 78
+        fi
+        echo "Source files changed:"
+        echo "$APP_CHANGES"
+
+  - name: write-version
+    image: alpine/git
+    commands:
+      - git fetch --tags 2>/dev/null || true
+      - git describe --tags --abbrev=0 2>/dev/null > VERSION || echo "unknown" > VERSION
+      - git rev-parse --short HEAD > COMMIT || echo "unknown" > COMMIT
+      - git rev-parse --abbrev-ref HEAD > BRANCH || echo "unknown" > BRANCH
+      - echo "Version:" && cat VERSION
+      - echo "Commit:" && cat COMMIT
+      - echo "Branch:" && cat BRANCH
+
+  - name: test-backend
+    image: oven/bun:1-alpine
+    commands:
+      - cd backend
+      - bun install --frozen-lockfile
+      - bun test
+
+  - name: test-frontend
+    image: oven/bun:1-alpine
+    commands:
+      - cd frontend
+      - bun install --frozen-lockfile
+      - bun run test
+
+  - name: build
+    image: docker:27-cli
+    commands:
+      - COMMIT_SHORT=$(echo $DRONE_COMMIT_SHA | cut -c1-8)
+      - echo "Building registry.bor6.pl/inker:$COMMIT_SHORT"
+      - docker buildx build --pull --no-cache --platform linux/amd64 --tag registry.bor6.pl/inker:$COMMIT_SHORT --tag registry.bor6.pl/inker:latest --push .
+
+  - name: deploy
+    image: appleboy/drone-ssh
+    settings:
+      host: 192.168.6.196
+      username:
+        from_secret: deploy_user
+      key:
+        from_secret: deploy_key
+      port: 22
+      script:
+        - cd ~/inker
+        - docker compose pull
+        - docker compose up -d
+        - echo "Deployed successfully"
+
+  - name: summary
+    image: alpine
+    commands:
+      - |
+        COMMIT_SHORT=$(echo $DRONE_COMMIT_SHA | cut -c1-8)
+        echo "================================================"
+        echo "Build and deploy complete!"
+        echo "================================================"
+        echo ""
+        echo "Image pushed:"
+        echo "  registry.bor6.pl/inker:$COMMIT_SHORT"
+        echo "  registry.bor6.pl/inker:latest"
+        echo ""
+        echo "Deployed to 192.168.6.196"
+        echo "================================================"
+
+---
+# Pipeline: Build feature branches
+kind: pipeline
+type: docker
+name: inker-feature-branch
+node:
+  type: docker
+  name: builder
+
+concurrency:
+  limit: 1
+
+trigger:
+  branch:
+    exclude:
+      - main
+  event:
+    - push
+
+steps:
+  - name: check-changes
+    image: alpine/git
+    commands:
+      - |
+        # Get list of changed files in this commit (use git show for shallow clones)
+        CHANGED=$(git show --name-only --pretty=format: HEAD | grep -v '^$')
+        echo "Changed files:"
+        echo "$CHANGED"
+        echo ""
+        APP_CHANGES=$(echo "$CHANGED" | grep -v "\.md$" | grep -v "^README" | grep -v "^\.git" || true)
+        if [ -z "$APP_CHANGES" ]; then
+          echo "No source files changed, skipping build"
+          exit 78
+        fi
+        echo "Source files changed:"
+        echo "$APP_CHANGES"
+
+  - name: write-version
+    image: alpine/git
+    commands:
+      - git fetch --tags 2>/dev/null || true
+      - git describe --tags --abbrev=0 2>/dev/null > VERSION || echo "unknown" > VERSION
+      - git rev-parse --short HEAD > COMMIT || echo "unknown" > COMMIT
+      - git rev-parse --abbrev-ref HEAD > BRANCH || echo "unknown" > BRANCH
+      - echo "Version:" && cat VERSION
+      - echo "Commit:" && cat COMMIT
+      - echo "Branch:" && cat BRANCH
+
+  - name: test-backend
+    image: oven/bun:1-alpine
+    commands:
+      - cd backend
+      - bun install --frozen-lockfile
+      - bun test
+
+  - name: test-frontend
+    image: oven/bun:1-alpine
+    commands:
+      - cd frontend
+      - bun install --frozen-lockfile
+      - bun run test
+
+  - name: build
+    image: docker:27-cli
+    commands:
+      - COMMIT_SHORT=$(echo $DRONE_COMMIT_SHA | cut -c1-8)
+      - echo "Building registry.bor6.pl/inker:dev-$DRONE_BRANCH-$COMMIT_SHORT"
+      - docker buildx build --pull --platform linux/amd64 --tag registry.bor6.pl/inker:dev-$DRONE_BRANCH-$COMMIT_SHORT --push .
+
+  - name: summary
+    image: alpine
+    commands:
+      - |
+        COMMIT_SHORT=$(echo $DRONE_COMMIT_SHA | cut -c1-8)
+        echo "================================================"
+        echo "Build complete!"
+        echo "================================================"
+        echo ""
+        echo "Image pushed:"
+        echo "  registry.bor6.pl/inker:dev-$DRONE_BRANCH-$COMMIT_SHORT"
+        echo ""
+        echo "================================================"
+
+---
+# Pipeline: Release on tag
+kind: pipeline
+type: docker
+name: inker-release
+node:
+  type: docker
+  name: builder
+
+concurrency:
+  limit: 1
+
+trigger:
+  event:
+    - tag
+
+steps:
+  - name: write-version
+    image: alpine/git
+    commands:
+      - echo "${DRONE_TAG}" > VERSION
+      - git rev-parse --short HEAD > COMMIT
+      - echo "release" > BRANCH
+      - echo "Version:" && cat VERSION
+      - echo "Commit:" && cat COMMIT
+
+  - name: test-backend
+    image: oven/bun:1-alpine
+    commands:
+      - cd backend
+      - bun install --frozen-lockfile
+      - bun test
+
+  - name: test-frontend
+    image: oven/bun:1-alpine
+    commands:
+      - cd frontend
+      - bun install --frozen-lockfile
+      - bun run test
+
+  - name: build
+    image: docker:27-cli
+    commands:
+      - echo "Building inker:$DRONE_TAG"
+      - docker buildx build --pull --platform linux/amd64 --load --tag inker:$DRONE_TAG .
+
+  - name: push-registry
+    image: docker:27-cli
+    commands:
+      - docker tag inker:$DRONE_TAG registry.bor6.pl/inker:$DRONE_TAG
+      - docker tag inker:$DRONE_TAG registry.bor6.pl/inker:latest
+      - docker push registry.bor6.pl/inker:$DRONE_TAG
+      - docker push registry.bor6.pl/inker:latest
+
+  - name: push-dockerhub
+    image: docker:27-cli
+    environment:
+      DOCKER_PASSWORD:
+        from_secret: WOJO_DOCKERHUB
+    commands:
+      - echo "$DOCKER_PASSWORD" | docker login -u wojooo --password-stdin
+      - docker tag inker:$DRONE_TAG wojooo/inker:$DRONE_TAG
+      - docker tag inker:$DRONE_TAG wojooo/inker:latest
+      - docker push wojooo/inker:$DRONE_TAG
+      - docker push wojooo/inker:latest
+
+  - name: deploy
+    image: appleboy/drone-ssh
+    settings:
+      host: 192.168.6.196
+      username:
+        from_secret: deploy_user
+      key:
+        from_secret: deploy_key
+      port: 22
+      script:
+        - cd ~/inker
+        - docker compose pull
+        - docker compose up -d
+        - echo "Deployed successfully"
+
+  - name: summary
+    image: alpine
+    commands:
+      - |
+        echo "================================================"
+        echo "Release build and deploy complete!"
+        echo "================================================"
+        echo ""
+        echo "Private registry:"
+        echo "  registry.bor6.pl/inker:$DRONE_TAG"
+        echo "  registry.bor6.pl/inker:latest"
+        echo ""
+        echo "Docker Hub:"
+        echo "  wojooo/inker:$DRONE_TAG"
+        echo "  wojooo/inker:latest"
+        echo ""
+        echo "Deployed to 192.168.6.196"
+        echo "================================================"

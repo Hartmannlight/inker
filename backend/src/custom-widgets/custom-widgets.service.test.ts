@@ -430,10 +430,14 @@ describe('CustomWidgetsService', () => {
 
     it('should remove orphaned screen widgets and notify designs', async () => {
       mockPrisma.customWidget.findUnique.mockResolvedValue({ id: 1, name: 'W' });
+      // SQLite path: service fetches all custom-widget-base instances and filters in JS on
+      // config.customWidgetId. Rows referencing a different widget must be excluded.
       mockPrisma.screenWidget.findMany.mockResolvedValue([
-        { id: 10, screenDesignId: 5 },
-        { id: 11, screenDesignId: 5 },
-        { id: 12, screenDesignId: 8 },
+        { id: 10, screenDesignId: 5, config: { customWidgetId: 1 } },
+        { id: 11, screenDesignId: 5, config: { customWidgetId: 1 } },
+        { id: 12, screenDesignId: 8, config: { customWidgetId: 1 } },
+        { id: 13, screenDesignId: 9, config: { customWidgetId: 2 } },
+        { id: 14, screenDesignId: 9, config: null },
       ]);
       mockPrisma.screenWidget.deleteMany.mockResolvedValue({ count: 3 });
       mockEventsService.notifyScreenDesignUpdate.mockResolvedValue(0);

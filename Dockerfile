@@ -1,5 +1,5 @@
 # All-in-one Dockerfile for Inker
-# Bundles: frontend (nginx), backend (bun/nestjs), PostgreSQL 17, Redis 8
+# Bundles: frontend (nginx), backend (bun/nestjs), PostgreSQL 17
 
 # =============================================================================
 # Stage 1: Build frontend
@@ -32,10 +32,15 @@ COPY backend/prisma ./prisma/
 # Install all deps → generate prisma → reinstall production-only → prune
 RUN bun install --frozen-lockfile && \
     node ./node_modules/prisma/build/index.js generate && \
+    # Second, Postgres-bound client (node_modules/.prisma/client-postgres) used only by the
+    # one-time SQLite migrator. Generated alongside so it rides the .prisma copy below.
+    node ./node_modules/prisma/build/index.js generate --schema=prisma/schema.postgres.prisma && \
     cp -r node_modules/.prisma /tmp/.prisma && \
     rm -rf node_modules && \
     bun install --production --frozen-lockfile && \
-    cp -r /tmp/.prisma node_modules/.prisma && \
+    # Merge generated clients into node_modules/.prisma (copy CONTENTS, not the dir, so we
+    # don't nest as .prisma/.prisma when the production install already created .prisma).
+    mkdir -p node_modules/.prisma && cp -r /tmp/.prisma/. node_modules/.prisma/ && \
     rm -rf /tmp/.prisma \
     node_modules/typescript \
     node_modules/@types && \
@@ -80,13 +85,14 @@ RUN bun run build
 FROM debian:trixie-slim AS production
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
+# Provided automatically by `docker buildx` (amd64 | arm64). Falls back to the build host's
+# Debian arch so a plain `docker build` also works.
+ARG TARGETARCH
 
 # Install all system packages in one layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # PostgreSQL
     postgresql-17 \
-    # Redis
-    redis-server \
     # Nginx
     nginx \
     # Chrome headless shell dependencies
@@ -98,25 +104,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # s6-overlay dependencies
     xz-utils \
     && \
-    # Install Chrome Headless Shell
-    CHROME_VERSION=$(wget -qO- "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE") && \
-    wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-headless-shell-linux64.zip" -O /tmp/chrome.zip && \
-    unzip /tmp/chrome.zip -d /opt/ && \
-    chmod +x /opt/chrome-headless-shell-linux64/chrome-headless-shell && \
-    rm /tmp/chrome.zip && \
-    # Strip Chrome: remove GPU libs (--disable-gpu), keep locale packs for Unicode/CJK shaping
-    rm -f /opt/chrome-headless-shell-linux64/libEGL.so \
-          /opt/chrome-headless-shell-linux64/libGLESv2.so \
-          /opt/chrome-headless-shell-linux64/libvk_swiftshader.so \
-          /opt/chrome-headless-shell-linux64/libvulkan.so.1 \
-          /opt/chrome-headless-shell-linux64/vk_swiftshader_icd.json \
-          /opt/chrome-headless-shell-linux64/LICENSE.headless_shell && \
-    # Install s6-overlay
+    # Resolve target arch (buildx provides TARGETARCH; fall back to host arch for plain builds)
+    TARGET_ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" && \
+    # Install the headless browser per architecture, symlinked to a fixed path so the rest of
+    # the image (and PUPPETEER_EXECUTABLE_PATH) is arch-agnostic.
+    if [ "$TARGET_ARCH" = "arm64" ]; then \
+        # chrome-for-testing has no arm64 build — use the distro Chromium (has arm64)
+        apt-get install -y --no-install-recommends chromium && \
+        ln -sf "$(command -v chromium)" /usr/local/bin/inker-chromium; \
+    else \
+        # x86: minimal chrome-headless-shell from chrome-for-testing (unchanged path)
+        CHROME_VERSION=$(wget -qO- "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE") && \
+        wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-headless-shell-linux64.zip" -O /tmp/chrome.zip && \
+        unzip /tmp/chrome.zip -d /opt/ && \
+        chmod +x /opt/chrome-headless-shell-linux64/chrome-headless-shell && \
+        rm /tmp/chrome.zip && \
+        # Strip Chrome: remove GPU libs (--disable-gpu), keep locale packs for Unicode/CJK shaping
+        rm -f /opt/chrome-headless-shell-linux64/libEGL.so \
+              /opt/chrome-headless-shell-linux64/libGLESv2.so \
+              /opt/chrome-headless-shell-linux64/libvk_swiftshader.so \
+              /opt/chrome-headless-shell-linux64/libvulkan.so.1 \
+              /opt/chrome-headless-shell-linux64/vk_swiftshader_icd.json \
+              /opt/chrome-headless-shell-linux64/LICENSE.headless_shell && \
+        ln -sf /opt/chrome-headless-shell-linux64/chrome-headless-shell /usr/local/bin/inker-chromium; \
+    fi && \
+    # Install s6-overlay (arch-specific tarball)
+    case "$TARGET_ARCH" in arm64) S6_ARCH=aarch64 ;; *) S6_ARCH=x86_64 ;; esac && \
     wget -q "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" -O /tmp/s6-noarch.tar.xz && \
     tar -C / -Jxpf /tmp/s6-noarch.tar.xz && \
-    wget -q "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz" -O /tmp/s6-x86_64.tar.xz && \
-    tar -C / -Jxpf /tmp/s6-x86_64.tar.xz && \
-    rm /tmp/s6-noarch.tar.xz /tmp/s6-x86_64.tar.xz && \
+    wget -q "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" -O /tmp/s6-arch.tar.xz && \
+    tar -C / -Jxpf /tmp/s6-arch.tar.xz && \
+    rm /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz && \
     # Install PostgreSQL 15 from PGDG for data migration (15→17) support
     # Existing users upgrading from bookworm need PG 15 binaries to dump their data
     echo "deb http://apt.postgresql.org/pub/repos/apt trixie-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
@@ -126,13 +144,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/postgresql/15 /etc/apt/sources.list.d/pgdg.list && \
     # Remove build-only tools normally
     apt-get purge -y unzip xz-utils wget && apt-get autoremove -y && \
-    # Force-remove transitive deps not needed at runtime
-    # (bypass dependency checks to avoid cascading removal of postgresql/chrome)
-    dpkg --purge --force-depends \
-    libllvm19 libz3-4 libperl5.40 perl perl-modules-5.40 \
-    libavahi-client3 libavahi-common-data libavahi-common3 \
-    libelf1t64 \
-    2>/dev/null || true && \
+    # Force-remove transitive deps not needed at runtime (amd64 ONLY). The stripped
+    # chrome-headless-shell doesn't use these, but distro Chromium on arm64 depends on
+    # avahi/llvm/etc. at runtime — purging them there breaks Chromium (libavahi-common.so.3).
+    if [ "$TARGET_ARCH" != "arm64" ]; then \
+      dpkg --purge --force-depends \
+      libllvm19 libz3-4 libperl5.40 perl perl-modules-5.40 \
+      libavahi-client3 libavahi-common-data libavahi-common3 \
+      libelf1t64 \
+      2>/dev/null || true; \
+    fi && \
     rm -rf /var/lib/apt/lists/* /var/log/dpkg.log /var/log/apt && \
     # Remove unused data (keep locales and i18n for Unicode/CJK support)
     rm -rf /usr/share/doc /usr/share/man \
@@ -148,18 +169,19 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 # Node.js binary for Prisma CLI (Bun's baseline mode crashes on non-AVX2 hardware)
 COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
 
-# Puppeteer configuration
-ENV PUPPETEER_EXECUTABLE_PATH=/opt/chrome-headless-shell-linux64/chrome-headless-shell
+# Puppeteer configuration — fixed symlink resolves to the right browser per architecture
+# (chrome-headless-shell on amd64, distro chromium on arm64; both linked in the layer above)
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/inker-chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Application environment defaults
+# Runtime database is a single SQLite file on the uploads volume. The bundled PostgreSQL is
+# kept in this release only as a one-time migration source (read once, then idle); 0.6.0
+# removes it. The boot script (services.d/backend/run) derives POSTGRES_URL for that read.
 ENV NODE_ENV=production \
     PORT=3002 \
-    DATABASE_URL=postgresql://inker_user:inker_password@localhost:5432/inker_db \
-    REDIS_HOST=localhost \
-    REDIS_PORT=6379 \
-    REDIS_PASSWORD=inker_redis \
-    REDIS_URL=redis://:inker_redis@localhost:6379 \
+    EXTERNAL_POSTGRES=false \
+    DATABASE_URL=file:/app/uploads/inker.db \
     ADMIN_PIN="1111" \
     CORS_ORIGINS=* \
     LOG_LEVEL=info

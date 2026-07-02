@@ -12,35 +12,6 @@ export const configuration = () => ({
     url: process.env.DATABASE_URL,
   },
 
-  redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    password: process.env.REDIS_PASSWORD,
-  },
-
-  // Background jobs configuration
-  jobs: {
-    firmwarePoller: {
-      enabled: process.env.FIRMWARE_POLLER_ENABLED !== 'false',
-      interval: parseInt(
-        process.env.FIRMWARE_POLLER_INTERVAL || '86400000',
-        10,
-      ), // 24 hours
-    },
-    modelPoller: {
-      enabled: process.env.MODEL_POLLER_ENABLED !== 'false',
-      interval: parseInt(process.env.MODEL_POLLER_INTERVAL || '86400000', 10), // 24 hours
-    },
-    screenPoller: {
-      enabled: process.env.SCREEN_POLLER_ENABLED !== 'false',
-      interval: parseInt(process.env.SCREEN_POLLER_INTERVAL || '900000', 10), // 15 minutes
-    },
-    pluginSync: {
-      enabled: process.env.PLUGIN_SYNC_ENABLED !== 'false',
-      interval: parseInt(process.env.PLUGIN_SYNC_INTERVAL || '604800000', 10), // 7 days
-    },
-  },
-
   // External APIs
   models: {
     apiUrl: process.env.MODELS_API_URL,

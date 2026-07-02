@@ -1,26 +1,14 @@
 import { Module } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
 import { LogCleanupService } from './services/log-cleanup.service';
-import { LogCleanupProcessor } from './processors/log-cleanup.processor';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
  * Jobs Module
- * Manages background jobs using BullMQ queues with Redis
+ * Manages background jobs using in-process scheduling (@nestjs/schedule)
  */
 @Module({
-  imports: [
-    BullModule.registerQueue(
-      { name: 'log-cleanup' },
-    ),
-    PrismaModule,
-  ],
-  providers: [
-    LogCleanupService,
-    LogCleanupProcessor,
-  ],
-  exports: [
-    LogCleanupService,
-  ],
+  imports: [PrismaModule],
+  providers: [LogCleanupService],
+  exports: [LogCleanupService],
 })
 export class JobsModule {}
