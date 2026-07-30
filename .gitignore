@@ -31,7 +31,6 @@ npm-debug.log*
 Thumbs.db
 
 # Docker volumes (local data)
-postgres_data/
 redis_data/
 
 # Docker local overrides

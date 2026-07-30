@@ -32,6 +32,7 @@ export class PlaylistsService {
         name: playlistData.name,
         description: playlistData.description,
         isActive: playlistData.isActive ?? true,
+        advanceOnTap: playlistData.advanceOnTap ?? false,
       },
       include: {
         items: {
@@ -347,6 +348,7 @@ export class PlaylistsService {
         name: playlistData.name,
         description: playlistData.description,
         isActive: playlistData.isActive,
+        advanceOnTap: playlistData.advanceOnTap,
       },
       include: {
         items: {

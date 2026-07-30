@@ -11,7 +11,8 @@ import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { generateToken } from '../common/utils/crypto.util';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
-import { serializeDevice, serializeDevices } from './entities/device.entity';
+import { serializeDevice, serializeDevices, isNewerVersion } from './entities/device.entity';
+import { FirmwareService } from '../firmware/firmware.service';
 
 @Injectable()
 export class DevicesService {
@@ -20,6 +21,7 @@ export class DevicesService {
   constructor(
     private prisma: PrismaService,
     private eventsService: EventsService,
+    private firmwareService: FirmwareService,
   ) {}
 
   /**
@@ -112,7 +114,7 @@ export class DevicesService {
     const device = await this.prisma.device.findUnique({
       where: { id },
       include: {
-
+        model: true,
         playlist: {
           include: {
             items: {
@@ -132,7 +134,21 @@ export class DevicesService {
       throw new NotFoundException('Device not found');
     }
 
-    return serializeDevice(device);
+    // Informational only: is there a newer stable firmware than the device's
+    // current version? Inker never pushes OTA updates — this just drives a note
+    // on the device detail page.
+    const latestFirmware = await this.firmwareService.getLatestStableOrNull();
+    const latestFirmwareVersion = latestFirmware?.version ?? null;
+    const firmwareUpdateAvailable = isNewerVersion(
+      latestFirmwareVersion,
+      device.firmwareVersion,
+    );
+
+    return {
+      ...serializeDevice(device),
+      firmwareUpdateAvailable,
+      latestFirmwareVersion: firmwareUpdateAvailable ? latestFirmwareVersion : null,
+    };
   }
 
   /**
@@ -162,6 +178,27 @@ export class DevicesService {
     const playlistChanging = updateDeviceDto.playlistId !== undefined &&
       updateDeviceDto.playlistId !== device.playlistId;
 
+    // A model/format change should also refresh the device so it fetches the new format.
+    const modelChanging = updateDeviceDto.modelId !== undefined &&
+      updateDeviceDto.modelId !== device.modelId;
+
+    // If the model is being changed (e.g. switching og_png -> og_bmp for issue #31),
+    // resolve it so we can sync the device's screen dimensions to the model's, unless
+    // the caller passed explicit width/height overrides in the same request.
+    let modelDimensions: { width?: number; height?: number } = {};
+    if (updateDeviceDto.modelId !== undefined && updateDeviceDto.modelId !== device.modelId) {
+      const model = await this.prisma.model.findUnique({
+        where: { id: updateDeviceDto.modelId },
+      });
+      if (!model) {
+        throw new BadRequestException('Model not found');
+      }
+      modelDimensions = {
+        width: updateDeviceDto.width ?? model.width,
+        height: updateDeviceDto.height ?? model.height,
+      };
+    }
+
     const updatedDevice = await this.prisma.device.update({
       where: { id },
       data: {
@@ -169,15 +206,16 @@ export class DevicesService {
         macAddress: updateDeviceDto.macAddress,
         firmwareVersion: updateDeviceDto.firmwareVersion,
         playlistId: updateDeviceDto.playlistId,
+        modelId: updateDeviceDto.modelId,
         isActive: updateDeviceDto.isActive,
-        width: updateDeviceDto.width,
-        height: updateDeviceDto.height,
+        width: modelDimensions.width ?? updateDeviceDto.width,
+        height: modelDimensions.height ?? updateDeviceDto.height,
         // Quiet hours / sleep schedule (undefined = no change, null = clear/disable)
         sleepStartAt: updateDeviceDto.sleepStartAt,
         sleepStopAt: updateDeviceDto.sleepStopAt,
         showSleepScreen: updateDeviceDto.showSleepScreen,
-        // Set refreshPending if playlist changed to trigger immediate device refresh
-        ...(playlistChanging && { refreshPending: true }),
+        // Set refreshPending if playlist or model/format changed to trigger immediate device refresh
+        ...((playlistChanging || modelChanging) && { refreshPending: true }),
       },
       include: {
 

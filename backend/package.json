@@ -1,6 +1,6 @@
 {
   "name": "inker-backend",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Inker Server Backend - E-ink Device Management",
   "main": "dist/main.js",
   "scripts": {
@@ -14,12 +14,10 @@
     "test:watch": "bun test --watch",
     "test:cov": "bun test --coverage",
     "prisma:generate": "bunx prisma generate",
-    "prisma:generate:pg": "bunx prisma generate --schema=prisma/schema.postgres.prisma",
     "prisma:migrate": "bunx prisma migrate dev",
     "prisma:studio": "bunx prisma studio",
     "prisma:seed": "bun run prisma/seed.ts",
-    "db:seed": "bun run prisma:seed",
-    "db:migrate-sqlite": "bun run prisma/migrate-to-sqlite.ts"
+    "db:seed": "bun run prisma:seed"
   },
   "prisma": {
     "seed": "bun run prisma/seed.ts"

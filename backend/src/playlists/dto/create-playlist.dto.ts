@@ -40,6 +40,14 @@ export class CreatePlaylistDto {
   isActive?: boolean;
 
   @ApiPropertyOptional({
+    example: false,
+    description: 'TRMNL X only: advance to the next screen on each device poll (middle tap / on schedule)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  advanceOnTap?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Screens in the playlist',
     type: [PlaylistScreenDto],
   })

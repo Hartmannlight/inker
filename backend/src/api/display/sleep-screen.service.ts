@@ -4,6 +4,9 @@ import * as sharpModule from 'sharp';
 const sharp = (sharpModule as any).default || sharpModule;
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
+
+type SleepFormat = 'png' | 'bmp';
 
 /**
  * Escape XML special characters to prevent SVG corruption
@@ -42,26 +45,30 @@ export class SleepScreenService {
   }
 
   /**
-   * Build the cache filename for a given resolution + wake time.
-   * e.g. sleep-800x480-0700.png
+   * Build the cache filename for a given resolution + wake time + format.
+   * e.g. sleep-800x480-0700.png or sleep-800x480-0700.bmp
    */
-  private getFilename(width: number, height: number, wakeTime: string): string {
+  private getFilename(width: number, height: number, wakeTime: string, format: SleepFormat = 'png'): string {
     const safeWake = wakeTime.replace(/[^0-9]/g, '') || '0000';
-    return `sleep-${width}x${height}-${safeWake}.png`;
+    return `sleep-${width}x${height}-${safeWake}.${format}`;
   }
 
   /**
    * Ensure the sleep screen for this resolution + wake time exists and return
    * its public URL path and filename. Generates the image on first request.
+   *
+   * @param format 'png' (default) or 'bmp' for TRMNL OG / DIY-kit firmware (issue #31)
    */
   async getSleepScreen(
     width: number,
     height: number,
     wakeTime: string,
+    format: SleepFormat = 'png',
+    bitDepth: number = 1,
   ): Promise<{ url: string; filename: string }> {
     const w = width > 0 ? width : this.DEFAULT_WIDTH;
     const h = height > 0 ? height : this.DEFAULT_HEIGHT;
-    const filename = this.getFilename(w, h, wakeTime);
+    const filename = this.getFilename(w, h, wakeTime, format);
     const outputPath = path.join(this.assetsDir, filename);
 
     try {
@@ -69,7 +76,7 @@ export class SleepScreenService {
       try {
         await fs.access(outputPath);
       } catch {
-        await this.generate(outputPath, w, h, wakeTime);
+        await this.generate(w, h, wakeTime, bitDepth);
       }
     } catch (error) {
       this.logger.error('Failed to ensure sleep screen exists:', error);
@@ -86,13 +93,15 @@ export class SleepScreenService {
     width: number,
     height: number,
     wakeTime: string,
+    format: SleepFormat = 'png',
+    bitDepth: number = 1,
   ): Promise<string | undefined> {
     const w = width > 0 ? width : this.DEFAULT_WIDTH;
     const h = height > 0 ? height : this.DEFAULT_HEIGHT;
-    const filename = this.getFilename(w, h, wakeTime);
+    const filename = this.getFilename(w, h, wakeTime, format);
     const outputPath = path.join(this.assetsDir, filename);
     try {
-      await this.getSleepScreen(w, h, wakeTime);
+      await this.getSleepScreen(w, h, wakeTime, format, bitDepth);
       const buffer = await fs.readFile(outputPath);
       return buffer.toString('base64');
     } catch (error) {
@@ -118,41 +127,57 @@ export class SleepScreenService {
   }
 
   /**
-   * Generate the sleep screen image and write it to disk.
+   * Generate the sleep screen image and write both PNG and BMP variants to disk.
+   * Both share the same dithered pixels; the BMP variant supports TRMNL OG /
+   * DIY-kit firmware that rejects PNG (issue #31).
    */
   private async generate(
-    outputPath: string,
     width: number,
     height: number,
     wakeTime: string,
+    bitDepth: number = 1,
   ): Promise<void> {
-    this.logger.log(`Generating sleep screen: ${width}x${height}, wake=${wakeTime}`);
+    this.logger.log(`Generating sleep screen: ${width}x${height}, wake=${wakeTime}, bitDepth=${bitDepth}`);
 
     const svg = this.createSleepScreenSvg(width, height, wakeTime);
 
-    // Same e-ink pipeline as DefaultScreenService: grayscale → Floyd-Steinberg
-    // dithering → 8-bit b-w PNG. No negate — firmware maps colours for display.
     const grayBuffer = await sharp(Buffer.from(svg))
       .grayscale()
       .normalise()
       .raw()
       .toBuffer({ resolveWithObject: true });
+    const { data, info } = grayBuffer;
 
-    const dithered = this.applyFloydSteinbergDithering(
-      grayBuffer.data,
-      grayBuffer.info.width,
-      grayBuffer.info.height,
-      140,
-    );
+    const bmpPath = path.join(this.assetsDir, this.getFilename(width, height, wakeTime, 'bmp'));
+
+    if (bitDepth >= 4) {
+      // 16-level grayscale for TRMNL X — full resolution, no 1-bit dithering. Compressed PNG by
+      // default (small); the caller's format governs whether a .bmp variant is written instead.
+      const quantized = quantizeGray16(data);
+      const pngPath = path.join(this.assetsDir, this.getFilename(width, height, wakeTime, 'png'));
+      await sharp(quantized, { raw: { width: info.width, height: info.height, channels: 1 } })
+        .toColorspace('b-w')
+        .png({ compressionLevel: 9 })
+        .toFile(pngPath);
+      await fs.writeFile(bmpPath, encodeGray4Bmp(quantized, info.width, info.height));
+      this.logger.log(`Sleep screen saved to: ${pngPath} (+ 4-bit .bmp, 16-level grayscale)`);
+      return;
+    }
+
+    // 1-bit: grayscale → Floyd-Steinberg dithering → both PNG and 1-bit BMP variants.
+    const dithered = this.applyFloydSteinbergDithering(data, info.width, info.height, 140);
+    const pngPath = path.join(this.assetsDir, this.getFilename(width, height, wakeTime, 'png'));
 
     await sharp(dithered, {
-      raw: { width: grayBuffer.info.width, height: grayBuffer.info.height, channels: 1 },
+      raw: { width: info.width, height: info.height, channels: 1 },
     })
       .toColorspace('b-w')
       .png({ compressionLevel: 9 })
-      .toFile(outputPath);
+      .toFile(pngPath);
 
-    this.logger.log(`Sleep screen saved to: ${outputPath}`);
+    await fs.writeFile(bmpPath, encodeBmp1bit(dithered, info.width, info.height));
+
+    this.logger.log(`Sleep screen saved to: ${pngPath} (+ .bmp)`);
   }
 
   /**

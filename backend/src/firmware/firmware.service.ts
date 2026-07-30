@@ -77,6 +77,22 @@ export class FirmwareService {
   }
 
   /**
+   * Get latest stable firmware, or null if none exists.
+   *
+   * Non-throwing variant of findLatestStable() for callers (e.g. the device
+   * detail page) that treat "no firmware recorded" as a normal state rather
+   * than a 404.
+   */
+  async getLatestStableOrNull() {
+    return this.prisma.firmware.findFirst({
+      where: { isStable: true },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
+  /**
    * Find one firmware by ID
    */
   async findOne(id: number) {

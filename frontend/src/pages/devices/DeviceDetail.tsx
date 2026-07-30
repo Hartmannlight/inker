@@ -11,9 +11,9 @@ import {
 } from '../../components/common';
 import { OnlineStatusBadge } from '../../components/common/OnlineStatus';
 import { useApi, useMutation } from '../../hooks/useApi';
-import { deviceService } from '../../services/api';
+import { deviceService, modelService } from '../../services/api';
 import { config } from '../../config';
-import type { Device } from '../../types';
+import type { Device, DeviceModel } from '../../types';
 
 // Auto-refresh interval in milliseconds (30 seconds)
 const AUTO_REFRESH_INTERVAL = 30 * 1000;
@@ -97,6 +97,21 @@ export function DeviceDetail() {
     {
       successMessage: 'Playlist unassigned - device will display "Hello World" default screen',
       onSuccess: () => window.location.reload(),
+    }
+  );
+
+  // Available display models (dimensions + PNG/BMP format) for the format selector
+  const { data: models } = useApi<DeviceModel[]>(
+    () => modelService.getAll(),
+    { showErrorNotification: false },
+  );
+
+  // Switch the device's model / image format (e.g. og_png -> og_bmp for issue #31)
+  const { mutate: setDeviceModel, isLoading: isSettingModel } = useMutation<Device, number>(
+    (modelId: number) => deviceService.setModel(id!, modelId),
+    {
+      successMessage: 'Display format updated - device will refresh on its next poll',
+      onSuccess: () => refetch(),
     }
   );
 
@@ -339,6 +354,11 @@ export function DeviceDetail() {
                       value={`v${device.firmwareVersion}`}
                       mono
                       badge
+                      note={
+                        device.firmwareUpdateAvailable && device.latestFirmwareVersion
+                          ? `Newer firmware available: v${device.latestFirmwareVersion}`
+                          : undefined
+                      }
                     />
                   )}
                   <InfoItem
@@ -351,6 +371,33 @@ export function DeviceDetail() {
                       value={`${device.width || 800} x ${device.height || 480}px`}
                       mono
                     />
+                  )}
+                  {models && models.length > 0 && (
+                    <div>
+                      <dt className="text-sm font-medium text-text-muted mb-1">Display Format</dt>
+                      <dd>
+                        <select
+                          value={device.modelId ?? ''}
+                          disabled={isSettingModel}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v) setDeviceModel(parseInt(v, 10));
+                          }}
+                          className="w-full text-sm rounded-lg border border-border-light bg-bg-card text-text-primary px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+                        >
+                          <option value="" disabled>Select a model…</option>
+                          {models.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.label} · {m.mimeType === 'image/bmp' ? 'BMP (1-bit)' : 'PNG'} · {m.width}×{m.height}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1.5 text-xs text-text-muted">
+                          Choose a <span className="font-medium">BMP</span> model for TRMNL OG / DIY kits whose firmware shows
+                          {' '}“malformed request” with PNG screens.
+                        </p>
+                      </dd>
+                    </div>
                   )}
                 </dl>
               </div>
@@ -634,15 +681,22 @@ interface InfoItemProps {
   value: string;
   mono?: boolean;
   badge?: boolean;
+  note?: string;
 }
 
-function InfoItem({ label, value, mono = false, badge = false }: InfoItemProps) {
+function InfoItem({ label, value, mono = false, badge = false, note }: InfoItemProps) {
   return (
     <div>
       <dt className="text-sm font-medium text-text-muted mb-1">{label}</dt>
       <dd className={`${mono ? 'font-mono' : ''} ${badge ? 'inline-block bg-bg-muted px-2 py-0.5 rounded text-sm' : 'text-text-primary'}`}>
         {value}
       </dd>
+      {note && (
+        <div className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-amber-500">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+          {note}
+        </div>
+      )}
     </div>
   );
 }

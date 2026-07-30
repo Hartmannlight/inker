@@ -1,5 +1,5 @@
 # All-in-one Dockerfile for Inker
-# Bundles: frontend (nginx), backend (bun/nestjs), PostgreSQL 17
+# Bundles: frontend (nginx), backend (bun/nestjs). Data lives in a single SQLite file.
 
 # =============================================================================
 # Stage 1: Build frontend
@@ -32,9 +32,6 @@ COPY backend/prisma ./prisma/
 # Install all deps → generate prisma → reinstall production-only → prune
 RUN bun install --frozen-lockfile && \
     node ./node_modules/prisma/build/index.js generate && \
-    # Second, Postgres-bound client (node_modules/.prisma/client-postgres) used only by the
-    # one-time SQLite migrator. Generated alongside so it rides the .prisma copy below.
-    node ./node_modules/prisma/build/index.js generate --schema=prisma/schema.postgres.prisma && \
     cp -r node_modules/.prisma /tmp/.prisma && \
     rm -rf node_modules && \
     bun install --production --frozen-lockfile && \
@@ -91,8 +88,6 @@ ARG TARGETARCH
 
 # Install all system packages in one layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # PostgreSQL
-    postgresql-17 \
     # Nginx
     nginx \
     # Chrome headless shell dependencies
@@ -135,13 +130,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget -q "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" -O /tmp/s6-arch.tar.xz && \
     tar -C / -Jxpf /tmp/s6-arch.tar.xz && \
     rm /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz && \
-    # Install PostgreSQL 15 from PGDG for data migration (15→17) support
-    # Existing users upgrading from bookworm need PG 15 binaries to dump their data
-    echo "deb http://apt.postgresql.org/pub/repos/apt trixie-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
-    wget -qO /etc/apt/trusted.gpg.d/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
-    apt-get update -qq && \
-    apt-get install -y -qq --no-install-recommends postgresql-15 >/dev/null 2>&1 && \
-    rm -rf /var/lib/postgresql/15 /etc/apt/sources.list.d/pgdg.list && \
     # Remove build-only tools normally
     apt-get purge -y unzip xz-utils wget && apt-get autoremove -y && \
     # Force-remove transitive deps not needed at runtime (amd64 ONLY). The stripped
@@ -158,9 +146,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Remove unused data (keep locales and i18n for Unicode/CJK support)
     rm -rf /usr/share/doc /usr/share/man \
            /usr/share/info /usr/share/lintian /usr/share/X11/xkb \
-           /var/cache/debconf/*-old && \
-    # Remove auto-created PostgreSQL cluster (will be initialized on first run)
-    rm -rf /var/lib/postgresql/17/main/*
+           /var/cache/debconf/*-old
 
 # Install Bun runtime (copy from build image)
 COPY --from=oven/bun:1-slim /usr/local/bin/bun /usr/local/bin/bun
@@ -175,12 +161,9 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/inker-chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Application environment defaults
-# Runtime database is a single SQLite file on the uploads volume. The bundled PostgreSQL is
-# kept in this release only as a one-time migration source (read once, then idle); 0.6.0
-# removes it. The boot script (services.d/backend/run) derives POSTGRES_URL for that read.
+# The database is a single SQLite file on the uploads volume — no external DB required.
 ENV NODE_ENV=production \
     PORT=3002 \
-    EXTERNAL_POSTGRES=false \
     DATABASE_URL=file:/app/uploads/inker.db \
     ADMIN_PIN="1111" \
     CORS_ORIGINS=* \
@@ -223,8 +206,7 @@ RUN chmod +x /etc/cont-init.d/* && \
 # Create required directories
 RUN mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets \
     /app/uploads/captures /app/uploads/drawings /app/logs \
-    /data /var/lib/postgresql/17/main /run/postgresql && \
-    chown -R postgres:postgres /var/lib/postgresql /run/postgresql
+    /data
 
 # Create non-root user for backend process
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin inker && \

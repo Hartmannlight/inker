@@ -18,6 +18,7 @@ const sharp = (sharpModule as any).default || sharpModule;
 import puppeteer, { Browser } from 'puppeteer';
 import QRCode from 'qrcode';
 import { validateUrlSafety, UrlSafetyOptions } from '../../common/utils/url-safety';
+import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
 import { SETTING_KEYS } from '../../settings/settings.service';
 import type { ScreenDesign, ScreenWidget, WidgetTemplate } from '@prisma/client';
 
@@ -43,6 +44,57 @@ export interface DeviceContext {
  * - 'einkPreview': Full e-ink processing WITHOUT inversion (pixel-perfect preview on RGB display)
  */
 export type RenderMode = 'device' | 'preview' | 'einkPreview';
+
+/**
+ * Output image format for device-facing renders.
+ * - 'png': 8-bit grayscale PNG (default; firmware 1.7.8 and PNG-model devices)
+ * - 'bmp': 1-bit BMP for TRMNL OG / DIY-kit firmware that rejects PNG (issue #31)
+ */
+export type ImageFormat = 'png' | 'bmp';
+
+/**
+ * Shared calendar-widget layout math. MUST stay identical to the frontend CalendarWidget
+ * (WidgetRenderer.tsx) so the designer preview matches the device render exactly. Font sizes scale
+ * to the widget but are capped to fit their cell/width — nothing wraps or overflows.
+ */
+/**
+ * Flatten accented/special Latin letters to their base ASCII form (ś→s, ż→z, ł→l, é→e …) so the
+ * calendar renders consistently on e-ink where diacritics can look off or inconsistent.
+ */
+export function stripDiacritics(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/ł/g, 'l')
+    .replace(/Ł/g, 'L')
+    .replace(/ø/g, 'o')
+    .replace(/Ø/g, 'O')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+}
+
+export function calendarLayout(
+  width: number,
+  height: number,
+  labels: string[],
+  title: string,
+  showHeader: boolean,
+  weekRows: number,
+  scale: number,
+): { headerH: number; headerSize: number; labelSize: number; daySize: number; dot: number; gridStyle: string; cellBase: string } {
+  const headerH = showHeader ? Math.max(14, Math.floor(height * 0.15)) : 0;
+  const cell = Math.min(width / 7, (height - headerH) / (weekRows + 1));
+  const maxLabelLen = Math.max(...labels.map((l) => l.length), 1);
+  const daySize = Math.max(8, Math.floor(cell * 0.42 * scale));
+  const labelSize = Math.max(7, Math.floor(Math.min(cell * 0.34, (cell * 0.92) / (maxLabelLen * 0.62)) * scale));
+  const headerSize = showHeader
+    ? Math.max(10, Math.floor(Math.min(headerH * 0.6, (width * 0.9) / (Math.max(title.length, 1) * 0.6)) * scale))
+    : 0;
+  const dot = Math.max(12, Math.min(Math.floor(cell * 0.92), Math.floor(cell * 0.8 * scale)));
+  const cellBase = 'display:flex;align-items:center;justify-content:center;overflow:hidden;min-width:0;min-height:0;';
+  const gridStyle = `flex:1;min-height:0;box-sizing:border-box;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-template-rows:repeat(${weekRows + 1},minmax(0,1fr));text-align:center;overflow:hidden;`;
+  return { headerH, headerSize, labelSize, daySize, dot, gridStyle, cellBase };
+}
 
 /**
  * Screen Renderer Service
@@ -246,7 +298,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    * @param deviceContext - Optional device data for battery/wifi/info widgets
    * @param mode - Render mode: 'device' (full e-ink), 'preview' (no processing), 'einkPreview' (e-ink without inversion)
    */
-  async renderScreenDesign(screenDesignId: number, deviceContext?: DeviceContext, mode: RenderMode | boolean = 'device'): Promise<Buffer> {
+  async renderScreenDesign(screenDesignId: number, deviceContext?: DeviceContext, mode: RenderMode | boolean = 'device', format: ImageFormat = 'png', bitDepth: number = 1): Promise<Buffer> {
     // Support legacy boolean parameter for backwards compatibility
     const renderMode: RenderMode = typeof mode === 'boolean' ? (mode ? 'preview' : 'device') : mode;
 
@@ -268,7 +320,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       throw new NotFoundException('Screen design not found');
     }
 
-    return this.renderDesign(screenDesign as ScreenDesignWithWidgets, deviceContext, renderMode);
+    return this.renderDesign(screenDesign as ScreenDesignWithWidgets, deviceContext, renderMode, format, bitDepth);
   }
 
   /**
@@ -293,7 +345,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    * Internal render method - uses HTML/CSS + Puppeteer for pixel-perfect rendering
    * @param mode - Render mode: 'device' (full e-ink), 'preview' (no processing), 'einkPreview' (e-ink without inversion)
    */
-  private async renderDesign(screenDesign: ScreenDesignWithWidgets, deviceContext?: DeviceContext, mode: RenderMode = 'device'): Promise<Buffer> {
+  private async renderDesign(screenDesign: ScreenDesignWithWidgets, deviceContext?: DeviceContext, mode: RenderMode = 'device', format: ImageFormat = 'png', bitDepth: number = 1): Promise<Buffer> {
     const { width, height } = screenDesign;
 
     this.logger.debug(
@@ -325,7 +377,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     // 'einkPreview' mode applies dithering but no inversion (for admin preview)
     const shouldNegate = mode === 'device';
 
-    return this.applyEinkProcessing(renderBuffer, width, height, shouldNegate);
+    return this.applyEinkProcessing(renderBuffer, width, height, shouldNegate, format, bitDepth);
   }
 
   /**
@@ -346,6 +398,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     width: number,
     height: number,
     negate: boolean,
+    format: ImageFormat = 'png',
+    bitDepth: number = 1,
   ): Promise<Buffer> {
     const MAX_SIZE = 90000; // Max 90KB for TRMNL devices
     const threshold = 140; // Higher threshold favors white
@@ -360,8 +414,41 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
     const { data, info } = grayBuffer;
 
+    // Grayscale path (TRMNL X, bitDepth 4 → 16 levels): full resolution, no 1-bit dithering,
+    // no downscale. Default output is a COMPRESSED 16-level grayscale PNG — small and widely
+    // accepted (an uncompressed 4-bit BMP of a 1872x1404 panel is ~1.3MB and can overwhelm the
+    // device). A 4-bit BMP variant is kept for firmware that requires an exact 4-bit container.
+    if (bitDepth >= 4) {
+      const quantized = quantizeGray16(data);
+      if (format === 'bmp') {
+        const gray4 = encodeGray4Bmp(quantized, info.width, info.height);
+        this.logger.debug(`E-ink processing complete: ${gray4.length} bytes, 4-bit grayscale BMP (${info.width}x${info.height})`);
+        return gray4;
+      }
+      const grayPng = await sharp(quantized, {
+        raw: { width: info.width, height: info.height, channels: 1 },
+      })
+        .toColorspace('b-w')
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+      this.logger.debug(`E-ink processing complete: ${grayPng.length} bytes, 16-level grayscale PNG (${info.width}x${info.height})`);
+      return grayPng;
+    }
+
     // Apply Floyd-Steinberg dithering
     const ditheredBuffer = this.applyFloydSteinbergDithering(data, info.width, info.height, threshold);
+
+    // BMP path: emit a 1-bit BMP at full device resolution for firmware that
+    // rejects PNG (TRMNL OG / DIY kits — issue #31). A 1-bit BMP is a fixed,
+    // small size (e.g. 800x480 ≈ 48KB, well under MAX_SIZE) and the device
+    // expects its exact native resolution, so we never scale it down.
+    if (format === 'bmp') {
+      const bmp = encodeBmp1bit(ditheredBuffer, info.width, info.height);
+      this.logger.debug(
+        `E-ink processing complete: ${bmp.length} bytes, 1-bit BMP (${info.width}x${info.height})`,
+      );
+      return bmp;
+    }
 
     // Output as standard 8-bit grayscale PNG (color_type=0)
     // Firmware 1.7.8 handles display color mapping — palette PNGs cause scrambled display
@@ -2063,7 +2150,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
           if (cell.fieldType === 'image' && cell.processedImageUrl) {
             valueHtml = `<img src="${this.escapeHtml(cell.processedImageUrl)}" alt="${this.escapeHtml(cell.label || 'Grid cell')}" style="max-width: 100%; max-height: 100%; object-fit: ${imageFit};" />`;
           } else {
-            valueHtml = `<span style="font-weight: ${cellFontWeightOverride}; font-size: ${cellFontSizeOverride}px; font-family: ${cellFontFamilyOverride};">${this.escapeHtml(cell.formattedValue)}</span>`;
+            // Wrap long values onto multiple lines to fit the cell (grid cells were
+            // originally single-line, which clipped long text). Constrain to the cell
+            // width so text breaks instead of overflowing on one line; the cell keeps
+            // overflow:hidden so anything past the cell height still clips.
+            valueHtml = `<span style="display: block; width: 100%; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word; text-align: ${cellAlign}; font-weight: ${cellFontWeightOverride}; font-size: ${cellFontSizeOverride}px; font-family: ${cellFontFamilyOverride};">${this.escapeHtml(cell.formattedValue)}</span>`;
           }
 
           return `
@@ -2707,6 +2798,10 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         content = this.generateDateContent(widgetConfig);
         extraStyles = this.getDateStyles(widgetConfig);
         break;
+      case 'calendar':
+        content = this.generateCalendarContent(widgetConfig, width, height);
+        extraStyles = this.getCalendarStyles(widgetConfig);
+        break;
       case 'text':
         content = this.generateTextContent(widgetConfig);
         extraStyles = this.getTextStyles(widgetConfig);
@@ -2838,6 +2933,87 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const justifyContent = textAlign === 'left' ? 'flex-start' : textAlign === 'right' ? 'flex-end' : 'center';
     const lineHeight = fontSize * 1.2;
     return `font-size: ${fontSize}px; font-family: ${fontFamily}; line-height: ${lineHeight}px; white-space: nowrap; padding: 0 8px; justify-content: ${justifyContent};`;
+  }
+
+  // ----- Calendar Widget -----
+  // A simple month calendar: weekday labels, the current month's dates, today highlighted.
+  private generateCalendarContent(config: Record<string, any>, width: number, height: number): string {
+    const now = new Date();
+    const locale = config.locale || 'en-US';
+    const timezone = config.timezone || '';
+    const defaultTimezone = this.configService.get<string>('defaultTimezone', 'UTC');
+    const tz = (timezone === 'local' || timezone === '') ? defaultTimezone : timezone;
+    const weekStartsMonday = (config.weekStart || 'sunday') === 'monday';
+    const showHeader = config.showHeader ?? true;
+
+    // Resolve "today" in the effective timezone (only the highlight depends on the timezone;
+    // the month grid itself is the same wall-clock calendar everywhere).
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+    }).formatToParts(now);
+    const pv = (t: string): number => Number(parts.find((p) => p.type === t)?.value);
+    const year = pv('year');
+    const month = pv('month'); // 1-12
+    const today = pv('day');
+
+    const firstWeekday = new Date(year, month - 1, 1).getDay(); // 0=Sun
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const lead = weekStartsMonday ? (firstWeekday + 6) % 7 : firstWeekday;
+
+    // Localized weekday abbreviations (Jan 1 2023 is a Sunday; noon avoids timezone edge cases).
+    // Diacritics stripped so they render consistently on e-ink.
+    const labelFmt = new Intl.DateTimeFormat(locale, { weekday: 'short' });
+    const allLabels = Array.from({ length: 7 }, (_, i) => stripDiacritics(labelFmt.format(new Date(2023, 0, 1 + i, 12))));
+    const labels = weekStartsMonday ? [...allLabels.slice(1), allLabels[0]] : allLabels;
+
+    const gridLines = config.gridLines ?? false;
+    const highlightWeekends = config.highlightWeekends ?? false;
+    const scale = Math.max(0.3, (Number(config.fontScale) || 100) / 100);
+
+    const title = stripDiacritics(new Intl.DateTimeFormat(locale, { timeZone: tz, month: 'long', year: 'numeric' }).format(now));
+    const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
+    const weekRows = Math.ceil((lead + daysInMonth) / 7);
+
+    const styling = calendarLayout(width, height, labels, title, showHeader, weekRows, scale);
+    const { headerH, headerSize, labelSize, daySize, dot, gridStyle, cellBase } = styling;
+
+    // A visible-on-grayscale weekend shade (the previous near-white tint washed out on the TRMNL X).
+    const shade = (weekend: boolean): string => (highlightWeekends && weekend ? 'background:#cccccc;' : '');
+    // Uniform 1px grid: each cell draws its right+bottom, the grid draws the top+left frame — so every
+    // line is exactly 1px (no doubling). Blanks are divided too.
+    const cellDiv = gridLines ? 'border-right:1px solid #000;border-bottom:1px solid #000;' : '';
+    const gridFrame = gridLines ? 'border-top:1px solid #000;border-left:1px solid #000;' : '';
+    // The single thicker line: separates the weekday names from the day numbers (always shown).
+    const labelSep = 'border-bottom:2px solid #000;';
+
+    const headerCells = labels
+      .map((l, i) => {
+        const lw = weekStartsMonday ? (i + 1) % 7 : i; // weekday of this column (0=Sun)
+        const weekend = lw === 0 || lw === 6;
+        return `<div style="${cellBase}font-weight:600;font-size:${labelSize}px;text-transform:uppercase;letter-spacing:0.03em;white-space:nowrap;${cellDiv}${labelSep}${shade(weekend)}">${l}</div>`;
+      })
+      .join('');
+    // Blank days: empty (no number), but still divided by the grid lines when enabled.
+    const blanks = Array.from({ length: lead }, () => `<div style="${cellDiv}"></div>`).join('');
+    const dayCells = Array.from({ length: daysInMonth }, (_, i) => {
+      const d = i + 1;
+      const weekday = (firstWeekday + i) % 7; // 0=Sun
+      const weekend = weekday === 0 || weekday === 6;
+      const inner = d === today
+        ? `<span style="display:flex;align-items:center;justify-content:center;width:${dot}px;height:${dot}px;background:#000;color:#fff;border-radius:50%;font-weight:600;">${d}</span>`
+        : `${d}`;
+      return `<div style="${cellBase}font-size:${daySize}px;${cellDiv}${shade(weekend)}">${inner}</div>`;
+    }).join('');
+
+    return `<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;font-family:${fontFamily};color:#000;padding:4px;overflow:hidden;">`
+      + (showHeader ? `<div style="height:${headerH}px;line-height:${headerH}px;text-align:center;font-weight:700;font-size:${headerSize}px;letter-spacing:0.02em;white-space:nowrap;overflow:hidden;">${this.escapeHtml(title)}</div>` : '')
+      + `<div style="${gridStyle}${gridFrame}">${headerCells}${blanks}${dayCells}</div>`
+      + '</div>';
+  }
+
+  private getCalendarStyles(_config: Record<string, any>): string {
+    // Let the calendar block fill the whole widget (the base .widget is a centered flex row).
+    return 'align-items: stretch; justify-content: stretch; padding: 0;';
   }
 
   // ----- Text Widget -----

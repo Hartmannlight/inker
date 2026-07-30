@@ -42,6 +42,16 @@ export class UpdateDeviceDto {
   playlistId?: number | null;
 
   @ApiPropertyOptional({
+    example: 2,
+    description:
+      'Device model ID. Determines screen dimensions and image format (PNG vs 1-bit BMP). ' +
+      'Use a *_bmp model for TRMNL OG / DIY-kit firmware that rejects PNG (issue #31).',
+  })
+  @IsOptional()
+  @IsInt()
+  modelId?: number;
+
+  @ApiPropertyOptional({
     example: true,
     description: 'Device active status',
   })

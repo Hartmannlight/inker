@@ -7,7 +7,6 @@ services:
     ports:
       - "${INKER_PORT:-80}:80"
     volumes:
-      - postgres_data:/var/lib/postgresql/17/main
       - uploads_data:/app/uploads
     environment:
       TZ: ${TZ:-UTC}
@@ -15,14 +14,7 @@ services:
       INKER_PORT: "${INKER_PORT:-80}"
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-UTC}
       # Inker stores all data in a single SQLite file under the uploads volume
-      # (/app/uploads/inker.db). On first launch it automatically migrates any existing
-      # PostgreSQL data into SQLite, then runs entirely on SQLite.
-      #
-      # Migrating from an EXTERNAL Postgres? Set EXTERNAL_POSTGRES=true and point
-      # POSTGRES_URL at it (read once during migration, then unused):
-      #   EXTERNAL_POSTGRES: "true"
-      #   POSTGRES_URL: postgresql://user:password@host:5432/db
-      EXTERNAL_POSTGRES: "${EXTERNAL_POSTGRES:-false}"
+      # (/app/uploads/inker.db). No external database is required.
     healthcheck:
       test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1/health');process.exit(r.ok?0:1)"]
       interval: 30s
@@ -31,10 +23,6 @@ services:
       start_period: 60s
 
 volumes:
-  # Legacy PostgreSQL data — used once as the SQLite migration source on upgrade.
-  # Safe to remove after a successful migration (and dropped entirely in 0.6.0).
-  postgres_data:
-    driver: local
   # All application data, including the SQLite database (inker.db).
   uploads_data:
     driver: local

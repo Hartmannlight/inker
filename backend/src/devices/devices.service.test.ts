@@ -15,6 +15,9 @@ describe('DevicesService', () => {
     notifyDevicesRefresh: ReturnType<typeof createMock>;
     notifyPlaylistUpdate: ReturnType<typeof createMock>;
   };
+  let mockFirmwareService: {
+    getLatestStableOrNull: ReturnType<typeof createMock>;
+  };
 
   // Helper to build a device-like object that serializeDevice can process
   const makeDevice = (overrides: Record<string, any> = {}) => ({
@@ -36,7 +39,14 @@ describe('DevicesService', () => {
       notifyDevicesRefresh: createMock().mockResolvedValue(undefined),
       notifyPlaylistUpdate: createMock().mockResolvedValue(undefined),
     };
-    service = new DevicesService(mockPrisma as any, mockEventsService as any);
+    mockFirmwareService = {
+      getLatestStableOrNull: createMock().mockResolvedValue(null),
+    };
+    service = new DevicesService(
+      mockPrisma as any,
+      mockEventsService as any,
+      mockFirmwareService as any,
+    );
   });
 
   // ─── create ─────────────────────────────────────────────────────────
@@ -101,6 +111,36 @@ describe('DevicesService', () => {
       expect(result.name).toBe('Test Device');
       expect(result).toHaveProperty('status');
       expect(result).toHaveProperty('isOnline');
+    });
+
+    it('should flag firmwareUpdateAvailable when a newer stable firmware exists', async () => {
+      mockPrisma.device.findUnique.mockResolvedValue(makeDevice({ firmwareVersion: '1.0.0' }));
+      mockFirmwareService.getLatestStableOrNull.mockResolvedValue({ version: '1.2.0' });
+
+      const result = await service.findOne(1);
+
+      expect(result.firmwareUpdateAvailable).toBe(true);
+      expect(result.latestFirmwareVersion).toBe('1.2.0');
+    });
+
+    it('should not flag an update when latest stable is not newer', async () => {
+      mockPrisma.device.findUnique.mockResolvedValue(makeDevice({ firmwareVersion: '1.7.8' }));
+      mockFirmwareService.getLatestStableOrNull.mockResolvedValue({ version: '1.0.0' });
+
+      const result = await service.findOne(1);
+
+      expect(result.firmwareUpdateAvailable).toBe(false);
+      expect(result.latestFirmwareVersion).toBeNull();
+    });
+
+    it('should not flag an update when no stable firmware is recorded', async () => {
+      mockPrisma.device.findUnique.mockResolvedValue(makeDevice({ firmwareVersion: '1.0.0' }));
+      mockFirmwareService.getLatestStableOrNull.mockResolvedValue(null);
+
+      const result = await service.findOne(1);
+
+      expect(result.firmwareUpdateAvailable).toBe(false);
+      expect(result.latestFirmwareVersion).toBeNull();
     });
   });
 

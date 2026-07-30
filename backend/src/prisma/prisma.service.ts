@@ -33,6 +33,16 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleInit() {
     try {
       await this.$connect();
+
+      // Enable SQLite WAL mode for better read/write concurrency. WAL is persisted in
+      // the database file header, so this only needs to take effect once, but running
+      // it on every boot is cheap and idempotent. Non-fatal if it fails.
+      try {
+        await this.$queryRawUnsafe('PRAGMA journal_mode=WAL');
+      } catch (pragmaError) {
+        this.logger.warn(`Could not set SQLite WAL mode: ${(pragmaError as Error).message}`);
+      }
+
       this.logger.log('Database connection established');
     } catch (error) {
       this.logger.error('Failed to connect to database', error);

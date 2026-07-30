@@ -24,6 +24,15 @@ describe('DisplayService', () => {
       getDefaultScreenBuffer: createMock().mockResolvedValue(Buffer.from('PNG')),
       getDefaultScreenPreviewBuffer: createMock().mockResolvedValue(Buffer.from('PNG')),
       ensureDefaultScreenExists: createMock().mockResolvedValue(undefined),
+      getDefaultScreenBmpUrl: createMock().mockReturnValue('/assets/default-screen.bmp'),
+      getDefaultScreenBmpBase64: createMock().mockResolvedValue('base64bmp'),
+      getDefaultScreenBmpBuffer: createMock().mockResolvedValue(Buffer.from('BM')),
+      ensureDefaultScreenBmpExists: createMock().mockResolvedValue(undefined),
+      ensureDefaultScreenForSize: createMock().mockResolvedValue(undefined),
+      getDefaultScreenUrlForSize: createMock().mockImplementation(
+        (w: number, h: number, fmt: string) => `/assets/default-screen-${w}x${h}.${fmt}`,
+      ),
+      getDefaultScreenBase64ForSize: createMock().mockResolvedValue('base64sized'),
     };
     mockSleepScreenService = {
       getSleepScreen: createMock().mockResolvedValue({
@@ -178,30 +187,6 @@ describe('DisplayService', () => {
     });
   });
 
-  describe('getFirmwareUpdateUrl (private)', () => {
-    const getFirmware = (version?: string) =>
-      (service as any).getFirmwareUpdateUrl(version);
-
-    it('should return empty string when no current version', async () => {
-      expect(await getFirmware(undefined)).toBe('');
-    });
-
-    it('should return empty string when no stable firmware exists', async () => {
-      mockPrisma.firmware.findFirst.mockResolvedValue(null);
-      expect(await getFirmware('1.0.0')).toBe('');
-    });
-
-    it('should return empty string when versions match', async () => {
-      mockPrisma.firmware.findFirst.mockResolvedValue({ version: '1.0.0', downloadUrl: 'http://fw.bin' });
-      expect(await getFirmware('1.0.0')).toBe('');
-    });
-
-    it('should return download URL when version differs', async () => {
-      mockPrisma.firmware.findFirst.mockResolvedValue({ version: '2.0.0', downloadUrl: 'http://fw.bin' });
-      expect(await getFirmware('1.0.0')).toBe('http://fw.bin');
-    });
-  });
-
   describe('getDisplayContent', () => {
     it('should return reset_firmware with all expected fields when device not found', async () => {
       mockPrisma.device.findFirst.mockResolvedValue(null);
@@ -241,6 +226,18 @@ describe('DisplayService', () => {
       expect(result.image_url).toContain('default-screen');
       expect(result.status).toBe(0);
       expect(result.reset_firmware).toBe(false);
+    });
+
+    it('should never push a firmware update to the device, even when a newer stable firmware exists', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'Test', firmwareVersion: '1.0.0', playlist: null, refreshRate: 900, refreshPending: false,
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue({ version: '2.0.0', downloadUrl: 'http://fw.bin', isStable: true });
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.firmware_url).toBe('');
+      expect(result.update_firmware).toBe(false);
     });
 
     it('should use normal refresh_rate even when refreshPending is true', async () => {
@@ -464,6 +461,193 @@ describe('DisplayService', () => {
       expect(result.image_url).toContain('/uploads/s.png');
       expect(mockSleepScreenService.getSleepScreen.calls.length).toBe(0);
       expect(result.refresh_rate).toBe(120);
+    });
+  });
+
+  describe('getDisplayContent - image format (issue #31)', () => {
+    it('serves a 1-bit BMP default screen for an image/bmp model device', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'OG', playlist: null, refreshRate: 900, refreshPending: false,
+        width: 800, height: 480, model: { mimeType: 'image/bmp', width: 800, height: 480 },
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/assets/default-screen-800x480.bmp');
+      expect(result.filename).toMatch(/\.bmp$/);
+      expect(mockDefaultScreenService.ensureDefaultScreenForSize.calls.length).toBe(1);
+    });
+
+    it('serves a PNG default screen sized to the device for a device with no model (default)', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'Default', playlist: null, refreshRate: 900, refreshPending: false,
+        width: 800, height: 480,
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/assets/default-screen-800x480.png');
+      expect(result.filename).toMatch(/\.png$/);
+    });
+
+    it('serves a device-sized 16-level grayscale PNG default screen for a TRMNL X (bitDepth 4)', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'X', playlist: null, refreshRate: 900, refreshPending: false,
+        width: 1872, height: 1404,
+        model: { mimeType: 'image/png', bitDepth: 4, width: 1872, height: 1404 },
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/assets/default-screen-1872x1404.png');
+      expect(result.filename).toMatch(/\.png$/);
+      const [w, h, fmt, depth] = mockDefaultScreenService.ensureDefaultScreenForSize.calls[0];
+      expect([w, h, fmt, depth]).toEqual([1872, 1404, 'png', 4]);
+    });
+
+    it('appends bitDepth=4 (as PNG) to the designed-screen render URL for a TRMNL X', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'X', refreshRate: 900, refreshPending: false, width: 1872, height: 1404,
+        model: { mimeType: 'image/png', bitDepth: 4, width: 1872, height: 1404 },
+        playlist: { items: [{ duration: 60, screenDesign: { id: 7, name: 'D' } }] },
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/api/device-images/design/7');
+      expect(result.image_url).toContain('bitDepth=4');
+      expect(result.image_url).not.toContain('format=bmp');
+      expect(result.filename).toMatch(/\.png$/);
+    });
+
+    it('appends format=bmp to the render URL and uses a .bmp filename for designed screens on bmp devices', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'OG', refreshRate: 900, refreshPending: false, width: 800, height: 480,
+        model: { mimeType: 'image/bmp', width: 800, height: 480 },
+        playlist: { items: [{ duration: 60, screenDesign: { id: 7, name: 'D' } }] },
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/api/device-images/design/7');
+      expect(result.image_url).toContain('format=bmp');
+      expect(result.filename).toMatch(/^design-7-\d+\.bmp$/);
+    });
+
+    it('keeps the PNG render URL (no format param) for designed screens on png devices', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'PNG', refreshRate: 900, refreshPending: false, width: 800, height: 480,
+        model: { mimeType: 'image/png', width: 800, height: 480 },
+        playlist: { items: [{ duration: 60, screenDesign: { id: 7, name: 'D' } }] },
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).not.toContain('format=bmp');
+      expect(result.filename).toMatch(/\.png$/);
+    });
+
+    it('routes uploaded screens through the BMP conversion endpoint for bmp devices', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({
+        id: 1, name: 'OG', refreshRate: 900, refreshPending: false, width: 800, height: 480,
+        model: { mimeType: 'image/bmp', width: 800, height: 480 },
+        playlist: { items: [{ duration: 60, screen: { id: 9, name: 'S', imageUrl: '/uploads/s.png' } }] },
+      });
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('test-key');
+      expect(result.image_url).toContain('/api/device-images/screen/9');
+      expect(result.image_url).toContain('format=bmp');
+      expect(result.filename).toMatch(/\.bmp$/);
+    });
+  });
+
+  describe('getDisplayContent - TRMNL X touch advance-on-tap', () => {
+    const xTouchDevice = (overrides: any = {}) => ({
+      id: 1, name: 'X', refreshRate: 900, refreshPending: false, width: 1872, height: 1404,
+      model: { name: 'trmnl_x', mimeType: 'image/png', bitDepth: 4, width: 1872, height: 1404 },
+      playlist: {
+        advanceOnTap: true,
+        items: [
+          { duration: 300, screen: { id: 11, name: 'A', imageUrl: '/uploads/a.png' } },
+          { duration: 300, screen: { id: 12, name: 'B', imageUrl: '/uploads/b.png' } },
+          { duration: null, screen: { id: 13, name: 'C', imageUrl: '/uploads/c.png' } },
+        ],
+      },
+      lastScreenId: null, screenStartedAt: null,
+      ...overrides,
+    });
+
+    it('shows the first item on the first poll and does not advance', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue(xTouchDevice());
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('k');
+      expect(result.image_url).toContain('/screen/11');
+      expect(result.refresh_rate).toBe(300);
+    });
+
+    it('advances one screen on the next poll and uses the item duration as refresh_rate', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue(
+        xTouchDevice({ lastScreenId: 'screen-11', screenStartedAt: new Date(Date.now() - 10_000) }),
+      );
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('k');
+      expect(result.image_url).toContain('/screen/12'); // A -> B
+      expect(result.refresh_rate).toBe(300);
+    });
+
+    it('an untimed screen advances on an early poll (a tap)', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue(
+        xTouchDevice({ lastScreenId: 'screen-13', screenStartedAt: new Date(Date.now() - 5_000) }),
+      );
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      // reported refresh-rate was the long STAY value; a 5s-old poll is clearly early → advance C -> A(wrap)
+      const result = await service.getDisplayContent('k', false, undefined, undefined, undefined, { reportedRefreshRate: 86400 });
+      expect(result.image_url).toContain('/screen/11');
+      expect(result.refresh_rate).toBe(300);
+    });
+
+    it('an untimed screen stays on a full-length (timer) poll and serves the long STAY refresh', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue(
+        xTouchDevice({ lastScreenId: 'screen-13', screenStartedAt: new Date(Date.now() - 86400_000) }),
+      );
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('k', false, undefined, undefined, undefined, { reportedRefreshRate: 86400 });
+      expect(result.image_url).toContain('/screen/13'); // stays on C
+      expect(result.refresh_rate).toBe(86400);
+    });
+
+    it('does NOT advance-per-poll for a non-touch device or a playlist without advanceOnTap', async () => {
+      // advanceOnTap off → falls back to duration-based rotation; mid-duration poll keeps the same screen
+      mockPrisma.device.findFirst.mockResolvedValue(
+        xTouchDevice({
+          playlist: { advanceOnTap: false, items: [
+            { duration: 300, screen: { id: 11, name: 'A', imageUrl: '/uploads/a.png' } },
+            { duration: 300, screen: { id: 12, name: 'B', imageUrl: '/uploads/b.png' } },
+          ] },
+          lastScreenId: 'screen-11', screenStartedAt: new Date(Date.now() - 10_000),
+        }),
+      );
+      mockPrisma.device.update.mockResolvedValue({ id: 1, battery: null, wifi: null });
+      mockPrisma.firmware.findFirst.mockResolvedValue(null);
+
+      const result = await service.getDisplayContent('k');
+      expect(result.image_url).toContain('/screen/11'); // stayed (only 10s of 300s elapsed)
     });
   });
 });

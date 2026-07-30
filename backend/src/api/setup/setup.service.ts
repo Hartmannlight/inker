@@ -20,6 +20,18 @@ const MODEL_DIMENSIONS: Record<string, { width: number; height: number }> = {
   small_bmp: { width: 400, height: 300 },
   medium_png: { width: 640, height: 384 },
   medium_bmp: { width: 640, height: 384 },
+  trmnl_x: { width: 1872, height: 1404 },
+};
+
+/**
+ * TRMNL firmware reports a short model code in its HTTP_MODEL header (e.g. "x" for the TRMNL X,
+ * "og" for the original). Map those to Inker model names so a device is auto-linked to the right
+ * model (and thus resolution + colour depth) on provisioning. Codes already matching an Inker
+ * model name pass through unchanged.
+ */
+const DEVICE_MODEL_ALIASES: Record<string, string> = {
+  x: 'trmnl_x',   // TRMNL X — 10.3", 1872x1404, 16-level grayscale
+  og: 'og_png',   // TRMNL OG — 7.5", 800x480, 1-bit
 };
 
 /**
@@ -56,6 +68,8 @@ export class SetupService {
     metrics?: DeviceMetrics,
     baseUrl?: string,
     modelName?: string,
+    reportedWidth?: number,
+    reportedHeight?: number,
   ) {
     // Validate MAC address format
     if (!this.isValidMacAddress(macAddress)) {
@@ -113,8 +127,14 @@ export class SetupService {
     // Generate API key (UUID)
     const apiKey = generateToken(32);
 
-    // Resolve dimensions from model name, default to 800x480 (TRMNL Original)
-    const dimensions = (modelName && MODEL_DIMENSIONS[modelName]) || MODEL_DIMENSIONS.og_png;
+    // Auto-detect the device's model + resolution from what its firmware reports (issue: TRMNL X
+    // was defaulting to 800x480). The device's own reported width/height win; the model code links
+    // it to an Inker model (resolution + colour depth).
+    const resolved = await this.resolveDeviceModel(modelName, reportedWidth, reportedHeight);
+    this.logger.log(
+      `Provisioning ${macAddress}: model="${modelName ?? 'none'}" reported=${reportedWidth ?? '?'}x${reportedHeight ?? '?'} ` +
+      `→ ${resolved.width}x${resolved.height}${resolved.modelId ? ` (modelId ${resolved.modelId})` : ''}`,
+    );
 
     // Create new device
     device = await this.prisma.device.create({
@@ -124,8 +144,9 @@ export class SetupService {
         macAddress,
         apiKey,
         firmwareVersion,
-        width: dimensions.width,
-        height: dimensions.height,
+        modelId: resolved.modelId ?? undefined,
+        width: resolved.width,
+        height: resolved.height,
         lastSeenAt: new Date(),
         refreshRate: 900, // 15 minutes default
         wifi: metrics?.wifi !== undefined && !isNaN(metrics.wifi) ? metrics.wifi : 0,
@@ -142,6 +163,39 @@ export class SetupService {
     );
 
     return this.buildSetupResponse(device, baseUrl);
+  }
+
+  /**
+   * Resolve a provisioning device's model + resolution from what its firmware reports.
+   *
+   * Priority for dimensions: the device's reported width/height (most reliable) → the matched Inker
+   * model's dimensions → the static dimension map → OG 800x480. The model code (e.g. "x") is mapped
+   * to an Inker model name so the device is linked to a Model row (giving it the right colour depth).
+   */
+  private async resolveDeviceModel(
+    modelCode?: string,
+    reportedWidth?: number,
+    reportedHeight?: number,
+  ): Promise<{ modelId: number | null; width: number; height: number }> {
+    let modelName: string | undefined;
+    if (modelCode) {
+      const lc = modelCode.toLowerCase();
+      modelName = DEVICE_MODEL_ALIASES[lc] || (MODEL_DIMENSIONS[lc] ? lc : undefined);
+    }
+
+    const modelRow = modelName
+      ? await this.prisma.model.findFirst({ where: { name: modelName } })
+      : null;
+
+    const dimFromMap = modelName ? MODEL_DIMENSIONS[modelName] : undefined;
+    const validW = reportedWidth && reportedWidth > 0 ? reportedWidth : undefined;
+    const validH = reportedHeight && reportedHeight > 0 ? reportedHeight : undefined;
+
+    return {
+      modelId: modelRow?.id ?? null,
+      width: validW ?? modelRow?.width ?? dimFromMap?.width ?? MODEL_DIMENSIONS.og_png.width,
+      height: validH ?? modelRow?.height ?? dimFromMap?.height ?? MODEL_DIMENSIONS.og_png.height,
+    };
   }
 
   /**

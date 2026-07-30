@@ -75,6 +75,23 @@ const WIDGET_TEMPLATES = [
     minHeight: 50,
   },
   {
+    name: 'calendar',
+    label: 'Calendar',
+    description: 'Month calendar with the current day highlighted',
+    category: 'time',
+    defaultConfig: {
+      timezone: 'local',
+      weekStart: 'sunday',
+      showHeader: true,
+      gridLines: false,
+      highlightWeekends: false,
+      fontScale: 100,
+      fontFamily: 'sans-serif',
+    },
+    minWidth: 220,
+    minHeight: 200,
+  },
+  {
     name: 'qrcode',
     label: 'QR Code',
     description: 'Generates a QR code from text/URL',
@@ -297,6 +314,21 @@ async function main() {
       kind: 'terminus',
       scaleFactor: 1.0,
     },
+    {
+      name: 'trmnl_x',
+      label: 'TRMNL X (10.3", grayscale)',
+      width: 1872,
+      height: 1404,
+      description: 'TRMNL X 10.3" e-ink display, 1872x1404, 16-level grayscale (compressed PNG)',
+      mimeType: 'image/png',
+      colors: 16,
+      bitDepth: 4,
+      rotation: 0,
+      offsetX: 0,
+      offsetY: 0,
+      kind: 'terminus',
+      scaleFactor: 1.0,
+    },
   ];
 
   for (const modelData of models) {
@@ -309,19 +341,9 @@ async function main() {
 
   console.log(`✅ Created ${models.length} device models`);
 
-  // Create sample firmware
-  const firmware = await prisma.firmware.upsert({
-    where: { version: '1.0.0' },
-    update: {},
-    create: {
-      version: '1.0.0',
-      downloadUrl: 'https://example.com/firmware/v1.0.0.bin',
-      releaseNotes: 'Initial stable release',
-      isStable: true,
-    },
-  });
-
-  console.log(`✅ Created firmware version: ${firmware.version}`);
+  // No firmware is seeded. Inker does not host or distribute device firmware, so a
+  // placeholder row would only produce a misleading "update available" note. Admins
+  // can record a real latest version via the /firmware API if they want the note.
 
   // Seed widget templates
   console.log('Seeding widget templates...');

@@ -38,6 +38,7 @@ export function PlaylistForm() {
     description: '',
     screens: [],
     isActive: true, // Always active by default
+    advanceOnTap: false,
   });
 
   const [selectedScreenId, setSelectedScreenId] = useState<string>('');
@@ -199,6 +200,7 @@ export function PlaylistForm() {
         description: playlist.description || '',
         screens: playlist.screens || [],
         isActive: playlist.isActive,
+        advanceOnTap: playlist.advanceOnTap ?? false,
       });
     }
   }, [playlist]);
@@ -236,7 +238,10 @@ export function PlaylistForm() {
     if (!selectedScreenId) return;
 
     const currentScreens = formData.screens || [];
-    const parsedDuration = Math.max(60, Number(durationInput) || 60);
+    // With touch advance, a duration of 0 is valid and means "stay until the next tap".
+    const parsedDuration = formData.advanceOnTap
+      ? Math.max(0, Number(durationInput) || 0)
+      : Math.max(60, Number(durationInput) || 60);
     const newScreen: PlaylistScreen = {
       screenId: selectedScreenId,
       duration: parsedDuration,
@@ -295,7 +300,15 @@ export function PlaylistForm() {
     setFormData((prev) => ({
       ...prev,
       screens: (prev.screens || []).map((screen, i) =>
-        i === index ? { ...screen, duration: Math.max(60, screen.duration || 60) } : screen
+        i === index
+          ? {
+              ...screen,
+              // Touch playlists allow 0 (= stay until tap); others enforce a 60s minimum.
+              duration: prev.advanceOnTap
+                ? Math.max(0, Number(screen.duration) || 0)
+                : Math.max(60, screen.duration || 60),
+            }
+          : screen
       ),
     }));
   };
@@ -360,6 +373,25 @@ export function PlaylistForm() {
                 className="w-full px-3 py-2 border border-border-light rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
                 rows={3}
               />
+            </div>
+
+            <div className="border-t border-border-light pt-6">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.advanceOnTap ?? false}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, advanceOnTap: e.target.checked }))}
+                  className="mt-1 h-4 w-4 rounded border-border-light text-accent focus:ring-accent"
+                />
+                <span className="text-sm">
+                  <span className="font-medium text-text-primary">Change screens with the TRMNL X touch bar</span>
+                  <span className="block text-text-muted">
+                    TRMNL X only: the middle tap advances to the next screen, and each screen advances on
+                    its own timer. Set a screen's time to <span className="font-medium">0</span> to make it
+                    stay until the next tap.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className="border-t border-border-light pt-6">
@@ -453,7 +485,7 @@ export function PlaylistForm() {
                       type="number"
                       value={durationInput}
                       onChange={(e) => setDurationInput(e.target.value)}
-                      onBlur={() => setDurationInput(String(Math.max(60, Number(durationInput) || 60)))}
+                      onBlur={() => setDurationInput(String(formData.advanceOnTap ? Math.max(0, Number(durationInput) || 0) : Math.max(60, Number(durationInput) || 60)))}
                       min={60}
                     />
                   </div>

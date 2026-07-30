@@ -26,6 +26,20 @@ function mapFontFamily(fontFamily: string): string {
   }
 }
 
+// Flatten accented/special Latin letters to ASCII (ś→s, ł→l, é→e …) — matches the backend so the
+// calendar renders consistently on e-ink. Must stay identical to backend stripDiacritics().
+function stripDiacritics(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/ł/g, 'l')
+    .replace(/Ł/g, 'L')
+    .replace(/ø/g, 'o')
+    .replace(/Ø/g, 'O')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+}
+
 interface WidgetRendererProps {
   widget: ScreenWidget;
   template: WidgetTemplate;
@@ -40,6 +54,8 @@ export function WidgetRenderer({ widget, template }: WidgetRendererProps) {
       return <ClockWidget config={config} />;
     case 'date':
       return <DateWidget config={config} />;
+    case 'calendar':
+      return <CalendarWidget config={config} width={widget.width} height={widget.height} />;
     case 'weather':
       return <WeatherWidget config={config} />;
     case 'text':
@@ -561,6 +577,89 @@ function WeatherWidget({ config }: { config: Record<string, unknown> }) {
           {location}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * CalendarWidget - Month calendar with the current day highlighted.
+ * Mirrors the backend generateCalendarContent grid.
+ */
+function CalendarWidget({ config, width, height }: { config: Record<string, unknown>; width: number; height: number }) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0-11
+  const today = now.getDate();
+  const weekStartsMonday = ((config.weekStart as string) || 'sunday') === 'monday';
+  const showHeader = (config.showHeader as boolean) ?? true;
+  const gridLines = (config.gridLines as boolean) ?? false;
+  const highlightWeekends = (config.highlightWeekends as boolean) ?? false;
+  const scale = Math.max(0.3, (Number(config.fontScale) || 100) / 100);
+  const fontFamily = mapFontFamily((config.fontFamily as string) || 'sans-serif');
+  const locale = (config.locale as string) || 'en-US';
+
+  const firstWeekday = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const lead = weekStartsMonday ? (firstWeekday + 6) % 7 : firstWeekday;
+  // Localized weekday abbreviations (Jan 1 2023 is a Sunday), diacritics stripped.
+  const labelFmt = new Intl.DateTimeFormat(locale, { weekday: 'short' });
+  const allLabels = Array.from({ length: 7 }, (_, i) => stripDiacritics(labelFmt.format(new Date(2023, 0, 1 + i, 12))));
+  const labels = weekStartsMonday ? [...allLabels.slice(1), allLabels[0]] : allLabels;
+  const title = stripDiacritics(now.toLocaleDateString(locale, { month: 'long', year: 'numeric' }));
+  const weekRows = Math.ceil((lead + daysInMonth) / 7);
+
+  // Font sizing — MUST match the backend calendarLayout() so the preview equals the device render.
+  const headerH = showHeader ? Math.max(14, Math.floor(height * 0.15)) : 0;
+  const cell = Math.min(width / 7, (height - headerH) / (weekRows + 1));
+  const maxLabelLen = Math.max(...labels.map((l) => l.length), 1);
+  const daySize = Math.max(8, Math.floor(cell * 0.42 * scale));
+  const labelSize = Math.max(7, Math.floor(Math.min(cell * 0.34, (cell * 0.92) / (maxLabelLen * 0.62)) * scale));
+  const headerSize = showHeader
+    ? Math.max(10, Math.floor(Math.min(headerH * 0.6, (width * 0.9) / (Math.max(title.length, 1) * 0.6)) * scale))
+    : 0;
+  const dot = Math.max(12, Math.min(Math.floor(cell * 0.92), Math.floor(cell * 0.8 * scale)));
+
+  const shade = (weekend: boolean): string | undefined => (highlightWeekends && weekend ? '#cccccc' : undefined);
+  // Uniform 1px grid: cells draw right+bottom, the grid draws top+left — every line is 1px, no doubling.
+  const cellDiv: React.CSSProperties = gridLines ? { borderRight: '1px solid #000', borderBottom: '1px solid #000' } : {};
+  const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', minWidth: 0, minHeight: 0 };
+
+  const cells: React.ReactNode[] = [];
+  for (let i = 0; i < lead; i++) cells.push(<div key={`b${i}`} style={{ ...cellDiv }} />); // blank days: empty but divided
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = d === today;
+    const weekday = (firstWeekday + (d - 1)) % 7;
+    const weekend = weekday === 0 || weekday === 6;
+    cells.push(
+      <div key={d} style={{ ...cellBase, ...cellDiv, fontSize: daySize, background: shade(weekend) }}>
+        <span
+          style={
+            isToday
+              ? { display: 'flex', alignItems: 'center', justifyContent: 'center', width: dot, height: dot, background: '#000', color: '#fff', borderRadius: '50%', fontWeight: 600 }
+              : undefined
+          }
+        >
+          {d}
+        </span>
+      </div>,
+    );
+  }
+
+  return (
+    <div style={{ width: '100%', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', fontFamily, color: '#000', padding: 4, overflow: 'hidden' }}>
+      {showHeader && (
+        <div style={{ height: headerH, lineHeight: `${headerH}px`, textAlign: 'center', fontWeight: 700, fontSize: headerSize, letterSpacing: '0.02em', whiteSpace: 'nowrap', overflow: 'hidden' }}>{title}</div>
+      )}
+      <div style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gridTemplateRows: `repeat(${weekRows + 1}, minmax(0, 1fr))`, textAlign: 'center', overflow: 'hidden', borderTop: gridLines ? '1px solid #000' : undefined, borderLeft: gridLines ? '1px solid #000' : undefined }}>
+        {labels.map((l, i) => {
+          const lw = weekStartsMonday ? (i + 1) % 7 : i;
+          const weekend = lw === 0 || lw === 6;
+          return (
+            <div key={`h${i}`} style={{ ...cellBase, ...cellDiv, fontWeight: 600, fontSize: labelSize, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', borderBottom: '2px solid #000', background: shade(weekend) }}>{l}</div>
+          );
+        })}
+        {cells}
+      </div>
     </div>
   );
 }
@@ -1177,7 +1276,7 @@ function GridContentRenderer({
                 {cell.label}
               </div>
             )}
-            <div className={`flex ${alignItems} ${justifyContent} gap-0.5 truncate`}>
+            <div className={`flex ${alignItems} ${justifyContent} gap-0.5 w-full min-w-0`}>
               {cell.fieldType === 'image' && cell.value ? (
                 <EInkImage
                   src={String(cell.value)}
@@ -1186,7 +1285,9 @@ function GridContentRenderer({
                 />
               ) : (
                 <span
+                  className="min-w-0 break-words whitespace-normal"
                   style={{
+                    maxWidth: '100%',
                     fontSize: `${cellFontSize}px`,
                     fontWeight: cellFontWeight,
                     fontFamily: cellFontFamily,

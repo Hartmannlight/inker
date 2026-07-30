@@ -969,6 +969,76 @@ export function WidgetSettingsPanel({
             </div>
           )}
 
+          {/* Calendar settings */}
+          {template.name === 'calendar' && (
+            <div className="space-y-3">
+              <Field label="Language">
+                <StyledSelect
+                  value={(widget.config.locale as string) || 'en-US'}
+                  onChange={(e) => updateConfig('locale', e.target.value)}
+                  options={localeOptions}
+                />
+              </Field>
+              <Field label="Timezone">
+                <SearchableSelect
+                  value={(widget.config.timezone as string) || browserTimezone}
+                  onChange={(value) => {
+                    const actualTimezone = value === 'local' ? browserTimezone : value;
+                    updateConfig('timezone', actualTimezone);
+                  }}
+                  options={getTimezoneOptions()}
+                  searchFn={searchTimezones}
+                  placeholder="Search city or timezone..."
+                />
+              </Field>
+              <Field label="Week starts on">
+                <StyledSelect
+                  value={(widget.config.weekStart as string) || 'sunday'}
+                  onChange={(e) => updateConfig('weekStart', e.target.value)}
+                  options={[
+                    { value: 'sunday', label: 'Sunday' },
+                    { value: 'monday', label: 'Monday' },
+                  ]}
+                />
+              </Field>
+              <Field label="Font Size (%)">
+                <NumberInput
+                  value={(widget.config.fontScale as number) || 100}
+                  onChange={(v) => updateConfig('fontScale', v)}
+                  min={50}
+                />
+              </Field>
+              <Field label="Font Family">
+                <StyledSelect
+                  value={(widget.config.fontFamily as string) || 'sans-serif'}
+                  onChange={(e) => updateConfig('fontFamily', e.target.value)}
+                  options={fontFamilies}
+                />
+              </Field>
+              <div className="space-y-1 pt-1">
+                <p className="text-xs font-medium text-text-muted mb-2">Display Options</p>
+                <ToggleSwitch
+                  id="calShowHeader"
+                  label="Show month & year"
+                  checked={(widget.config.showHeader as boolean) ?? true}
+                  onChange={(checked) => updateConfig('showHeader', checked)}
+                />
+                <ToggleSwitch
+                  id="calGridLines"
+                  label="Dividing lines"
+                  checked={(widget.config.gridLines as boolean) ?? false}
+                  onChange={(checked) => updateConfig('gridLines', checked)}
+                />
+                <ToggleSwitch
+                  id="calWeekends"
+                  label="Highlight weekends"
+                  checked={(widget.config.highlightWeekends as boolean) ?? false}
+                  onChange={(checked) => updateConfig('highlightWeekends', checked)}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Weather settings */}
           {template.name === 'weather' && (
             <WeatherWidgetSettings widget={widget} updateConfig={updateConfig} onUpdateWidget={onUpdateWidget} />

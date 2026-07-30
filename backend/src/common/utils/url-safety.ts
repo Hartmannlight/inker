@@ -16,7 +16,6 @@ const BLOCKED_HOSTNAMES = [
   'localhost',
   'inker-backend',
   'inker-frontend',
-  'inker-postgres',
   'inker-redis',
   'host.docker.internal',
   'metadata.google.internal',

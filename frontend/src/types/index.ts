@@ -16,6 +16,19 @@ export interface GitHubTokenTestResult {
 }
 
 // Device types
+/** A device model / display profile — dimensions + image format (PNG vs 1-bit BMP) */
+export interface DeviceModel {
+  id: number;
+  /** Machine name, e.g. "og_png" or "og_bmp" */
+  name: string;
+  /** Human-friendly label, e.g. "TRMNL Original (BMP)" */
+  label: string;
+  width: number;
+  height: number;
+  /** "image/png" or "image/bmp" — BMP is for TRMNL OG / DIY-kit firmware (issue #31) */
+  mimeType: string;
+}
+
 export interface Device {
   id: number;
   name: string;
@@ -33,7 +46,15 @@ export interface Device {
   /** WiFi signal strength in dBm (typically -30 to -90) */
   wifi: number;
   firmwareVersion?: string;
+  /** Informational: a newer stable firmware than the device's current version exists (device detail only) */
+  firmwareUpdateAvailable?: boolean;
+  /** The newer stable firmware version, when firmwareUpdateAvailable is true */
+  latestFirmwareVersion?: string | null;
   playlistId?: number;
+  /** Device model ID — determines screen dimensions and image format (PNG vs 1-bit BMP) */
+  modelId?: number | null;
+  /** Device model detail (included on the device-detail endpoint) */
+  model?: DeviceModel | null;
   refreshRate?: number;
   isActive?: boolean;
   userId: number;
@@ -93,6 +114,8 @@ export interface Playlist {
   description?: string;
   screens: PlaylistScreenWithDetails[];
   isActive: boolean;
+  /** TRMNL X only: advance to the next screen on each device poll (middle tap / on schedule) */
+  advanceOnTap?: boolean;
   userId: string;
   createdAt: string;
   updatedAt: string;
@@ -329,6 +352,8 @@ export interface PlaylistFormData {
   description?: string;
   screens: PlaylistScreen[];
   isActive: boolean;
+  /** TRMNL X only: advance to the next screen on each device poll (middle tap / on schedule) */
+  advanceOnTap?: boolean;
 }
 
 // Dashboard stats

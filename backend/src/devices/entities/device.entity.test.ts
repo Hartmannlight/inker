@@ -5,6 +5,7 @@ import {
   getOfflineThresholdMs,
   serializeDevice,
   serializeDevices,
+  isNewerVersion,
 } from './device.entity';
 
 describe('device.entity', () => {
@@ -90,6 +91,39 @@ describe('device.entity', () => {
       expect(result).toHaveLength(2);
       expect(result[0].isOnline).toBe(true);
       expect(result[1].isOnline).toBe(false);
+    });
+  });
+
+  describe('isNewerVersion', () => {
+    it('should return true when candidate is a newer patch', () => {
+      expect(isNewerVersion('1.0.1', '1.0.0')).toBe(true);
+    });
+
+    it('should return true when candidate is a newer minor', () => {
+      expect(isNewerVersion('1.2.0', '1.0.9')).toBe(true);
+    });
+
+    it('should compare numeric parts, not lexically (1.10 > 1.9)', () => {
+      expect(isNewerVersion('1.10.0', '1.9.0')).toBe(true);
+    });
+
+    it('should return false for equal versions', () => {
+      expect(isNewerVersion('1.0.0', '1.0.0')).toBe(false);
+    });
+
+    it('should return false when candidate is older', () => {
+      expect(isNewerVersion('1.0.0', '1.7.8')).toBe(false);
+    });
+
+    it('should ignore a leading "v"', () => {
+      expect(isNewerVersion('v2.0.0', '1.9.9')).toBe(true);
+    });
+
+    it('should return false for missing or malformed input', () => {
+      expect(isNewerVersion(undefined, '1.0.0')).toBe(false);
+      expect(isNewerVersion('1.0.0', null)).toBe(false);
+      expect(isNewerVersion('', '1.0.0')).toBe(false);
+      expect(isNewerVersion('abc', '1.0.0')).toBe(false);
     });
   });
 });

@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance, AxiosError } from 'axios';
 import type {
   Device,
+  DeviceModel,
   DeviceLog,
   Screen,
   Playlist,
@@ -208,6 +209,34 @@ export const deviceService = {
         `/devices/${deviceId}/refresh`
       );
       return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  // Change a device's model / image format (e.g. og_png -> og_bmp for issue #31)
+  async setModel(deviceId: string, modelId: number): Promise<Device> {
+    try {
+      const response = await apiClient.patch<ApiResponse<Device>>(
+        `/devices/${deviceId}`,
+        { modelId }
+      );
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+};
+
+// Device Model Service — list available display models (dimensions + PNG/BMP format)
+export const modelService = {
+  async getAll(): Promise<DeviceModel[]> {
+    try {
+      const response = await apiClient.get<ApiResponse<DeviceModel[]>>('/models');
+      // /models is public and may return either a wrapped ApiResponse or a raw array.
+      const body = response.data as unknown;
+      if (Array.isArray(body)) return body as DeviceModel[];
+      return (response.data.data ?? []) as DeviceModel[];
     } catch (error) {
       throw new Error(getErrorMessage(error));
     }
@@ -812,6 +841,24 @@ function getDefaultWidgetTemplates(): WidgetTemplate[] {
       },
       minWidth: 200,
       minHeight: 40,
+    },
+    {
+      id: 99,
+      name: 'calendar',
+      label: 'Calendar',
+      description: 'Month calendar with the current day highlighted',
+      category: 'time',
+      defaultConfig: {
+        timezone: 'local',
+        weekStart: 'sunday',
+        showHeader: true,
+        gridLines: false,
+        highlightWeekends: false,
+        fontScale: 100,
+        fontFamily: 'sans-serif',
+      },
+      minWidth: 220,
+      minHeight: 200,
     },
     {
       id: 3,

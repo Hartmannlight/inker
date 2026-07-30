@@ -2,11 +2,9 @@
 exec 2>&1
 
 SQLITE_FILE=/app/uploads/inker.db
-MIGRATION_DIR=/app/uploads/.migration
-MARKER="${MIGRATION_DIR}/.migrated"
 
-# Create required directories and set ownership for non-root backend
-mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets /app/uploads/captures /app/uploads/drawings /app/logs /tmp/inker-home "${MIGRATION_DIR}"
+# Create required directories and set ownership for the non-root backend user
+mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets /app/uploads/captures /app/uploads/drawings /app/logs /tmp/inker-home
 chown -R inker:inker /app/uploads /app/logs /tmp/inker-home
 
 # Set HOME for the inker user (Puppeteer needs a writable home for config)
@@ -14,45 +12,29 @@ export HOME=/tmp/inker-home
 
 cd /app
 
-if [ ! -f "$MARKER" ]; then
-    echo "[backend] First boot — preparing SQLite database..."
+# Inker stores everything in a single SQLite file on the uploads volume.
+export DATABASE_URL="file:${SQLITE_FILE}"
 
-    # Resolve the one-time migration source (legacy PostgreSQL). Existing data is read once
-    # and imported into SQLite; the source DB is never modified.
-    if [ "${EXTERNAL_POSTGRES}" = "true" ]; then
-        # Back-compat: external users historically set their Postgres via DATABASE_URL.
-        export POSTGRES_URL="${POSTGRES_URL:-$DATABASE_URL}"
-        echo "[backend] Migration source: external PostgreSQL"
-    else
-        export POSTGRES_URL="${POSTGRES_URL:-postgresql://inker_user:inker_password@localhost:5432/inker_db}"
-        echo "[backend] Waiting for bundled PostgreSQL (migration source)..."
-        # Bounded wait so brand-new installs (empty/absent PG) don't hang.
-        i=0
-        until su - postgres -c "pg_isready -q" 2>/dev/null; do
-            i=$((i + 1))
-            if [ "$i" -ge 60 ]; then
-                echo "[backend] PostgreSQL not ready after 60s — continuing as fresh install"
-                break
-            fi
-            sleep 1
-        done
-    fi
+# Track whether this is a brand-new install (no database file yet) purely for logging.
+FRESH_INSTALL=0
+[ ! -f "$SQLITE_FILE" ] && FRESH_INSTALL=1
 
-    # Runtime database is always SQLite.
-    export DATABASE_URL="file:${SQLITE_FILE}"
+echo "[backend] Applying SQLite schema (idempotent)..."
+s6-setuidgid inker node ./node_modules/prisma/build/index.js db push --skip-generate 2>&1 || echo "[backend] Warning: db push had issues, check logs"
 
-    echo "[backend] Creating SQLite schema..."
-    s6-setuidgid inker node ./node_modules/prisma/build/index.js db push --skip-generate 2>&1 || echo "[backend] Warning: db push had issues, check logs"
-
-    echo "[backend] Running one-time PostgreSQL -> SQLite migration / seed..."
-    s6-setuidgid inker bun run prisma/migrate-to-sqlite.ts 2>&1 || echo "[backend] Warning: migration step reported an issue, check logs"
+# Seed default reference data (device models + widget templates) on EVERY boot. The seed
+# is fully idempotent: it upserts each row with `update: {}`, so it only ADDS what is
+# missing and never modifies or deletes existing data (users, devices, screens, or any
+# customized rows are untouched). Running it on upgrades — not just fresh installs — means
+# an existing instance automatically picks up newly shipped models and widget templates
+# (e.g. the calendar widget, the trmnl_x model) simply by pulling the new image.
+if [ "$FRESH_INSTALL" = "1" ]; then
+    echo "[backend] Fresh install — seeding default data..."
 else
-    # Already on SQLite — keep schema in sync on upgrades (idempotent), then boot.
-    export DATABASE_URL="file:${SQLITE_FILE}"
-    echo "[backend] Applying any pending SQLite schema changes..."
-    s6-setuidgid inker node ./node_modules/prisma/build/index.js db push --skip-generate 2>&1 || echo "[backend] Warning: db push had issues, check logs"
+    echo "[backend] Syncing default data (idempotent, adds any new models/widgets)..."
 fi
+s6-setuidgid inker bun run prisma/seed.ts 2>&1 || echo "[backend] Warning: seed reported an issue, check logs"
 
-# Start backend as non-root user
+# Start backend as the non-root user
 echo "[backend] Starting Inker backend..."
 exec s6-setuidgid inker bun run dist/main.js

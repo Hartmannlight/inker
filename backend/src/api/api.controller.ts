@@ -211,7 +211,17 @@ export class ApiController {
     // Parse RSSI to integer
     const wifi = rssiStr ? parseInt(rssiStr, 10) : undefined;
 
-    this.logger.debug(`[DISPLAY] Extracted deviceApiKey: ${deviceApiKey}, battery: ${batteryVoltageStr}V → ${battery}%, wifi: ${wifi} dBm, fw: ${firmwareVersion}`);
+    // Model + resolution the device reports (used if this device has to auto-provision here)
+    const modelName = this.extractHeader(headers, [
+      'http_model', 'HTTP_MODEL', 'Http-Model', 'http-model', 'model', 'device-model', 'x-device-model',
+    ]);
+    const { width: reportedWidth, height: reportedHeight } = this.extractReportedResolution(headers);
+    // The device reports the refresh rate it just slept for — lets touch mode tell a tap (early wake)
+    // from a scheduled timer wake on untimed screens.
+    const refreshRateStr = this.extractHeader(headers, ['refresh-rate', 'Refresh-Rate', 'refresh_rate', 'http_refresh_rate']);
+    const reportedRefreshRate = refreshRateStr ? parseInt(refreshRateStr, 10) : undefined;
+
+    this.logger.debug(`[DISPLAY] Extracted deviceApiKey: ${deviceApiKey}, battery: ${batteryVoltageStr}V → ${battery}%, wifi: ${wifi} dBm, fw: ${firmwareVersion}, model: ${modelName}, size: ${reportedWidth}x${reportedHeight}`);
 
     if (!deviceApiKey) {
       this.logger.error(`[DISPLAY] Missing HTTP_ID header. All headers: ${this.sanitizeHeaders(headers)}`);
@@ -236,6 +246,12 @@ export class ApiController {
         { battery, wifi },
         baseUrl,
         firmwareVersion,
+        {
+          model: modelName,
+          width: reportedWidth,
+          height: reportedHeight,
+          reportedRefreshRate: reportedRefreshRate !== undefined && !isNaN(reportedRefreshRate) ? reportedRefreshRate : undefined,
+        },
       );
 
       this.logger.debug(`Display content served to device: ${deviceApiKey.slice(0, 8)}... (baseUrl: ${baseUrl})`);
@@ -368,7 +384,10 @@ export class ApiController {
       'x-device-model',
     ]);
 
-    this.logger.debug(`[SETUP] Extracted macAddress: ${macAddress}, firmwareVersion: ${firmwareVersion}, battery: ${battery}%, wifi: ${wifi} dBm, model: ${modelName}`);
+    // Extract the display resolution the device reports (TRMNL firmware sends width/height headers)
+    const { width: reportedWidth, height: reportedHeight } = this.extractReportedResolution(headers);
+
+    this.logger.debug(`[SETUP] Extracted macAddress: ${macAddress}, firmwareVersion: ${firmwareVersion}, battery: ${battery}%, wifi: ${wifi} dBm, model: ${modelName}, size: ${reportedWidth}x${reportedHeight}`);
 
     if (!macAddress) {
       this.logger.error(`[SETUP] Missing HTTP_ID header. All headers: ${this.sanitizeHeaders(headers)}`);
@@ -393,6 +412,8 @@ export class ApiController {
         { battery, wifi },
         baseUrl,  // Pass dynamic URL to service
         modelName,
+        reportedWidth,
+        reportedHeight,
       );
 
       this.logger.log(`Device setup: ${macAddress} (baseUrl: ${baseUrl})`);
@@ -489,6 +510,22 @@ export class ApiController {
     }
 
     return undefined;
+  }
+
+  /**
+   * Extract the display resolution a device reports via headers. TRMNL firmware sends
+   * `width`/`height` (e.g. the TRMNL X reports 1872x1404); used to auto-size a device at
+   * provisioning instead of defaulting to 800x480.
+   */
+  private extractReportedResolution(headers: Record<string, string>): { width?: number; height?: number } {
+    const w = this.extractHeader(headers, ['width', 'Width', 'http_width', 'HTTP_WIDTH', 'x-width']);
+    const h = this.extractHeader(headers, ['height', 'Height', 'http_height', 'HTTP_HEIGHT', 'x-height']);
+    const width = w ? parseInt(w, 10) : undefined;
+    const height = h ? parseInt(h, 10) : undefined;
+    return {
+      width: width !== undefined && !isNaN(width) && width > 0 ? width : undefined,
+      height: height !== undefined && !isNaN(height) && height > 0 ? height : undefined,
+    };
   }
 
   /**
@@ -590,8 +627,15 @@ export class ApiController {
     @Query('macAddress') macAddress: string,
     @Query('mode') mode: string,
     @Query('preview') preview: string,
+    @Query('format') format: string,
+    @Query('bitDepth') bitDepthRaw: string,
     @Res() res: Response,
   ) {
+    // Container: 'bmp' for TRMNL OG / DIY-kit firmware that rejects PNG (issue #31), otherwise PNG.
+    // bitDepth 4 → 16-level grayscale (TRMNL X), delivered as a compressed grayscale PNG by default.
+    const bitDepth = bitDepthRaw === '4' ? 4 : 1;
+    const imageFormat: 'png' | 'bmp' = format === 'bmp' ? 'bmp' : 'png';
+    const contentType = imageFormat === 'bmp' ? 'image/bmp' : 'image/png';
     try {
       // Determine render mode:
       // 1. Use explicit mode parameter if provided
@@ -618,7 +662,7 @@ export class ApiController {
       };
 
       // Fall back to re-rendering if no capture exists
-      const imageBuffer = await this.screenRendererService.renderScreenDesign(id, deviceContext, renderMode);
+      const imageBuffer = await this.screenRendererService.renderScreenDesign(id, deviceContext, renderMode, imageFormat, bitDepth);
 
       // Disable caching for all render modes - admin UI needs fresh previews
       const cacheHeaders = {
@@ -628,7 +672,7 @@ export class ApiController {
       };
 
       res.set({
-        'Content-Type': 'image/png',
+        'Content-Type': contentType,
         'Content-Length': imageBuffer.length,
         ...cacheHeaders,
       });
@@ -636,11 +680,14 @@ export class ApiController {
       res.send(imageBuffer);
     } catch (error) {
       this.logger.error(`Failed to render screen design ${id}: ${error.message}`);
-      // Return default screen instead of 404 to prevent device loading loop
+      // Return default screen instead of 404 to prevent device loading loop.
+      // Honor the requested format so BMP-only firmware still gets a usable image.
       try {
-        const fallbackBuffer = await this.defaultScreenService.getDefaultScreenBuffer();
+        const fallbackBuffer = imageFormat === 'bmp'
+          ? await this.defaultScreenService.getDefaultScreenBmpBuffer()
+          : await this.defaultScreenService.getDefaultScreenBuffer();
         res.set({
-          'Content-Type': 'image/png',
+          'Content-Type': contentType,
           'Content-Length': fallbackBuffer.length,
           'Cache-Control': 'no-store',
         });
@@ -648,6 +695,41 @@ export class ApiController {
       } catch {
         throw new NotFoundException('Screen design not found');
       }
+    }
+  }
+
+  /**
+   * Uploaded Screen (device format) Endpoint - GET /api/device-images/screen/:id
+   * Serves an uploaded screen converted to the device's required format. Used for
+   * TRMNL OG / DIY-kit firmware that rejects PNG and needs 1-bit BMP (issue #31).
+   * PNG devices continue to fetch the stored upload directly (static /uploads path).
+   */
+  @Get('device-images/screen/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Render an uploaded screen to the device format (BMP for OG/DIY firmware)' })
+  @ApiResponse({ status: 200, description: 'Screen image in the requested format' })
+  @ApiResponse({ status: 404, description: 'Screen not found' })
+  async renderUploadedScreen(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('bitDepth') bitDepthRaw: string,
+    @Query('format') format: string,
+    @Res() res: Response,
+  ) {
+    try {
+      const bitDepth = bitDepthRaw === '4' ? 4 : 1;
+      const imageFormat: 'png' | 'bmp' = format === 'bmp' ? 'bmp' : 'png';
+      const imageBuffer = await this.displayService.getUploadedScreenForDevice(id, imageFormat, bitDepth);
+      res.set({
+        'Content-Type': imageFormat === 'bmp' ? 'image/bmp' : 'image/png',
+        'Content-Length': imageBuffer.length,
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      });
+      res.send(imageBuffer);
+    } catch (error) {
+      this.logger.error(`Failed to render uploaded screen ${id}: ${error.message}`);
+      throw new NotFoundException('Screen not found');
     }
   }
 }

@@ -24,6 +24,7 @@ import { ScreenDesignerModule } from './screen-designer/screen-designer.module';
 import { EventsModule } from './events/events.module';
 import { SettingsModule } from './settings/settings.module';
 import { PluginsModule } from './plugins/plugins.module';
+import { ModelsModule } from './models/models.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 
@@ -84,6 +85,7 @@ import { validationSchema } from './config/validation.schema';
     EventsModule,
     SettingsModule,
     PluginsModule,
+    ModelsModule,
   ],
   controllers: [],
   providers: [

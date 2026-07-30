@@ -3,6 +3,8 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { DefaultScreenService } from './default-screen.service';
@@ -22,6 +24,9 @@ export interface DeviceMetrics {
 @Injectable()
 export class DisplayService {
   private readonly logger = new Logger(DisplayService.name);
+
+  /** Refresh rate (seconds) for an untimed touch-playlist screen — long enough to "stay until a tap". */
+  private static readonly STAY_REFRESH = 86400; // 24h
 
   constructor(
     private prisma: PrismaService,
@@ -48,6 +53,7 @@ export class DisplayService {
     metrics?: { battery?: number; wifi?: number },
     baseUrl?: string,
     firmwareVersion?: string,
+    deviceHints?: { model?: string; width?: number; height?: number; reportedRefreshRate?: number },
   ) {
     // Use dynamic baseUrl from request, or fall back to config
     const apiUrl = baseUrl || this.config.get<string>('api.url', 'http://localhost:3002');
@@ -107,6 +113,9 @@ export class DisplayService {
             firmwareVersion,
             metrics,
             baseUrl,
+            deviceHints?.model,
+            deviceHints?.width,
+            deviceHints?.height,
           );
           // Re-fetch the newly created device to continue with display logic
           device = await this.prisma.device.findFirst({
@@ -197,8 +206,25 @@ export class DisplayService {
       `Device ${device.name} updated: battery=${updatedDevice.battery}%, wifi=${updatedDevice.wifi} dBm`,
     );
 
-    // Check for firmware update
-    const firmwareUrl = await this.getFirmwareUpdateUrl(device.firmwareVersion || undefined);
+    // Inker never pushes OTA firmware updates to devices — there is no firmware
+    // hosting/distribution here. "Update available" is surfaced as info only on the
+    // admin device-detail page (see DevicesService.findOne). So the device response
+    // always reports no firmware update, keeping the device working normally.
+    const firmwareUrl = '';
+
+    // Render descriptor derived from the device's model:
+    //  - bitDepth 1  → 1-bit output (dithered). PNG for firmware 1.7.8, BMP for OG/DIY (issue #31).
+    //  - bitDepth 4  → 16-level grayscale (TRMNL X, 1872x1404), emitted as a compressed PNG.
+    // Images are always sized to the device's native resolution so they fill the panel.
+    // Container is driven purely by the model's mimeType; bitDepth governs grayscale vs 1-bit.
+    const bitDepth = device.model?.bitDepth ?? 1;
+    const isBmp = device.model?.mimeType === 'image/bmp';
+    const imageFormat: 'png' | 'bmp' = isBmp ? 'bmp' : 'png';
+    const devW = device.width || 800;
+    const devH = device.height || 480;
+    // Swap a filename's extension to match the served format (drives the device's
+    // filename-based image cache; keep the timestamp so a new format forces a refetch).
+    const withFormatExt = (name: string) => name.replace(/\.(png|bmp)$/i, `.${imageFormat}`);
 
     // Quiet hours: if the device is within its configured sleep window, return
     // a refresh_rate equal to the seconds until the wake time, so the device
@@ -214,9 +240,11 @@ export class DisplayService {
         device.width,
         device.height,
         wakeTime,
+        imageFormat,
+        bitDepth,
       );
       const imageData = useBase64
-        ? await this.sleepScreenService.getSleepScreenBase64(device.width, device.height, wakeTime)
+        ? await this.sleepScreenService.getSleepScreenBase64(device.width, device.height, wakeTime, imageFormat, bitDepth)
         : undefined;
 
       this.logger.log(
@@ -249,15 +277,17 @@ export class DisplayService {
     if (!device.playlist || !device.playlist.items || device.playlist.items.length === 0) {
       this.logger.log(`Device ${device.name} has no playlist - serving default screen`);
 
-      await this.defaultScreenService.ensureDefaultScreenExists();
-      const defaultScreenUrl = this.defaultScreenService.getDefaultScreenUrl();
+      // Always render the default screen at the device's native resolution + depth so it fills
+      // the panel (a fixed 800x480 image lands in a corner of a larger panel — TRMNL X).
+      await this.defaultScreenService.ensureDefaultScreenForSize(devW, devH, imageFormat, bitDepth);
+      const defaultScreenUrl = this.defaultScreenService.getDefaultScreenUrlForSize(devW, devH, imageFormat);
       const fullDefaultUrl = `${apiUrl}${defaultScreenUrl}?t=${Date.now()}`;
 
       // Get base64 if requested
       let imageData: string | undefined;
       if (useBase64) {
         try {
-          imageData = await this.defaultScreenService.getDefaultScreenBase64();
+          imageData = await this.defaultScreenService.getDefaultScreenBase64ForSize(devW, devH, imageFormat, bitDepth);
         } catch (error) {
           this.logger.warn('Failed to get default screen base64:', error);
         }
@@ -266,7 +296,7 @@ export class DisplayService {
       return {
         status: 0,
         image_url: fullDefaultUrl,
-        filename: `default-screen-${Date.now()}.png`,
+        filename: `default-screen-${Date.now()}.${imageFormat}`,
         image_url_timeout: 0,
         image_data: imageData,
         firmware_url: firmwareUrl,
@@ -281,25 +311,41 @@ export class DisplayService {
       };
     }
 
-    // Get current screen from playlist rotation (per-device tracking)
-    const currentScreenResult = this.getCurrentScreen(
-      device.playlist.items,
-      device.lastScreenId,
-      device.screenStartedAt,
-    );
+    // TRMNL X touch mode: when the playlist opts in and the device is a touch panel, advance one
+    // screen on every device poll (a middle tap and the on-schedule timer both poll here; left/right
+    // are firmware-local and never reach us). Per-screen duration drives refresh_rate; a screen with
+    // no duration stays until a tap. Otherwise use the normal duration-based rotation.
+    const touchMode =
+      device.model?.name === 'trmnl_x' &&
+      (device.playlist as { advanceOnTap?: boolean }).advanceOnTap === true;
+
+    const currentScreenResult = touchMode
+      ? this.getTouchScreen(
+          device.playlist.items,
+          device.lastScreenId,
+          device.screenStartedAt,
+          deviceHints?.reportedRefreshRate,
+        )
+      : this.getCurrentScreen(
+          device.playlist.items,
+          device.lastScreenId,
+          device.screenStartedAt,
+        );
 
     if (!currentScreenResult) {
       this.logger.log(`Device ${device.name} playlist has no valid screens - serving default screen`);
 
-      await this.defaultScreenService.ensureDefaultScreenExists();
-      const defaultScreenUrl = this.defaultScreenService.getDefaultScreenUrl();
+      // Always render the default screen at the device's native resolution + depth so it fills
+      // the panel (a fixed 800x480 image lands in a corner of a larger panel — TRMNL X).
+      await this.defaultScreenService.ensureDefaultScreenForSize(devW, devH, imageFormat, bitDepth);
+      const defaultScreenUrl = this.defaultScreenService.getDefaultScreenUrlForSize(devW, devH, imageFormat);
       const fullDefaultUrl = `${apiUrl}${defaultScreenUrl}?t=${Date.now()}`;
 
       // Get base64 if requested
       let imageData: string | undefined;
       if (useBase64) {
         try {
-          imageData = await this.defaultScreenService.getDefaultScreenBase64();
+          imageData = await this.defaultScreenService.getDefaultScreenBase64ForSize(devW, devH, imageFormat, bitDepth);
         } catch (error) {
           this.logger.warn('Failed to get default screen base64:', error);
         }
@@ -308,7 +354,7 @@ export class DisplayService {
       return {
         status: 0,
         image_url: fullDefaultUrl,
-        filename: `default-screen-${Date.now()}.png`,
+        filename: `default-screen-${Date.now()}.${imageFormat}`,
         image_url_timeout: 0,
         image_data: imageData,
         firmware_url: firmwareUrl,
@@ -337,7 +383,14 @@ export class DisplayService {
     // Update screen tracking when screen changes
     // screenStartedAt tracks when this screen began displaying (for duration-based rotation)
     // maximum_compatibility = true forces full e-ink refresh to prevent ghosting artifacts
-    if (screenChanged && currentScreenId) {
+    if (touchMode && currentScreenId) {
+      // In touch mode, reset screenStartedAt on EVERY poll so "elapsed since last poll" reflects the
+      // real sleep duration (used to tell a tap from a long timer wake on untimed screens).
+      await this.prisma.device.update({
+        where: { id: device.id },
+        data: { lastScreenId: currentScreenId, screenStartedAt: new Date() },
+      });
+    } else if (screenChanged && currentScreenId) {
       this.logger.debug(
         `Screen changed for device ${device.name}: ${device.lastScreenId} -> ${currentScreenId} (will trigger full refresh)`,
       );
@@ -353,11 +406,11 @@ export class DisplayService {
     const effectiveDeviceRate = screenDuration;
 
     // Calculate refresh rate based on current screen content
-    // Clock widgets get minute-synced refresh; otherwise uses device's configured rate
-    const effectiveRefreshRate = this.getRefreshRateForScreen(
-      currentScreen,
-      effectiveDeviceRate,
-    );
+    // Clock widgets get minute-synced refresh; otherwise uses device's configured rate.
+    // Touch mode overrides with the item's duration (or STAY_REFRESH for untimed = stay until tap).
+    const effectiveRefreshRate = touchMode
+      ? (currentScreenResult as { refreshRate?: number }).refreshRate ?? effectiveDeviceRate
+      : this.getRefreshRateForScreen(currentScreen, effectiveDeviceRate);
 
     // Calculate the next refresh timestamp for minute-synchronized clock updates
     const nextRefreshAt = this.getNextRefreshTimestamp(
@@ -372,10 +425,16 @@ export class DisplayService {
 
     // Handle both regular screens and designed screens
     if (currentScreen.screen) {
-      // Regular uploaded screen
-      const imageUrl = currentScreen.screen.imageUrl.startsWith('http')
-        ? currentScreen.screen.imageUrl
-        : `${apiUrl}${currentScreen.screen.imageUrl}`;
+      // Regular uploaded screen. A plain 1-bit PNG device gets the stored file directly; devices
+      // needing a converted image — 1-bit BMP (issue #31) or grayscale (TRMNL X) — fetch it via the
+      // screen-image endpoint, which re-processes the upload to the right format/depth/resolution.
+      const needsConversion = isBmp || bitDepth >= 4;
+      const convParams = `format=${imageFormat}${bitDepth > 1 ? `&bitDepth=${bitDepth}` : ''}&t=${Date.now()}`;
+      const imageUrl = needsConversion
+        ? `${apiUrl}/api/device-images/screen/${currentScreen.screen.id}?${convParams}`
+        : currentScreen.screen.imageUrl.startsWith('http')
+          ? currentScreen.screen.imageUrl
+          : `${apiUrl}${currentScreen.screen.imageUrl}`;
 
       this.logger.debug(
         `Serving screen "${currentScreen.screen.name}" to device ${device.name}`,
@@ -384,9 +443,13 @@ export class DisplayService {
       return {
         status: 0,
         image_url: imageUrl,
-        filename: this.getImageFilename(currentScreen.screen.imageUrl),
+        filename: withFormatExt(this.getImageFilename(currentScreen.screen.imageUrl)),
         image_url_timeout: 0,
-        image_data: useBase64 ? await this.getBase64Image(currentScreen.screen.imageUrl) : undefined,
+        image_data: useBase64
+          ? needsConversion
+            ? (await this.getUploadedScreenForDevice(currentScreen.screen.id, imageFormat, bitDepth)).toString('base64')
+            : await this.getBase64Image(currentScreen.screen.imageUrl)
+          : undefined,
         firmware_url: firmwareUrl,
         update_firmware: !!firmwareUrl,
         refresh_rate: finalRefreshRate,
@@ -410,6 +473,10 @@ export class DisplayService {
         deviceName: device.name || 'Unknown',
         firmwareVersion: device.firmwareVersion || 'Unknown',
         macAddress: device.macAddress ? `XX:XX:XX:${device.macAddress.slice(-8)}` : 'Unknown',
+        // Only add format for BMP devices so PNG render URLs stay unchanged (issue #31)
+        ...(isBmp ? { format: 'bmp' } : {}),
+        // 4-bit grayscale panels (TRMNL X) request a matching color depth
+        ...(bitDepth > 1 ? { bitDepth: String(bitDepth) } : {}),
       });
       const renderUrl = `${apiUrl}/api/device-images/design/${currentScreen.screenDesign.id}?${queryParams.toString()}`;
 
@@ -418,7 +485,7 @@ export class DisplayService {
       // "design-5.png", the device thinks it already has this image and won't fetch
       // the new URL. By changing the filename on each request (e.g., "design-5-1702069200000.png"),
       // the device recognizes it as a new file and downloads the fresh image.
-      const dynamicFilename = `design-${currentScreen.screenDesign.id}-${timestamp}.png`;
+      const dynamicFilename = `design-${currentScreen.screenDesign.id}-${timestamp}.${imageFormat}`;
 
       this.logger.debug(
         `Serving screen "${currentScreen.screenDesign.name}" to device ${device.name} (refresh: ${effectiveRefreshRate}s, next_at: ${nextRefreshAt ? new Date(nextRefreshAt).toISOString() : 'N/A'})`,
@@ -482,7 +549,7 @@ export class DisplayService {
       return {
         status: 0,
         image_url: fullDefaultUrl,
-        filename: `default-screen-${Date.now()}.png`,
+        filename: `default-screen-${Date.now()}.${imageFormat}`,
         image_url_timeout: 0,
         image_data: undefined,
         firmware_url: firmwareUrl,
@@ -561,6 +628,68 @@ export class DisplayService {
   }
 
   /**
+   * TRMNL X "advance on tap" rotation. Each device poll (middle tap OR the on-schedule timer wake)
+   * moves one screen forward; per-screen `duration` becomes the refresh_rate. A screen with no
+   * duration uses STAY_REFRESH so the device only wakes on a tap, and it only advances when the poll
+   * comes back earlier than that long sleep (i.e. a manual tap), never on the rare long timer wake.
+   *
+   * screenStartedAt is reset on every poll by the caller, so `elapsed` here equals the real time the
+   * device just slept — which is how a tap (short) is told apart from a timer wake (~refresh_rate),
+   * robust to firmware that caps the refresh rate (we compare against the device-reported value).
+   */
+  private getTouchScreen(
+    items: any[],
+    lastScreenId: string | null,
+    screenStartedAt: Date | null,
+    reportedRefreshRate?: number,
+  ): { item: any; screenChanged: boolean; idealStartTime?: Date; refreshRate: number } | null {
+    if (!items || items.length === 0) {
+      return null;
+    }
+
+    const getItemScreenId = (item: any): string | null =>
+      item.screenDesign ? `design-${item.screenDesign.id}`
+        : item.screen ? `screen-${item.screen.id}`
+        : item.pluginInstance?.plugin ? `plugin-${item.pluginInstance.id}`
+        : null;
+    const isTimed = (item: any) => item.duration != null && item.duration > 0;
+    const refreshFor = (item: any) => (isTimed(item) ? item.duration : DisplayService.STAY_REFRESH);
+
+    const currentIndex = lastScreenId
+      ? items.findIndex((it) => getItemScreenId(it) === lastScreenId)
+      : -1;
+
+    // First poll (or the tracked screen was removed): show the first item, don't advance past it.
+    if (currentIndex === -1) {
+      return { item: items[0], screenChanged: true, idealStartTime: new Date(), refreshRate: refreshFor(items[0]) };
+    }
+
+    const current = items[currentIndex];
+    let advance: boolean;
+    if (isTimed(current)) {
+      advance = true; // timed: a timer wake (duration elapsed) and an early tap both advance
+    } else {
+      // untimed: advance only if the device came back before its long sleep finished (= a tap)
+      const expected = reportedRefreshRate && reportedRefreshRate > 0 ? reportedRefreshRate : DisplayService.STAY_REFRESH;
+      const elapsed = screenStartedAt ? (Date.now() - screenStartedAt.getTime()) / 1000 : expected;
+      const margin = Math.max(30, expected * 0.2);
+      advance = elapsed < expected - margin;
+    }
+
+    if (!advance) {
+      return { item: current, screenChanged: false, refreshRate: refreshFor(current) };
+    }
+
+    const next = items[(currentIndex + 1) % items.length];
+    return {
+      item: next,
+      screenChanged: getItemScreenId(next) !== lastScreenId,
+      idealStartTime: new Date(),
+      refreshRate: refreshFor(next),
+    };
+  }
+
+  /**
    * Get current time in HH:MM format
    */
   private getCurrentTimeHHMM(): string {
@@ -570,31 +699,6 @@ export class DisplayService {
     return `${hours}:${minutes}`;
   }
 
-  /**
-   * Check if firmware update is available
-   */
-  private async getFirmwareUpdateUrl(currentVersion?: string): Promise<string> {
-    if (!currentVersion) {
-      return '';
-    }
-
-    // Get latest stable firmware
-    const latestFirmware = await this.prisma.firmware.findFirst({
-      where: { isStable: true },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (!latestFirmware) {
-      return '';
-    }
-
-    // Only return update URL if version is different
-    if (latestFirmware.version === currentVersion) {
-      return '';
-    }
-
-    return latestFirmware.downloadUrl;
-  }
 
   /**
    * Extract filename from image URL
@@ -602,6 +706,33 @@ export class DisplayService {
   private getImageFilename(imageUrl: string): string {
     const parts = imageUrl.split('/');
     return parts[parts.length - 1];
+  }
+
+  /**
+   * Load an uploaded screen's stored image and convert it to a 1-bit BMP for
+   * TRMNL OG / DIY-kit firmware that rejects PNG (issue #31). Runs the same
+   * e-ink dithering pipeline as designed screens. Served by the
+   * GET /api/device-images/screen/:id endpoint and used for inline base64.
+   */
+  async getUploadedScreenForDevice(
+    screenId: number,
+    format: 'png' | 'bmp' = 'bmp',
+    bitDepth: number = 1,
+  ): Promise<Buffer> {
+    const screen = await this.prisma.screen.findUnique({
+      where: { id: screenId },
+      include: { model: true },
+    });
+    if (!screen) {
+      throw new NotFoundException('Screen not found');
+    }
+
+    const imagePath = path.join(process.cwd(), screen.imageUrl);
+    const input = await fs.readFile(imagePath);
+    const width = screen.model?.width || 800;
+    const height = screen.model?.height || 480;
+
+    return this.screenRendererService.applyEinkProcessing(input, width, height, false, format, bitDepth);
   }
 
   /**

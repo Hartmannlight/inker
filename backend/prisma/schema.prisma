@@ -92,6 +92,8 @@ model Playlist {
   name        String
   description String?
   isActive    Boolean  @default(false) @map("is_active")
+  // TRMNL X only: advance to the next screen on each device poll (middle-tap or on-schedule).
+  advanceOnTap Boolean @default(false) @map("advance_on_tap")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -107,7 +109,7 @@ model PlaylistItem {
   screenId       Int?     @map("screen_id")
   screenDesignId Int?     @map("screen_design_id")
   order          Int      @default(0)
-  duration       Int      @default(60) // seconds
+  duration       Int?     @default(60) // seconds; null = no auto-advance (stay until a touch tap)
   createdAt      DateTime @default(now()) @map("created_at")
 
   pluginInstanceId Int?          @map("plugin_instance_id")

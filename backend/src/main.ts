@@ -56,7 +56,7 @@ async function bootstrap() {
 
   // Global prefix - exclude /api routes since they're for device communication
   app.setGlobalPrefix('api', {
-    exclude: ['health', 'ready', 'api/display', 'api/setup', 'api/setup/', 'api/log', 'api/device-images/design/:id', 'api/device-images/device/:id'],
+    exclude: ['health', 'ready', 'api/display', 'api/setup', 'api/setup/', 'api/log', 'api/device-images/design/:id', 'api/device-images/device/:id', 'api/device-images/screen/:id'],
   });
 
   // Global pipes
@@ -82,7 +82,7 @@ async function bootstrap() {
     const config = new DocumentBuilder()
       .setTitle('Inker API')
       .setDescription('API documentation for Inker e-ink device management server')
-      .setVersion('0.5.0')
+      .setVersion('0.6.0')
       .addBearerAuth()
       .addApiKey({ type: 'apiKey', name: 'X-Device-Key', in: 'header' }, 'device-key')
       .build();

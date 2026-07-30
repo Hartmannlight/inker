@@ -6,6 +6,7 @@ import * as sharpModule from 'sharp';
 const sharp = (sharpModule as any).default || sharpModule;
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
 
 /**
  * Escape XML special characters to prevent SVG corruption
@@ -29,6 +30,7 @@ export class DefaultScreenService implements OnModuleInit {
   private readonly logger = new Logger(DefaultScreenService.name);
   private readonly assetsDir: string;
   private readonly defaultScreenPath: string;
+  private readonly defaultScreenBmpPath: string;
   private defaultScreenGenerated = false;
 
   // Default TRMNL e-ink display dimensions (800x480)
@@ -41,6 +43,7 @@ export class DefaultScreenService implements OnModuleInit {
   ) {
     this.assetsDir = path.join(process.cwd(), 'assets');
     this.defaultScreenPath = path.join(this.assetsDir, 'default-screen.png');
+    this.defaultScreenBmpPath = path.join(this.assetsDir, 'default-screen.bmp');
   }
 
   /**
@@ -114,7 +117,14 @@ export class DefaultScreenService implements OnModuleInit {
         .png({ compressionLevel: 9 })
         .toFile(this.defaultScreenPath);
 
-      this.logger.log(`Default screen saved to: ${this.defaultScreenPath}`);
+      // Also write a 1-bit BMP variant for TRMNL OG / DIY-kit firmware that
+      // rejects PNG (issue #31). Same dithered pixels, different container.
+      await fs.writeFile(
+        this.defaultScreenBmpPath,
+        encodeBmp1bit(dithered, grayBuffer.info.width, grayBuffer.info.height),
+      );
+
+      this.logger.log(`Default screen saved to: ${this.defaultScreenPath} (+ .bmp)`);
       return this.defaultScreenPath;
     } catch (error) {
       this.logger.error('Failed to generate default screen:', error);
@@ -195,6 +205,143 @@ export class DefaultScreenService implements OnModuleInit {
    */
   getDefaultScreenPath(): string {
     return this.defaultScreenPath;
+  }
+
+  /**
+   * Get the URL path for the 1-bit BMP default screen (issue #31)
+   */
+  getDefaultScreenBmpUrl(): string {
+    return '/assets/default-screen.bmp';
+  }
+
+  /**
+   * Ensure the BMP default screen exists, generating it (alongside the PNG) if
+   * missing — e.g. after an upgrade where only the PNG was present.
+   */
+  async ensureDefaultScreenBmpExists(): Promise<void> {
+    try {
+      await fs.mkdir(this.assetsDir, { recursive: true });
+      try {
+        await fs.access(this.defaultScreenBmpPath);
+        return;
+      } catch {
+        // BMP doesn't exist yet, (re)generate both variants
+      }
+      await this.generateDefaultScreen();
+    } catch (error) {
+      this.logger.error('Failed to ensure default screen BMP exists:', error);
+    }
+  }
+
+  /**
+   * Get the BMP default screen as a base64 encoded string
+   */
+  async getDefaultScreenBmpBase64(): Promise<string> {
+    await this.ensureDefaultScreenBmpExists();
+    const buffer = await fs.readFile(this.defaultScreenBmpPath);
+    return buffer.toString('base64');
+  }
+
+  /**
+   * Get the 1-bit BMP default screen as a buffer (issue #31 fallback)
+   */
+  async getDefaultScreenBmpBuffer(): Promise<Buffer> {
+    await this.ensureDefaultScreenBmpExists();
+    return fs.readFile(this.defaultScreenBmpPath);
+  }
+
+  // --- Device-sized default screens (needed for non-800x480 panels, e.g. TRMNL X 1872x1404) ---
+
+  /** URL for a default screen matching a device's exact resolution + format. */
+  getDefaultScreenUrlForSize(width: number, height: number, format: 'png' | 'bmp'): string {
+    return `/assets/default-screen-${width}x${height}.${format}`;
+  }
+
+  /** Filesystem path for a sized default screen. */
+  private sizedDefaultScreenPath(width: number, height: number, format: 'png' | 'bmp'): string {
+    return path.join(this.assetsDir, `default-screen-${width}x${height}.${format}`);
+  }
+
+  /**
+   * Ensure a default screen exists at the given resolution + format + bit depth, generating it if
+   * missing. `bitDepth >= 4` emits a 16-level grayscale BMP (TRMNL X); otherwise a 1-bit image
+   * (PNG or BMP). The image is always rendered at the device's native size so it fills the panel.
+   */
+  async ensureDefaultScreenForSize(
+    width: number,
+    height: number,
+    format: 'png' | 'bmp',
+    bitDepth: number,
+  ): Promise<void> {
+    const outputPath = this.sizedDefaultScreenPath(width, height, format);
+    try {
+      await fs.mkdir(this.assetsDir, { recursive: true });
+      try {
+        await fs.access(outputPath);
+        return;
+      } catch {
+        // needs generating
+      }
+
+      const welcomeConfig = await this.settingsService.getWelcomeScreenConfig();
+      const svg = this.createDefaultScreenSvg(width, height, welcomeConfig.title, welcomeConfig.subtitle);
+
+      const grayBuffer = await sharp(Buffer.from(svg))
+        .grayscale()
+        .normalise()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const { data, info } = grayBuffer;
+
+      let buffer: Buffer;
+      if (bitDepth >= 4) {
+        // 16-level grayscale: compressed PNG by default, 4-bit BMP only if explicitly requested.
+        const quantized = quantizeGray16(data);
+        if (format === 'bmp') {
+          buffer = encodeGray4Bmp(quantized, info.width, info.height);
+        } else {
+          buffer = await sharp(quantized, {
+            raw: { width: info.width, height: info.height, channels: 1 },
+          })
+            .toColorspace('b-w')
+            .png({ compressionLevel: 9 })
+            .toBuffer();
+        }
+      } else {
+        const dithered = this.applyFloydSteinbergDithering(data, info.width, info.height, 140);
+        if (format === 'bmp') {
+          buffer = encodeBmp1bit(dithered, info.width, info.height);
+        } else {
+          buffer = await sharp(dithered, {
+            raw: { width: info.width, height: info.height, channels: 1 },
+          })
+            .toColorspace('b-w')
+            .png({ compressionLevel: 9 })
+            .toBuffer();
+        }
+      }
+
+      await fs.writeFile(outputPath, buffer);
+      this.logger.log(`Generated sized default screen: ${outputPath} (bitDepth=${bitDepth})`);
+    } catch (error) {
+      this.logger.error(`Failed to ensure sized default screen (${width}x${height}):`, error);
+    }
+  }
+
+  /** Base64 of a sized default screen (for devices requesting inline image data). */
+  async getDefaultScreenBase64ForSize(
+    width: number,
+    height: number,
+    format: 'png' | 'bmp',
+    bitDepth: number,
+  ): Promise<string | undefined> {
+    try {
+      await this.ensureDefaultScreenForSize(width, height, format, bitDepth);
+      const buffer = await fs.readFile(this.sizedDefaultScreenPath(width, height, format));
+      return buffer.toString('base64');
+    } catch {
+      return undefined;
+    }
   }
 
   /**
