@@ -1,8 +1,8 @@
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://buymeacoffee.com/wojo_o)
 
-# Inker 0.5.0
+# Inker v0.6.0
 
-Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices (supports firmware 1.7.8) and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
+Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices — including the 7.5″ **OG** (800×480, 1-bit) and the 10.3″ **TRMNL X** (1872×1404, 16-level grayscale) — and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
 
 Inker is heading in its own direction — focusing on homelab integrations like server monitoring, smart home dashboards, network stats, and self-hosted service displays. TRMNL device compatibility is maintained, but the plugin ecosystem will be Inker-native.
 
@@ -14,11 +14,13 @@ Support project that uses inker:
 ## Features
 
 - **Screen Designer** — Drag & drop widget placement, snap guides, freehand drawing, auto-fit zoom for any resolution
-- **Built-in Widgets** — Clock, date, text, weather, countdown, days until, QR code, image, GitHub stars, battery, WiFi, device info
-- **Custom Widgets** — Connect to any JSON API or RSS feed (including local network sources), JavaScript transformations, grid layouts
+- **Built-in Widgets** — Clock, date, calendar, text, weather, countdown, days until, QR code, image, GitHub stars, battery, WiFi, device info
+- **Calendar Widget** — Monthly calendar with localized month/day names, weekend highlight, dividing lines, and adjustable font size
+- **Custom Widgets** — Connect to any JSON API or RSS feed (including local network sources), JavaScript transformations, grid layouts with word-wrapped cells
 - **Plugins** — Grafana panel integration with dashboard picker, live preview, and section grid compositing. More homelab-native plugins coming soon!
-- **Playlists** — Rotate multiple screens on devices automatically
-- **Device Management** — Auto-provisioning, firmware 1.7.8 support, real-time status, logs
+- **TRMNL OG & X** — Automatic model detection; full **TRMNL X** support (10.3″, 1872×1404, 16-level grayscale) alongside the 7.5″ OG (800×480, 1-bit)
+- **Playlists** — Rotate multiple screens on devices automatically, with optional **TRMNL X touch-bar** tap-to-advance (per playlist)
+- **Device Management** — Auto-provisioning, firmware support, real-time status, logs
 - **BYOD Support** — Register any e-ink device manually with custom screen resolution
 - **Custom Ports** — Run on any port with Docker port mapping (e.g. `800:80`)
 
@@ -53,7 +55,6 @@ docker run -d \
   --name inker \
   --restart unless-stopped \
   -p 80:80 \
-  -v inker_postgres:/var/lib/postgresql/17/main \
   -v inker_uploads:/app/uploads \
   wojooo/inker:latest
 ```
@@ -70,14 +71,12 @@ services:
     ports:
       - "80:80"
     volumes:
-      - postgres_data:/var/lib/postgresql/17/main
       - uploads_data:/app/uploads
     environment:
       TZ: UTC
       ADMIN_PIN: "1111"  # Quotes required — YAML strips leading zeros without them
 
 volumes:
-  postgres_data:
   uploads_data:
 ```
 
@@ -87,7 +86,7 @@ docker compose up -d
 
 Open **http://your-server-ip** and log in with PIN `1111`.
 
-> **Database:** Inker now uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the `uploads` volume to back up all your data. (The bundled PostgreSQL volume is retained only as a one-time migration bridge when upgrading from older Postgres-based versions, and will be removed in a future release.)
+> **Database:** Inker uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the `uploads` volume to back up all your data.
 
 ## Configuration
 
@@ -106,41 +105,36 @@ docker run -d \
   -p 80:80 \
   -e ADMIN_PIN="1111" \
   -e TZ=Europe/Warsaw \
-  -v inker_postgres:/var/lib/postgresql/17/main \
   -v inker_uploads:/app/uploads \
   wojooo/inker:latest
 ```
 
-##  Raspberry Pi / ARM64 (beta)
-
-  Inker's Docker image is multi-architecture — the same tag runs on both x86-64 servers and 64-bit ARM boards like the Raspberry Pi. Docker automatically pulls
-  the correct build for your hardware, so the install command is identical:
-
-  docker run -d \
-    --name inker \
-    --restart unless-stopped \
-    -p 80:80 \
-    -v inker_postgres:/var/lib/postgresql/17/main \
-    -v inker_uploads:/app/uploads \
-    wojooo/inker:latest
-
-  Requirements:
-  - A 64-bit OS (Raspberry Pi OS 64-bit or Debian arm64) — 32-bit installs are not supported.
-  - Raspberry Pi 4 or 5 recommended (screen rendering runs a headless Chromium).
-
-  ▎ Beta: ARM64 support is new and hasn't been fully verified on every Pi setup yet. If something doesn't work, please open an issue with your Pi model and OS
-  ▎ version — feedback is welcome.
-
-  ---
-
-
 ### Build from source
 
 ```bash
-git clone https://github.com/wojo-o/inker.git
+git clone https://github.com/usetrmnl/inker.git
 cd inker
 docker compose up -d --build
 ```
+
+## Raspberry Pi / ARM64 (beta)
+
+Inker's Docker image is **multi-architecture** — the same tag runs on both x86-64 servers and 64-bit ARM boards like the Raspberry Pi. Docker automatically pulls the correct build for your hardware, so the install command is identical:
+
+```bash
+docker run -d \
+  --name inker \
+  --restart unless-stopped \
+  -p 80:80 \
+  -v inker_uploads:/app/uploads \
+  wojooo/inker:latest
+```
+
+**Requirements:**
+- A **64-bit** OS (Raspberry Pi OS 64-bit or Debian arm64) — 32-bit installs are **not** supported.
+- Raspberry Pi 4 or 5 recommended (screen rendering runs a headless Chromium).
+
+> **Beta:** ARM64 support is new and hasn't been fully verified on every Pi setup yet. If something doesn't work, please [open an issue](https://github.com/usetrmnl/inker/issues) with your Pi model and OS version — feedback is welcome.
 
 ## Updating
 
@@ -167,7 +161,7 @@ docker compose up -d
 ## Testing
 
 ```bash
-cd backend && bun test      # 395 tests
+cd backend && bun test      # 432 tests
 cd frontend && bun run test  # 19 tests
 ```
 
