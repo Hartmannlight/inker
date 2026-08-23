@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, Min, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Matches, MaxLength, MinLength, IsIn, ValidateIf } from 'class-validator';
 
 export class CreateDeviceDto {
   @ApiProperty({
@@ -11,15 +11,26 @@ export class CreateDeviceDto {
   @MaxLength(255)
   name: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'AA:BB:CC:DD:EE:FF',
-    description: 'Device MAC address',
+    description: 'Device MAC address (required for TRMNL, unused by web displays)',
   })
+  @ValidateIf((dto) => (dto.deviceType ?? 'trmnl') === 'trmnl')
   @IsString()
   @Matches(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, {
     message: 'Invalid MAC address format',
   })
-  macAddress: string;
+  macAddress?: string;
+
+  @ApiPropertyOptional({
+    example: 'trmnl',
+    enum: ['trmnl', 'web-display'],
+    default: 'trmnl',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['trmnl', 'web-display'])
+  deviceType?: 'trmnl' | 'web-display';
 
   @ApiPropertyOptional({
     example: 1,

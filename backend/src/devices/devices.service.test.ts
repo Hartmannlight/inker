@@ -18,6 +18,16 @@ describe('DevicesService', () => {
   let mockFirmwareService: {
     getLatestStableOrNull: ReturnType<typeof createMock>;
   };
+  const mockDriverRegistry = {
+    get: (type: string) => ({
+      type: type || 'trmnl',
+      transport: type === 'web-display' ? 'websocket' : 'pull',
+      getDefaultCapabilities: (width = 800, height = 480) => ({
+        display: { width, height, colorDepth: 1, formats: ['image/png'] },
+        telemetry: [], interaction: [], realtime: type === 'web-display',
+      }),
+    }),
+  };
 
   // Helper to build a device-like object that serializeDevice can process
   const makeDevice = (overrides: Record<string, any> = {}) => ({
@@ -46,6 +56,7 @@ describe('DevicesService', () => {
       mockPrisma as any,
       mockEventsService as any,
       mockFirmwareService as any,
+      mockDriverRegistry as any,
     );
   });
 

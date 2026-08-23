@@ -25,6 +25,7 @@ import { EventsModule } from './events/events.module';
 import { SettingsModule } from './settings/settings.module';
 import { PluginsModule } from './plugins/plugins.module';
 import { ModelsModule } from './models/models.module';
+import { DevicePlatformModule } from './device-platform/device-platform.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 
@@ -83,6 +84,7 @@ import { validationSchema } from './config/validation.schema';
     JobsModule,
     ScreenDesignerModule,
     EventsModule,
+    DevicePlatformModule,
     SettingsModule,
     PluginsModule,
     ModelsModule,

@@ -71,7 +71,8 @@ export function DevicesList() {
         const query = searchQuery.toLowerCase();
         return (
           device.name.toLowerCase().includes(query) ||
-          device.macAddress.toLowerCase().includes(query) ||
+          device.macAddress?.toLowerCase().includes(query) ||
+          device.deviceType.toLowerCase().includes(query) ||
           device.friendlyId?.toLowerCase().includes(query)
         );
       }
@@ -98,7 +99,7 @@ export function DevicesList() {
               Devices
             </h1>
             <p className="mt-2 text-text-muted">
-              Manage your TRMNL e-ink devices
+              Manage e-ink devices and realtime web displays
             </p>
           </div>
           <Button onClick={() => navigate('/devices/new')}>
@@ -324,7 +325,7 @@ function DeviceCard({ device, onClick }: DeviceCardProps) {
               {device.name}
             </h3>
             <p className="text-sm text-text-muted font-mono mt-0.5">
-              {device.friendlyId || device.macAddress}
+              {device.friendlyId || device.macAddress || device.externalId}
             </p>
           </div>
           <OnlineStatus status={device.status} lastSeen={device.lastSeenAt} size="sm" />
@@ -333,10 +334,14 @@ function DeviceCard({ device, onClick }: DeviceCardProps) {
 
       {/* Card Body */}
       <div className="px-5 py-4 space-y-3">
-        <div className="flex items-center gap-3">
-          <BatteryIndicator level={device.battery} size="sm" showPercentage={true} />
-          <WifiIndicator signal={device.wifi} size="sm" showValue={false} />
-        </div>
+        {device.deviceType === 'trmnl' ? (
+          <div className="flex items-center gap-3">
+            <BatteryIndicator level={device.battery} size="sm" showPercentage={true} />
+            <WifiIndicator signal={device.wifi} size="sm" showValue={false} />
+          </div>
+        ) : (
+          <div className="text-sm font-medium text-accent">Web Display · WebSocket</div>
+        )}
 
         <div className="flex items-center justify-between text-sm">
           <span className="text-text-muted">Last seen</span>
@@ -387,7 +392,7 @@ function DeviceListItem({ device, onClick }: DeviceCardProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-3">
           <h3 className="text-base font-semibold text-text-primary truncate">{device.name}</h3>
-          <span className="text-xs text-text-muted font-mono">{device.friendlyId || device.macAddress}</span>
+          <span className="text-xs text-text-muted font-mono">{device.friendlyId || device.macAddress || device.externalId}</span>
         </div>
         <div className="flex items-center gap-4 mt-1">
           <span className="text-sm text-text-muted">Last seen {formatRelativeTime(device.lastSeenAt)}</span>
@@ -395,10 +400,12 @@ function DeviceListItem({ device, onClick }: DeviceCardProps) {
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <BatteryIndicator level={device.battery} size="sm" showPercentage={true} />
-        <WifiIndicator signal={device.wifi} size="sm" showValue={false} />
-      </div>
+      {device.deviceType === 'trmnl' ? (
+        <div className="flex items-center gap-3">
+          <BatteryIndicator level={device.battery} size="sm" showPercentage={true} />
+          <WifiIndicator signal={device.wifi} size="sm" showValue={false} />
+        </div>
+      ) : <span className="text-xs font-medium text-accent">WEB</span>}
 
       <svg className="w-5 h-5 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -429,7 +436,7 @@ function EmptyState({ hasDevices, onAddDevice }: EmptyStateProps) {
       <p className="text-text-muted mb-6 max-w-sm mx-auto">
         {hasDevices
           ? 'Try adjusting your search or filter criteria.'
-          : 'Connect your first TRMNL device to get started managing your e-ink displays.'}
+          : 'Connect a TRMNL device or create a browser-based web display.'}
       </p>
       {!hasDevices && (
         <Button onClick={onAddDevice}>

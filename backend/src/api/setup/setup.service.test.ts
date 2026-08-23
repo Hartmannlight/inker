@@ -14,7 +14,20 @@ describe('SetupService', () => {
     mockSetupScreenService = {
       getSetupScreenUrl: createMock().mockReturnValue('/uploads/setup.png'),
     };
-    service = new SetupService(mockPrisma as any, mockSetupScreenService as any);
+    service = new SetupService(
+      mockPrisma as any,
+      mockSetupScreenService as any,
+      {
+        get: () => ({
+          type: 'trmnl',
+          transport: 'pull',
+          getDefaultCapabilities: (width: number, height: number) => ({
+            display: { width, height, colorDepth: 1, formats: ['image/png'] },
+            telemetry: [], interaction: [], realtime: false,
+          }),
+        }),
+      } as any,
+    );
   });
 
   // ─── isValidMacAddress (private) ────────────────────────────────────

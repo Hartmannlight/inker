@@ -75,12 +75,11 @@ export function DeviceForm() {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Form initialization from server data
       setFormData({
         name: device.name,
-        macAddress: device.macAddress,
+        macAddress: device.macAddress ?? '',
         sleepStartAt: device.sleepStartAt || DEFAULT_SLEEP_START,
         sleepStopAt: device.sleepStopAt || DEFAULT_SLEEP_STOP,
         showSleepScreen: device.showSleepScreen ?? false,
       });
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Form initialization from server data
       setSleepEnabled(!!(device.sleepStartAt && device.sleepStopAt));
     }
   }, [device]);
@@ -154,9 +153,9 @@ export function DeviceForm() {
               required
             />
 
-            <Input
+            {(!isEditMode || device?.deviceType === 'trmnl') && <Input
               label="MAC Address"
-              value={formData.macAddress}
+              value={formData.macAddress ?? ''}
               onChange={handleChange('macAddress')}
               placeholder="00:00:00:00:00:00"
               required
@@ -166,9 +165,9 @@ export function DeviceForm() {
                   ? 'MAC address cannot be changed'
                   : 'Enter the device MAC address'
               }
-            />
+            />}
 
-            {isEditMode && (
+            {isEditMode && device?.deviceType === 'trmnl' && (
               <div className="border-t border-border-light pt-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>

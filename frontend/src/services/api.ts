@@ -214,6 +214,17 @@ export const deviceService = {
     }
   },
 
+  async regeneratePairing(deviceId: string): Promise<{ deviceId: number; displayUrl: string; pairingExpiresAt: string }> {
+    try {
+      const response = await apiClient.post<ApiResponse<{ deviceId: number; displayUrl: string; pairingExpiresAt: string }>>(
+        `/devices/${deviceId}/pairing`
+      );
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
   // Change a device's model / image format (e.g. og_png -> og_bmp for issue #31)
   async setModel(deviceId: string, modelId: number): Promise<Device> {
     try {

@@ -6,6 +6,9 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { generateToken } from '../../common/utils/crypto.util';
 import { SetupScreenService } from './setup-screen.service';
+import { DeviceDriverRegistry } from '../../devices/drivers/device-driver.registry';
+import { DEVICE_TYPES } from '../../devices/drivers/device-driver';
+import { Prisma } from '@prisma/client';
 
 /**
  * Known device model dimensions for /api/setup provisioning.
@@ -49,6 +52,7 @@ export class SetupService {
   constructor(
     private prisma: PrismaService,
     private setupScreenService: SetupScreenService,
+    private deviceDrivers: DeviceDriverRegistry,
   ) {}
 
   /**
@@ -131,6 +135,7 @@ export class SetupService {
     // was defaulting to 800x480). The device's own reported width/height win; the model code links
     // it to an Inker model (resolution + colour depth).
     const resolved = await this.resolveDeviceModel(modelName, reportedWidth, reportedHeight);
+    const driver = this.deviceDrivers.get(DEVICE_TYPES.TRMNL);
     this.logger.log(
       `Provisioning ${macAddress}: model="${modelName ?? 'none'}" reported=${reportedWidth ?? '?'}x${reportedHeight ?? '?'} ` +
       `→ ${resolved.width}x${resolved.height}${resolved.modelId ? ` (modelId ${resolved.modelId})` : ''}`,
@@ -141,6 +146,12 @@ export class SetupService {
       data: {
         name: `Device-${macAddress.slice(-8)}`,
         friendlyId: this.generateFriendlyId(),
+        deviceType: driver.type,
+        transport: driver.transport,
+        externalId: macAddress,
+        capabilities: driver.getDefaultCapabilities(resolved.width, resolved.height) as unknown as Prisma.InputJsonValue,
+        configuration: {},
+        telemetry: {},
         macAddress,
         apiKey,
         firmwareVersion,

@@ -37,6 +37,7 @@ export function DeviceDetail() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [screenPreviewKey, setScreenPreviewKey] = useState(() => Date.now());
+  const [pairingUrl, setPairingUrl] = useState<string | null>(null);
 
   // Logs state
   const [logs, setLogs] = useState<DeviceLog[]>([]);
@@ -98,6 +99,14 @@ export function DeviceDetail() {
       successMessage: 'Playlist unassigned - device will display "Hello World" default screen',
       onSuccess: () => window.location.reload(),
     }
+  );
+
+  const { mutate: createPairingLink, isLoading: isCreatingPairing } = useMutation(
+    () => deviceService.regeneratePairing(id!),
+    {
+      successMessage: 'New pairing link created',
+      onSuccess: (result) => setPairingUrl(new URL(result.displayUrl, window.location.origin).toString()),
+    },
   );
 
   // Available display models (dimensions + PNG/BMP format) for the format selector
@@ -198,7 +207,7 @@ export function DeviceDetail() {
                 </h1>
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="text-white/80 font-mono text-sm bg-white/10 px-3 py-1 rounded-lg">
-                    {device.friendlyId || device.macAddress}
+                    {device.friendlyId || device.macAddress || device.externalId}
                   </span>
                   <OnlineStatusBadge
                     status={device.status}
@@ -211,6 +220,15 @@ export function DeviceDetail() {
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-3">
+              {device.deviceType === 'web-display' && (
+                <button
+                  onClick={() => createPairingLink()}
+                  disabled={isCreatingPairing}
+                  className="inline-flex items-center px-4 py-2 rounded-lg font-medium bg-white/20 text-white border border-white/30 disabled:opacity-50"
+                >
+                  {isCreatingPairing ? 'Creating…' : 'New pairing link'}
+                </button>
+              )}
               <button
                 onClick={() => navigate(`/devices/${id}/edit`)}
                 className="inline-flex items-center px-4 py-2 rounded-lg font-medium transition-all"
@@ -263,6 +281,18 @@ export function DeviceDetail() {
           </div>
         </div>
 
+        {pairingUrl && (
+          <div className="bg-status-info-bg border border-status-info-border rounded-xl p-5">
+            <h2 className="font-semibold text-status-info-text">One-time web-display pairing link</h2>
+            <p className="text-sm text-status-info-text mt-1">Open this URL on the target PC within 15 minutes.</p>
+            <code className="block mt-3 p-3 rounded-lg bg-bg-card border border-border-light break-all text-sm">{pairingUrl}</code>
+            <div className="flex gap-3 mt-3">
+              <Button onClick={() => window.open(pairingUrl, '_blank', 'noopener,noreferrer')}>Open</Button>
+              <Button variant="outline" onClick={() => navigator.clipboard.writeText(pairingUrl)}>Copy</Button>
+            </div>
+          </div>
+        )}
+
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Device Status */}
@@ -285,7 +315,7 @@ export function DeviceDetail() {
                 }
                 color={isOnline ? 'success' : 'muted'}
               />
-              <StatusCard
+              {device.deviceType === 'trmnl' && <StatusCard
                 label="Battery"
                 value={
                   <BatteryIndicator
@@ -300,8 +330,8 @@ export function DeviceDetail() {
                   </svg>
                 }
                 color="warning"
-              />
-              <StatusCard
+              />}
+              {device.deviceType === 'trmnl' && <StatusCard
                 label="WiFi Signal"
                 value={
                   <WifiIndicator
@@ -316,7 +346,7 @@ export function DeviceDetail() {
                   </svg>
                 }
                 color="accent"
-              />
+              />}
             </div>
 
             {/* Device Information Card */}
@@ -332,11 +362,14 @@ export function DeviceDetail() {
               <div className="p-6">
                 <dl className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <InfoItem label="Device Name" value={device.name} />
-                  <InfoItem
+                  {device.macAddress && <InfoItem
                     label="MAC Address"
                     value={device.macAddress}
                     mono
-                  />
+                  />}
+                  {device.externalId && <InfoItem label="Display ID" value={device.externalId} mono />}
+                  <InfoItem label="Device Type" value={device.deviceType === 'web-display' ? 'Web Display' : 'TRMNL'} />
+                  <InfoItem label="Transport" value={device.transport === 'websocket' ? 'WebSocket push' : 'HTTP pull'} />
                   {device.friendlyId && (
                     <InfoItem
                       label="Friendly ID"
@@ -372,7 +405,7 @@ export function DeviceDetail() {
                       mono
                     />
                   )}
-                  {models && models.length > 0 && (
+                  {device.deviceType === 'trmnl' && models && models.length > 0 && (
                     <div>
                       <dt className="text-sm font-medium text-text-muted mb-1">Display Format</dt>
                       <dd>

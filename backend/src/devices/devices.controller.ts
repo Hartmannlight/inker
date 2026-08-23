@@ -101,6 +101,13 @@ export class DevicesController {
     return this.devicesService.regenerateApiKey(id);
   }
 
+  @Post(':id/pairing')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Create a new one-time pairing link for a web display' })
+  regeneratePairing(@Param('id', ParseIntPipe) id: number) {
+    return this.devicesService.regeneratePairingToken(id);
+  }
+
   @Get(':id/logs')
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Get device logs' })

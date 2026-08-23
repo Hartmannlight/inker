@@ -10,8 +10,8 @@ class RecentDeviceDto {
   @ApiProperty({ example: 'Living Room Device' })
   name: string;
 
-  @ApiProperty({ example: '00:11:22:33:44:55' })
-  macAddress: string;
+  @ApiProperty({ example: '00:11:22:33:44:55', nullable: true })
+  macAddress: string | null;
 
   @ApiProperty({ example: 'online', enum: ['online', 'offline'] })
   status: string;

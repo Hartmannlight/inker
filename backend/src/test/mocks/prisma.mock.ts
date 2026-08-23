@@ -32,6 +32,7 @@ export function createMockPrisma() {
     event: createModelMock(),
     model: createModelMock(),
     deviceLog: createModelMock(),
+    deviceCredential: createModelMock(),
     blockedDevice: createModelMock(),
     widgetTemplate: createModelMock(),
     $transaction: createMock().mockImplementation(async (fn: any) => {

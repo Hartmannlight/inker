@@ -27,6 +27,7 @@ import { Extensions } from './pages/extensions';
 // Plugin pages
 import { PluginLibrary, InstalledPlugins, PluginCreator, PluginInstanceForm, OAuthCallback } from './pages/plugins';
 import { GrafanaGeneratorPage } from './components/plugins/GrafanaGeneratorModal';
+import { WebDisplay } from './pages/display/WebDisplay';
 
 /**
  * Main App component with routing
@@ -42,6 +43,7 @@ function App() {
             <Routes>
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
+            <Route path="/display/:externalId" element={<WebDisplay />} />
 
             {/* Protected routes */}
             <Route

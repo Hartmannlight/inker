@@ -12,6 +12,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ScreenDesignerModule } from '../screen-designer/screen-designer.module';
 import { SettingsModule } from '../settings/settings.module';
 import { PluginsModule } from '../plugins/plugins.module';
+import { DevicesModule } from '../devices/devices.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { PluginsModule } from '../plugins/plugins.module';
     ScreenDesignerModule,
     SettingsModule,
     PluginsModule,
+    DevicesModule,
     // Serve static files from assets directory at /assets path
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'assets'),

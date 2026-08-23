@@ -33,8 +33,17 @@ export interface Device {
   id: number;
   name: string;
   friendlyId?: string;
-  macAddress: string;
+  deviceType: 'trmnl' | 'web-display';
+  transport: 'pull' | 'websocket';
+  externalId?: string | null;
+  macAddress?: string | null;
   apiKey?: string;
+  displayUrl?: string;
+  pairingToken?: string;
+  pairingExpiresAt?: string | null;
+  lastConnectedAt?: string | null;
+  capabilities?: Record<string, unknown> | null;
+  telemetry?: Record<string, unknown> | null;
   /** Computed status based on lastSeenAt */
   status: 'online' | 'offline';
   /** Computed boolean for online status */
@@ -333,7 +342,8 @@ export interface PaginatedResponse<T> {
 // Form types
 export interface DeviceFormData {
   name: string;
-  macAddress: string;
+  deviceType?: 'trmnl' | 'web-display';
+  macAddress?: string;
   width?: number;
   height?: number;
   sleepStartAt?: string | null;

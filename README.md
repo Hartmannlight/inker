@@ -4,6 +4,9 @@
 
 Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices — including the 7.5″ **OG** (800×480, 1-bit) and the 10.3″ **TRMNL X** (1872×1404, 16-level grayscale) — and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
 
+Project architecture, research, and the ordered implementation packages live in
+[`docs/architecture/`](docs/architecture/).
+
 Inker is heading in its own direction — focusing on homelab integrations like server monitoring, smart home dashboards, network stats, and self-hosted service displays. TRMNL device compatibility is maintained, but the plugin ecosystem will be Inker-native.
 
 ![Dashboard](https://github.com/user-attachments/assets/fd9affac-5c57-4448-9338-ea8f83add08a)
@@ -20,7 +23,9 @@ Support project that uses inker:
 - **Plugins** — Grafana panel integration with dashboard picker, live preview, and section grid compositing. More homelab-native plugins coming soon!
 - **TRMNL OG & X** — Automatic model detection; full **TRMNL X** support (10.3″, 1872×1404, 16-level grayscale) alongside the 7.5″ OG (800×480, 1-bit)
 - **Playlists** — Rotate multiple screens on devices automatically, with optional **TRMNL X touch-bar** tap-to-advance (per playlist)
-- **Device Management** — Auto-provisioning, firmware support, real-time status, logs
+- **Multiple Device Types** — TRMNL-compatible pull devices and browser-based web displays share one playlist and rendering model
+- **Realtime Web Displays** — Turn a PC, tablet, TV, or kiosk browser into a display with automatic WebSocket updates
+- **Device Management** — Auto-provisioning, secure web-display pairing, real-time status, logs
 - **BYOD Support** — Register any e-ink device manually with custom screen resolution
 - **Custom Ports** — Run on any port with Docker port mapping (e.g. `800:80`)
 
@@ -85,6 +90,17 @@ docker compose up -d
 ```
 
 Open **http://your-server-ip** and log in with PIN `1111`.
+
+### Browser-based web display
+
+1. Open **Devices → Add Device** and choose **Web Display**.
+2. Enter a name and the target viewport size.
+3. Open the generated one-time pairing link on the target PC or kiosk browser.
+4. Assign a playlist. Screen edits and playlist transitions are pushed over a persistent WebSocket connection.
+
+Pairing links expire after 15 minutes and are consumed after one use. The browser keeps a revocable device credential locally; only its SHA-256 hash is stored by Inker. A new link can be generated from the device detail page at any time, which revokes the previous browser credential when used.
+
+TRMNL firmware continues to use the existing `/api/setup` and `/api/display` pull protocol. Device type and transport are independent internally, so additional hardware drivers can be added without changing playlist or rendering code.
 
 > **Database:** Inker uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the `uploads` volume to back up all your data.
 

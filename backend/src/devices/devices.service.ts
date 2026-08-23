@@ -10,6 +10,10 @@ import { EventsService } from '../events/events.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { generateToken } from '../common/utils/crypto.util';
+import { hashToken } from '../common/utils/crypto.util';
+import { DeviceDriverRegistry } from './drivers/device-driver.registry';
+import { DEVICE_TYPES } from './drivers/device-driver';
+import { Prisma } from '@prisma/client';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { serializeDevice, serializeDevices, isNewerVersion } from './entities/device.entity';
 import { FirmwareService } from '../firmware/firmware.service';
@@ -22,6 +26,7 @@ export class DevicesService {
     private prisma: PrismaService,
     private eventsService: EventsService,
     private firmwareService: FirmwareService,
+    private driverRegistry: DeviceDriverRegistry,
   ) {}
 
   /**
@@ -29,32 +34,50 @@ export class DevicesService {
    * If MAC was previously blocked (deleted device), unblock it first
    */
   async create(createDeviceDto: CreateDeviceDto) {
-    // Check if MAC address already exists
-    const existingDevice = await this.prisma.device.findUnique({
-      where: { macAddress: createDeviceDto.macAddress },
-    });
+    const driver = this.driverRegistry.get(createDeviceDto.deviceType ?? DEVICE_TYPES.TRMNL);
+    const width = createDeviceDto.width ?? (driver.type === DEVICE_TYPES.WEB_DISPLAY ? 1920 : 800);
+    const height = createDeviceDto.height ?? (driver.type === DEVICE_TYPES.WEB_DISPLAY ? 1080 : 480);
 
-    if (existingDevice) {
-      throw new BadRequestException('Device with this MAC address already exists');
+    if (driver.type === DEVICE_TYPES.TRMNL) {
+      if (!createDeviceDto.macAddress) {
+        throw new BadRequestException('MAC address is required for TRMNL devices');
+      }
+      const existingDevice = await this.prisma.device.findUnique({
+        where: { macAddress: createDeviceDto.macAddress },
+      });
+      if (existingDevice) {
+        throw new BadRequestException('Device with this MAC address already exists');
+      }
+      await this.prisma.blockedDevice.deleteMany({
+        where: { macAddress: createDeviceDto.macAddress },
+      });
     }
 
-    // Remove from blocked list if exists (allows re-adding deleted devices)
-    await this.prisma.blockedDevice.deleteMany({
-      where: { macAddress: createDeviceDto.macAddress },
-    });
-
-    // Generate unique API key
-    const apiKey = this.generateApiKey();
+    const isWebDisplay = driver.type === DEVICE_TYPES.WEB_DISPLAY;
+    const apiKey = isWebDisplay ? null : this.generateApiKey();
+    const externalId = isWebDisplay ? generateToken(12) : null;
+    const pairingToken = isWebDisplay ? generateToken(32) : null;
+    const pairingExpiresAt = isWebDisplay
+      ? new Date(Date.now() + 15 * 60 * 1000)
+      : null;
 
     // Create device
     const device = await this.prisma.device.create({
       data: {
         name: createDeviceDto.name,
-        macAddress: createDeviceDto.macAddress,
+        deviceType: driver.type,
+        transport: driver.transport,
+        externalId,
+        capabilities: driver.getDefaultCapabilities(width, height) as unknown as Prisma.InputJsonValue,
+        configuration: {},
+        telemetry: {},
+        macAddress: createDeviceDto.macAddress ?? null,
         apiKey,
+        pairingTokenHash: pairingToken ? hashToken(pairingToken) : null,
+        pairingExpiresAt,
         playlistId: createDeviceDto.playlistId,
-        width: createDeviceDto.width ?? 0,
-        height: createDeviceDto.height ?? 0,
+        width,
+        height,
       },
       include: {
 
@@ -73,9 +96,17 @@ export class DevicesService {
       },
     });
 
-    this.logger.log(`Device created: ${device.name} (${device.macAddress})`);
+    this.logger.log(`Device created: ${device.name} (${driver.type}/${driver.transport})`);
 
-    return serializeDevice(device);
+    return serializeDevice({
+      ...device,
+      ...(pairingToken && externalId
+        ? {
+            pairingToken,
+            displayUrl: `/display/${externalId}?pair=${encodeURIComponent(pairingToken)}`,
+          }
+        : {}),
+    });
   }
 
   /**
@@ -258,19 +289,20 @@ export class DevicesService {
       throw new NotFoundException('Device not found');
     }
 
-    // Add MAC to blocked devices to prevent auto-re-provisioning
-    // Device will receive reset_firmware: true on next /api/setup call
-    await this.prisma.blockedDevice.upsert({
-      where: { macAddress: device.macAddress },
-      create: { macAddress: device.macAddress, reason: 'Deleted by admin' },
-      update: { createdAt: new Date() },
-    });
+    // Only pull/TRMNL devices auto-provision by MAC and therefore need blocking.
+    if (device.macAddress) {
+      await this.prisma.blockedDevice.upsert({
+        where: { macAddress: device.macAddress },
+        create: { macAddress: device.macAddress, reason: 'Deleted by admin' },
+        update: { createdAt: new Date() },
+      });
+    }
 
     await this.prisma.device.delete({
       where: { id },
     });
 
-    this.logger.log(`Device deleted and blocked: ${device.name} (${device.macAddress})`);
+    this.logger.log(`Device deleted: ${device.name} (${device.deviceType})`);
 
     return { message: 'Device deleted successfully' };
   }
@@ -379,6 +411,31 @@ export class DevicesService {
     return {
       deviceId: updatedDevice.id,
       apiKey: updatedDevice.apiKey,
+    };
+  }
+
+  /** Issue a new short-lived one-time pairing link for a web display. */
+  async regeneratePairingToken(id: number) {
+    const device = await this.prisma.device.findUnique({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    if (device.deviceType !== DEVICE_TYPES.WEB_DISPLAY || !device.externalId) {
+      throw new BadRequestException('Pairing links are only available for web displays');
+    }
+
+    const pairingToken = generateToken(32);
+    const pairingExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    await this.prisma.device.update({
+      where: { id },
+      data: {
+        pairingTokenHash: hashToken(pairingToken),
+        pairingExpiresAt,
+      },
+    });
+
+    return {
+      deviceId: id,
+      pairingExpiresAt,
+      displayUrl: `/display/${device.externalId}?pair=${encodeURIComponent(pairingToken)}`,
     };
   }
 
