@@ -146,7 +146,8 @@ bewusst nicht verschobene Dateien notieren.
 
 - Status: abgeschlossen am 2026-08-24
 - Ergebnis: Verbindliches Code-Repository ist
-  `C:\Users\Nathaniel\Documents\StatusPanel\inker` auf Branch `main`. Die äußere
+  `C:\Users\Nathaniel\Documents\StatusPanel\inker`, Basisbranch `main`;
+  Sicherungsbranch ist `codex/device-platform-spike`. Die äußere
   Hülle ist als lokaler Workspace und `upstream\inker` als saubere, read-only zu
   behandelnde Upstream-Referenz dokumentiert. Alle sechs Architekturunterlagen
   liegen unter `docs/architecture/`; am alten Ort bestehen Weiterleitungen. Die
@@ -163,20 +164,23 @@ bewusst nicht verschobene Dateien notieren.
   `08B1EDDBD1BFF0CB1222F9F3298D5D832270C6DA28783BDF399BA5D887A28B81`,
   `untracked-files.zip` =
   `1BB42E8CC11BE2172BCA8369523E236DF00FC27D2A0BF1974B9D4AAEA97A4DE5`.
-- Nicht ausführbare Tests und Grund: keine; fachliche Build-/Test-Suites gehören
-  nicht zum dokumentarischen und Git-bezogenen Scope von WP-00.
+- Nicht ausführbare Tests und Grund: Backend-Bun-Tests nicht ausführbar, weil Bun
+  nicht im `PATH` liegt. Als Ersatz liefen Backend-Typecheck und Prisma-Validierung;
+  Frontend-Typecheck und die Days-Until-Tests waren grün.
 - Bewusste Abweichungen vom Paket: keine.
 - Neue Risiken/Schulden: Die äußere Hülle enthält weiterhin ein commitloses
   `.git`-Verzeichnis; es wurde entsprechend der Löschsperre nicht entfernt. Die
   WP-00-Sicherung ist lokal und kein Ersatz für einen später freigegebenen Commit.
-- Relevante Hinweise für WP-01: Im Ziel-Repository bleiben zwei uncommittierte
-  Spike-Gruppen erhalten: Geräteplattform/Browser-WebDisplay sowie „Days Until“.
-  Zusätzlich sind die WP-00-Dokumentations-/Ignore-Änderungen uncommittiert.
+- Relevante Hinweise für WP-01: Die zwei vorgefundenen Spike-Gruppen
+  Geräteplattform/Browser-WebDisplay und „Days Until“ sowie die WP-00-Dokumente
+  sind auf `codex/device-platform-spike` in getrennten Commits gesichert.
   `upstream\inker` und das äußere `.git` wurden bewusst nicht verschoben. Die
   Lockfile-Diffs in `backend/bun.lock`, `backend/package-lock.json` und
   `frontend/package-lock.json` gehören zum vorgefundenen Spike und müssen bei der
   Paketmanagerentscheidung berücksichtigt werden.
-- Git-Stand/Commit: nicht committed; Ausgangs-HEAD
+- Git-Stand/Commit: Sicherungsbranch `codex/device-platform-spike`; Commits
+  `e47de9f` (Architektur), `2f73a36` (Dependencies), `28f3382` (Device Platform)
+  und `0054db3` (Days Until); Ausgangs-HEAD
   `83c72b0c590cca40df9da1c646c3d5693e0028df`.
 
 ## WP-01 – Toolchain und Testbaseline reproduzierbar machen
