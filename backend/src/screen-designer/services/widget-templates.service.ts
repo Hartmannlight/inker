@@ -208,17 +208,23 @@ const DEFAULT_WIDGET_TEMPLATES = [
   },
   {
     name: 'daysuntil',
-    label: 'Days Until',
-    description: 'Shows days remaining until an event (e.g., "Days till Christmas: 15")',
+    label: 'Event Progress',
+    description: 'Shows remaining calendar or workdays and progress until an event',
     category: 'time',
     defaultConfig: {
-      eventName: 'Christmas',
-      targetDate: '2025-12-25',
+      eventName: 'Vacation',
+      inputMode: 'duration',
+      startDate: '',
+      targetDate: '',
+      durationDays: 60,
+      dayMode: 'calendar',
+      design: 'progressBar',
+      labelPrefix: '',
+      labelSuffix: ' days until vacation',
+      showPercentage: true,
       fontSize: 32,
       fontFamily: 'sans-serif',
       color: '#000000',
-      showLabel: true,
-      labelPosition: 'before', // 'before' = "Days till Christmas: 15", 'after' = "15 days till Christmas"
     },
     minWidth: 200,
     minHeight: 60,
@@ -434,6 +440,20 @@ export class WidgetTemplatesService implements OnModuleInit {
         created++;
         this.logger.debug(`Created widget template: ${template.name}`);
       } else {
+        // Keep built-in templates current without touching any configured
+        // widget instances, which store their own config snapshots.
+        if (template.name === 'daysuntil') {
+          await this.prisma.widgetTemplate.update({
+            where: { name: template.name },
+            data: {
+              label: template.label,
+              description: template.description,
+              defaultConfig: template.defaultConfig,
+              minWidth: template.minWidth,
+              minHeight: template.minHeight,
+            },
+          });
+        }
         skipped++;
       }
     }

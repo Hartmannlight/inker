@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import type { ScreenWidget, WidgetTemplate } from '../../types';
 import { generateQRCodeDataUrl } from '../../utils/qrcode';
+import { calculateDaysUntil } from '../../utils/daysUntil';
 import { customWidgetService, screenDesignerService } from '../../services/api';
 import { EInkImage } from '../common';
 
@@ -798,20 +799,19 @@ function BatteryWidget({ config }: { config: Record<string, unknown> }) {
 }
 
 /**
- * DaysUntilWidget - Displays days remaining until an event
+ * DaysUntilWidget - Displays remaining days and optional event progress
  * Updates once per day at midnight.
- * Fully customizable with prefix/suffix text.
  */
 function DaysUntilWidget({ config }: { config: Record<string, unknown> }) {
   const [now, setNow] = useState(new Date());
-  const targetDateStr = (config.targetDate as string) || '2025-12-25';
   const fontSize = (config.fontSize as number) || 32;
   const fontFamily = mapFontFamily((config.fontFamily as string) || 'sans-serif');
   const color = (config.color as string) || '#000000';
-
-  // New customizable prefix/suffix format
-  const labelPrefix = (config.labelPrefix as string) ?? 'Days till Christmas: ';
-  const labelSuffix = (config.labelSuffix as string) || '';
+  const eventName = (config.eventName as string) || 'Vacation';
+  const design = (config.design as string) || 'text';
+  const showPercentage = config.showPercentage !== false;
+  const labelPrefix = (config.labelPrefix as string) ?? '';
+  const labelSuffix = (config.labelSuffix as string) ?? ' days until vacation';
 
   useEffect(() => {
     // Update at midnight
@@ -827,32 +827,92 @@ function DaysUntilWidget({ config }: { config: Record<string, unknown> }) {
     return () => clearTimeout(timeout);
   }, [now]);
 
-  // Calculate days until target date
-  const targetDate = new Date(targetDateStr);
-  targetDate.setHours(0, 0, 0, 0);
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
+  const calculation = calculateDaysUntil({
+    inputMode: config.inputMode as 'targetDate' | 'duration' | undefined,
+    startDate: config.startDate as string | undefined,
+    targetDate: config.targetDate as string | undefined,
+    durationDays: config.durationDays as number | undefined,
+    dayMode: config.dayMode as 'calendar' | 'workdays' | undefined,
+  }, now);
 
-  const diffTime = targetDate.getTime() - today.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  if (calculation.error) {
+    return (
+      <div className="flex items-center justify-center w-full h-full px-2 text-center text-text-muted text-sm">
+        {calculation.error}
+      </div>
+    );
+  }
 
-  // Format the display text using prefix + number + suffix
-  const formatText = () => {
-    const days = diffDays < 0 ? Math.abs(diffDays) : diffDays;
-    return `${labelPrefix}${days}${labelSuffix}`;
-  };
+  const label = `${labelPrefix}${calculation.remainingDays}${labelSuffix}`;
+  const progress = calculation.hasProgress ? calculation.progress : 0;
+
+  if (design === 'text') {
+    return (
+      <div
+        className="flex items-center w-full h-full px-2"
+        style={{ fontSize: `${fontSize}px`, fontFamily, color, whiteSpace: 'nowrap' }}
+      >
+        {label}
+      </div>
+    );
+  }
+
+  if (!calculation.hasProgress) {
+    return (
+      <div className="flex flex-col items-center justify-center w-full h-full px-2 text-center" style={{ fontFamily, color }}>
+        <div style={{ fontSize: `${Math.max(12, fontSize * 0.65)}px` }}>{label}</div>
+        <div className="text-text-muted" style={{ fontSize: `${Math.max(10, fontSize * 0.4)}px` }}>Set a start date to show progress</div>
+      </div>
+    );
+  }
+
+  if (design === 'compact') {
+    return (
+      <div className="flex items-center w-full h-full px-3 gap-3" style={{ fontFamily, color }}>
+        <div className="font-bold leading-none" style={{ fontSize: `${Math.min(fontSize * 1.8, 72)}px` }}>
+          {calculation.remainingDays}
+        </div>
+        <div className="flex flex-col flex-1 min-w-0 gap-1">
+          <div className="font-semibold truncate" style={{ fontSize: `${Math.max(12, fontSize * 0.55)}px` }}>{eventName}</div>
+          <div className="w-full border border-current h-3 p-px">
+            <div className="h-full bg-current" style={{ width: `${progress}%` }} />
+          </div>
+          {showPercentage && <div style={{ fontSize: `${Math.max(10, fontSize * 0.4)}px` }}>{progress}%</div>}
+        </div>
+      </div>
+    );
+  }
+
+  if (design === 'segments') {
+    const filledSegments = Math.round(progress / 5);
+    return (
+      <div className="flex flex-col justify-center w-full h-full px-3 gap-2" style={{ fontFamily, color }}>
+        <div className="flex justify-between items-baseline gap-2">
+          <span className="truncate" style={{ fontSize: `${Math.max(12, fontSize * 0.55)}px` }}>{label}</span>
+          {showPercentage && <span className="font-bold" style={{ fontSize: `${Math.max(12, fontSize * 0.55)}px` }}>{progress}%</span>}
+        </div>
+        <div className="grid gap-px h-5" style={{ gridTemplateColumns: 'repeat(20, minmax(0, 1fr))' }}>
+          {Array.from({ length: 20 }, (_, index) => (
+            <div key={index} className={`border border-current ${index < filledSegments ? 'bg-current' : ''}`} />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className="flex items-center w-full h-full px-2"
-      style={{
-        fontSize: `${fontSize}px`,
-        fontFamily,
-        color,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {formatText()}
+    <div className="flex flex-col justify-center w-full h-full px-3 gap-2" style={{ fontFamily, color }}>
+      <div className="flex justify-between items-baseline gap-2">
+        <span className="truncate" style={{ fontSize: `${Math.max(12, fontSize * 0.55)}px` }}>{label}</span>
+        {showPercentage && <span className="font-bold" style={{ fontSize: `${Math.max(12, fontSize * 0.55)}px` }}>{progress}%</span>}
+      </div>
+      <div className="w-full border-2 border-current h-5 p-0.5">
+        <div className="h-full bg-current" style={{ width: `${progress}%` }} />
+      </div>
+      <div className="flex justify-between" style={{ fontSize: `${Math.max(10, fontSize * 0.36)}px` }}>
+        <span>{calculation.elapsedDays} done</span>
+        <span>{calculation.totalDays} total</span>
+      </div>
     </div>
   );
 }

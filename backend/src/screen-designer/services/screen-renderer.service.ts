@@ -21,6 +21,7 @@ import { validateUrlSafety, UrlSafetyOptions } from '../../common/utils/url-safe
 import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
 import { SETTING_KEYS } from '../../settings/settings.service';
 import type { ScreenDesign, ScreenWidget, WidgetTemplate } from '@prisma/client';
+import { calculateDaysUntil } from './days-until.util';
 
 type WidgetWithTemplate = ScreenWidget & { template: WidgetTemplate };
 type ScreenDesignWithWidgets = ScreenDesign & { widgets: WidgetWithTemplate[] };
@@ -1554,35 +1555,97 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     height: number,
     config: Record<string, any>,
   ): Promise<Buffer> {
-    const targetDateStr = config.targetDate || '2025-12-25';
     const fontSize = config.fontSize || 32;
+    const color = this.sanitizeColor(config.color || '#000000');
+    const fontFamily = config.fontFamily || 'sans-serif';
+    const design = config.design || 'text';
+    const showPercentage = config.showPercentage !== false;
+    const calculation = calculateDaysUntil(config);
+    const prefix = config.labelPrefix ?? '';
+    const suffix = config.labelSuffix ?? ' days until vacation';
+    const label = `${prefix}${calculation.remainingDays}${suffix}`;
 
-    // New customizable prefix/suffix format
-    const labelPrefix = config.labelPrefix ?? 'Days till Christmas: ';
-    const labelSuffix = config.labelSuffix || '';
+    if (calculation.error) {
+      return this.renderTextToBuffer(calculation.error, width, height, {
+        fontSize: Math.max(11, fontSize * 0.5),
+        fontFamily,
+        color,
+        textAlign: 'center',
+      });
+    }
 
-    // Calculate days until target date
-    const targetDate = new Date(targetDateStr);
-    targetDate.setHours(0, 0, 0, 0);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    if (design === 'text') {
+      return this.renderTextToBuffer(label, width, height, {
+        fontSize,
+        fontFamily,
+        color,
+        textAlign: 'left',
+        noWrap: true,
+      });
+    }
 
-    const diffTime = targetDate.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (!calculation.hasProgress) {
+      return this.renderTextToBuffer(`${label}\nSet a start date to show progress`, width, height, {
+        fontSize: Math.max(11, fontSize * 0.55),
+        fontFamily,
+        color,
+        textAlign: 'center',
+      });
+    }
 
-    // Format using prefix + number + suffix
-    const days = diffDays < 0 ? Math.abs(diffDays) : diffDays;
-    const text = `${labelPrefix}${days}${labelSuffix}`;
+    const padding = 12;
+    const innerWidth = Math.max(1, width - padding * 2);
+    const smallSize = Math.max(10, Math.min(22, fontSize * 0.55));
+    const tinySize = Math.max(9, Math.min(16, fontSize * 0.36));
+    const progress = calculation.progress;
+    const escapedLabel = this.escapeXml(label);
+    const escapedEventName = this.escapeXml(config.eventName || 'Vacation');
+    const escapedFont = this.escapeXml(fontFamily);
+    let content: string;
 
-    this.logger.debug(`Rendering daysuntil: ${text}`);
+    if (design === 'compact') {
+      const numberSize = Math.max(28, Math.min(72, fontSize * 1.8));
+      const numberWidth = Math.min(innerWidth * 0.35, numberSize * 1.8);
+      const detailX = padding + numberWidth + 10;
+      const detailWidth = Math.max(1, width - padding - detailX);
+      const barY = Math.round(height * 0.53);
+      content = `
+        <text x="${padding}" y="${Math.round(height * 0.65)}" font-size="${numberSize}" font-weight="700">${calculation.remainingDays}</text>
+        <text x="${detailX}" y="${Math.max(smallSize + 4, Math.round(height * 0.32))}" font-size="${smallSize}" font-weight="600">${escapedEventName}</text>
+        <rect x="${detailX}" y="${barY}" width="${detailWidth}" height="12" fill="white" stroke="${color}" stroke-width="1" />
+        <rect x="${detailX + 2}" y="${barY + 2}" width="${Math.max(0, (detailWidth - 4) * progress / 100)}" height="8" fill="${color}" />
+        ${showPercentage ? `<text x="${detailX}" y="${Math.min(height - 4, barY + 12 + tinySize)}" font-size="${tinySize}">${progress}%</text>` : ''}`;
+    } else if (design === 'segments') {
+      const segments = 20;
+      const gap = 2;
+      const segmentWidth = Math.max(1, (innerWidth - gap * (segments - 1)) / segments);
+      const segmentY = Math.round(height * 0.48);
+      const segmentHeight = Math.max(8, Math.min(22, height * 0.22));
+      const filled = Math.round(progress / 5);
+      const boxes = Array.from({ length: segments }, (_, index) => {
+        const x = padding + index * (segmentWidth + gap);
+        return `<rect x="${x}" y="${segmentY}" width="${segmentWidth}" height="${segmentHeight}" fill="${index < filled ? color : 'white'}" stroke="${color}" stroke-width="1" />`;
+      }).join('');
+      content = `
+        <text x="${padding}" y="${Math.max(smallSize + 3, Math.round(height * 0.3))}" font-size="${smallSize}">${escapedLabel}</text>
+        ${showPercentage ? `<text x="${width - padding}" y="${Math.max(smallSize + 3, Math.round(height * 0.3))}" text-anchor="end" font-size="${smallSize}" font-weight="700">${progress}%</text>` : ''}
+        ${boxes}`;
+    } else {
+      const barY = Math.round(height * 0.43);
+      const barHeight = Math.max(12, Math.min(24, height * 0.2));
+      content = `
+        <text x="${padding}" y="${Math.max(smallSize + 3, Math.round(height * 0.28))}" font-size="${smallSize}">${escapedLabel}</text>
+        ${showPercentage ? `<text x="${width - padding}" y="${Math.max(smallSize + 3, Math.round(height * 0.28))}" text-anchor="end" font-size="${smallSize}" font-weight="700">${progress}%</text>` : ''}
+        <rect x="${padding}" y="${barY}" width="${innerWidth}" height="${barHeight}" fill="white" stroke="${color}" stroke-width="2" />
+        <rect x="${padding + 3}" y="${barY + 3}" width="${Math.max(0, (innerWidth - 6) * progress / 100)}" height="${Math.max(1, barHeight - 6)}" fill="${color}" />
+        <text x="${padding}" y="${Math.min(height - 3, barY + barHeight + tinySize + 3)}" font-size="${tinySize}">${calculation.elapsedDays} done</text>
+        <text x="${width - padding}" y="${Math.min(height - 3, barY + barHeight + tinySize + 3)}" text-anchor="end" font-size="${tinySize}">${calculation.totalDays} total</text>`;
+    }
 
-    return this.renderTextToBuffer(text, width, height, {
-      fontSize,
-      fontFamily: config.fontFamily || 'sans-serif',
-      color: this.sanitizeColor(config.color || '#000000'),
-      textAlign: 'left',
-      noWrap: true,
-    });
+    const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <g fill="${color}" font-family="${escapedFont}">${content}</g>
+    </svg>`;
+    return sharp(Buffer.from(svg)).png().toBuffer();
   }
 
   /**
@@ -3032,27 +3095,58 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
   // ----- Days Until Widget -----
   private generateDaysUntilContent(config: Record<string, any>): string {
-    const targetDateStr = config.targetDate || '2025-12-25';
-    const labelPrefix = config.labelPrefix ?? 'Days till Christmas: ';
-    const labelSuffix = config.labelSuffix || '';
+    const calculation = calculateDaysUntil(config);
+    if (calculation.error) {
+      return `<div style="font-size:14px;text-align:center;color:#666;">${this.escapeHtml(calculation.error)}</div>`;
+    }
 
-    const targetDate = new Date(targetDateStr);
-    targetDate.setHours(0, 0, 0, 0);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const prefix = config.labelPrefix ?? '';
+    const suffix = config.labelSuffix ?? ' days until vacation';
+    const label = `${prefix}${calculation.remainingDays}${suffix}`;
+    const design = config.design || 'text';
+    const showPercentage = config.showPercentage !== false;
+    const progress = calculation.hasProgress ? calculation.progress : 0;
+    const color = this.sanitizeColor(config.color || '#000000');
 
-    const diffTime = targetDate.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    const days = diffDays < 0 ? Math.abs(diffDays) : diffDays;
+    if (design === 'text') return this.escapeHtml(label);
+    if (!calculation.hasProgress) {
+      return `<div style="text-align:center;"><div>${this.escapeHtml(label)}</div><div style="font-size:12px;color:#666;">Set a start date to show progress</div></div>`;
+    }
 
-    return this.escapeHtml(`${labelPrefix}${days}${labelSuffix}`);
+    if (design === 'compact') {
+      return `<div style="display:flex;align-items:center;width:100%;height:100%;gap:12px;padding:8px;box-sizing:border-box;">
+        <div style="font-size:min(72px,1.8em);font-weight:700;line-height:1;">${calculation.remainingDays}</div>
+        <div style="display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;">
+          <div style="font-size:0.55em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${this.escapeHtml(config.eventName || 'Vacation')}</div>
+          <div style="height:12px;border:1px solid ${color};padding:1px;"><div style="height:100%;width:${progress}%;background:${color};"></div></div>
+          ${showPercentage ? `<div style="font-size:0.4em;">${progress}%</div>` : ''}
+        </div>
+      </div>`;
+    }
+
+    if (design === 'segments') {
+      const filled = Math.round(progress / 5);
+      const segments = Array.from({ length: 20 }, (_, index) =>
+        `<span style="display:block;min-width:0;border:1px solid ${color};background:${index < filled ? color : 'white'};"></span>`,
+      ).join('');
+      return `<div style="display:flex;flex-direction:column;justify-content:center;width:100%;height:100%;gap:8px;padding:8px;box-sizing:border-box;">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.55em;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(label)}</span>${showPercentage ? `<strong>${progress}%</strong>` : ''}</div>
+        <div style="display:grid;grid-template-columns:repeat(20,minmax(0,1fr));gap:1px;height:20px;">${segments}</div>
+      </div>`;
+    }
+
+    return `<div style="display:flex;flex-direction:column;justify-content:center;width:100%;height:100%;gap:7px;padding:8px;box-sizing:border-box;">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.55em;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(label)}</span>${showPercentage ? `<strong>${progress}%</strong>` : ''}</div>
+      <div style="height:20px;border:2px solid ${color};padding:2px;"><div style="height:100%;width:${progress}%;background:${color};"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:0.36em;"><span>${calculation.elapsedDays} done</span><span>${calculation.totalDays} total</span></div>
+    </div>`;
   }
 
   private getDaysUntilStyles(config: Record<string, any>): string {
     const fontSize = config.fontSize || 32;
     const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
     const color = this.sanitizeColor(config.color || '#000000');
-    return `font-size: ${fontSize}px; font-family: ${fontFamily}; color: ${color}; white-space: nowrap; padding: 0 8px;`;
+    return `font-size: ${fontSize}px; font-family: ${fontFamily}; color: ${color}; white-space: nowrap; padding: 0; align-items: stretch; justify-content: stretch;`;
   }
 
   // ----- Countdown Widget -----

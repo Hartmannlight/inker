@@ -214,17 +214,23 @@ const WIDGET_TEMPLATES = [
   },
   {
     name: 'daysuntil',
-    label: 'Days Until',
-    description: 'Shows days remaining until an event',
+    label: 'Event Progress',
+    description: 'Shows remaining calendar or workdays and progress until an event',
     category: 'time',
     defaultConfig: {
-      eventName: 'Christmas',
-      targetDate: '2025-12-25',
+      eventName: 'Vacation',
+      inputMode: 'duration',
+      startDate: '',
+      targetDate: '',
+      durationDays: 60,
+      dayMode: 'calendar',
+      design: 'progressBar',
+      labelPrefix: '',
+      labelSuffix: ' days until vacation',
+      showPercentage: true,
       fontSize: 32,
       fontFamily: 'sans-serif',
       color: '#000000',
-      showLabel: true,
-      labelPosition: 'before',
     },
     minWidth: 200,
     minHeight: 60,
@@ -351,7 +357,7 @@ async function main() {
   for (const template of WIDGET_TEMPLATES) {
     await prisma.widgetTemplate.upsert({
       where: { name: template.name },
-      update: {},
+      update: template.name === 'daysuntil' ? template : {},
       create: template,
     });
     widgetTemplatesCreated++;

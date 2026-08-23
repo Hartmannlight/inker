@@ -492,6 +492,22 @@ export interface BatteryWidgetConfig {
   fontSize: number;
 }
 
+export interface DaysUntilWidgetConfig {
+  eventName: string;
+  inputMode: 'targetDate' | 'duration';
+  startDate: string;
+  targetDate?: string;
+  durationDays?: number;
+  dayMode: 'calendar' | 'workdays';
+  design: 'text' | 'progressBar' | 'compact' | 'segments';
+  labelPrefix: string;
+  labelSuffix: string;
+  showPercentage: boolean;
+  fontSize: number;
+  fontFamily: string;
+  color: string;
+}
+
 export interface GitHubWidgetConfig {
   owner: string;
   repo: string;

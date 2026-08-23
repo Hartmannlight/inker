@@ -1155,29 +1155,95 @@ export function WidgetSettingsPanel({
           {/* Days Until settings */}
           {template.name === 'daysuntil' && (
             <div className="space-y-3">
-              <Field label="Target Date">
+              <Field label="Event Name">
+                <StyledInput
+                  type="text"
+                  value={(widget.config.eventName as string) || 'Vacation'}
+                  onChange={(e) => updateConfig('eventName', e.target.value)}
+                  placeholder="Vacation"
+                />
+              </Field>
+              <Field label="Input">
+                <StyledSelect
+                  value={(widget.config.inputMode as string) || 'targetDate'}
+                  onChange={(e) => updateConfig('inputMode', e.target.value)}
+                  options={[
+                    { value: 'targetDate', label: 'Start date + target date' },
+                    { value: 'duration', label: 'Start date + number of days' },
+                  ]}
+                />
+              </Field>
+              <Field label="Start Date" hint="Required for progress calculation">
                 <StyledInput
                   type="date"
-                  value={(widget.config.targetDate as string) || '2025-12-25'}
-                  onChange={(e) => updateConfig('targetDate', e.target.value)}
+                  value={(widget.config.startDate as string) || ''}
+                  onChange={(e) => updateConfig('startDate', e.target.value)}
                 />
               </Field>
-              <Field label="Text Before Number" hint="e.g., 'Days till Christmas: ' or 'Dni do wakacji: '">
+              {((widget.config.inputMode as string) || 'targetDate') === 'duration' ? (
+                <Field label="Number of Days">
+                  <NumberInput
+                    value={(widget.config.durationDays as number) || 60}
+                    onChange={(v) => updateConfig('durationDays', Math.round(v))}
+                    min={1}
+                    max={10000}
+                  />
+                </Field>
+              ) : (
+                <Field label="Target Date">
+                  <StyledInput
+                    type="date"
+                    value={(widget.config.targetDate as string) || ''}
+                    onChange={(e) => updateConfig('targetDate', e.target.value)}
+                  />
+                </Field>
+              )}
+              <Field label="Count">
+                <StyledSelect
+                  value={(widget.config.dayMode as string) || 'calendar'}
+                  onChange={(e) => updateConfig('dayMode', e.target.value)}
+                  options={[
+                    { value: 'calendar', label: 'Calendar days' },
+                    { value: 'workdays', label: 'Workdays (Monday–Friday)' },
+                  ]}
+                />
+              </Field>
+              <Field label="Design">
+                <StyledSelect
+                  value={(widget.config.design as string) || 'text'}
+                  onChange={(e) => updateConfig('design', e.target.value)}
+                  options={[
+                    { value: 'text', label: 'Text only' },
+                    { value: 'progressBar', label: 'Progress bar' },
+                    { value: 'compact', label: 'Large number + progress' },
+                    { value: 'segments', label: 'Segmented progress' },
+                  ]}
+                />
+              </Field>
+              <Field label="Text Before Number" hint="For example: 'Noch '">
                 <StyledInput
                   type="text"
-                  value={(widget.config.labelPrefix as string) ?? 'Days till Christmas: '}
+                  value={(widget.config.labelPrefix as string) ?? ''}
                   onChange={(e) => updateConfig('labelPrefix', e.target.value)}
-                  placeholder="Days till Christmas: "
+                  placeholder="Noch "
                 />
               </Field>
-              <Field label="Text After Number" hint="e.g., ' days' or ' dni' (leave empty for none)">
+              <Field label="Text After Number" hint="For example: ' Tage bis zum Urlaub'">
                 <StyledInput
                   type="text"
-                  value={(widget.config.labelSuffix as string) || ''}
+                  value={(widget.config.labelSuffix as string) ?? ' days until vacation'}
                   onChange={(e) => updateConfig('labelSuffix', e.target.value)}
-                  placeholder=" days"
+                  placeholder=" Tage bis zum Urlaub"
                 />
               </Field>
+              {(widget.config.design as string) !== 'text' && (
+                <ToggleSwitch
+                  id="daysUntilShowPercentage"
+                  label="Show percentage"
+                  checked={(widget.config.showPercentage as boolean) !== false}
+                  onChange={(checked) => updateConfig('showPercentage', checked)}
+                />
+              )}
               <Field label="Font Size">
                 <NumberInput
                   value={(widget.config.fontSize as number) || 32}

@@ -419,10 +419,24 @@ export class ScreenDesignerService {
     }
 
     // Merge default config with provided config
-    const config = {
+    const config: Record<string, any> = {
       ...(template.defaultConfig as object),
       ...(dto.config ?? {}),
     };
+
+    // New event-progress widgets should be useful immediately. Existing
+    // widgets remain untouched and retain the legacy target-only behavior.
+    if (template.name === 'daysuntil') {
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const day = String(today.getDate()).padStart(2, '0');
+      config.startDate ||= `${year}-${month}-${day}`;
+      config.inputMode ||= 'duration';
+      config.durationDays ||= 60;
+      config.dayMode ||= 'calendar';
+      config.design ||= 'progressBar';
+    }
 
     const widget = await this.prisma.screenWidget.create({
       data: {
