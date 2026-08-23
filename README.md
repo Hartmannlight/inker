@@ -177,9 +177,23 @@ docker compose up -d
 ## Testing
 
 ```bash
-cd backend && bun test      # 432 tests
-cd frontend && bun run test  # 19 tests
+cd backend
+bun install --frozen-lockfile
+bun run typecheck
+bun run test
+bun run build
+bun run prisma:validate
+
+cd ../frontend
+bun install --frozen-lockfile
+bun run typecheck
+bun run test
+bun run build
 ```
+
+The pinned tool versions, canonical package-manager policy, non-mutating lint
+commands, and current baseline findings are documented in
+[`docs/architecture/TOOLCHAIN_BASELINE.md`](docs/architecture/TOOLCHAIN_BASELINE.md).
 
 ## License
 

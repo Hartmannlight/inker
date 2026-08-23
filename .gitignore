@@ -40,9 +40,9 @@ docker-compose.override.yml
 uploads/*
 !uploads/.gitkeep
 
-# Package locks (optional - keep if you want reproducible builds)
-# package-lock.json
-# bun.lockb
+# Bun is the canonical package manager; bun.lock remains versioned.
+backend/package-lock.json
+frontend/package-lock.json
 
 # Test coverage
 coverage/

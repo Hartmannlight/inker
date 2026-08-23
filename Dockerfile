@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Build frontend
 # =============================================================================
-FROM oven/bun:1-alpine AS frontend-builder
+FROM oven/bun:1.3.14-alpine AS frontend-builder
 
 WORKDIR /app
 
@@ -17,12 +17,12 @@ RUN bun run build
 # =============================================================================
 # Stage 2: Install backend production dependencies
 # =============================================================================
-FROM oven/bun:1-slim AS backend-install
+FROM oven/bun:1.3.14-slim AS backend-install
 
 WORKDIR /app
 
 # Node.js binary for Prisma generate (bun segfaults with Prisma CLI)
-COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
@@ -59,11 +59,11 @@ RUN bun install --frozen-lockfile && \
 # =============================================================================
 # Stage 3: Build backend
 # =============================================================================
-FROM oven/bun:1-slim AS backend-builder
+FROM oven/bun:1.3.14-slim AS backend-builder
 
 WORKDIR /app
 
-COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
@@ -89,7 +89,7 @@ ARG TARGETARCH
 # Install all system packages in one layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Nginx
-    nginx \
+    nginx redis-server=5:8.0.2-3+deb13u2 redis-tools=5:8.0.2-3+deb13u2 \
     # Chrome headless shell dependencies
     wget ca-certificates openssl unzip \
     fonts-liberation fonts-symbola fonts-noto-cjk fontconfig \
@@ -149,11 +149,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
            /var/cache/debconf/*-old
 
 # Install Bun runtime (copy from build image)
-COPY --from=oven/bun:1-slim /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.14-slim /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
 # Node.js binary for Prisma CLI (Bun's baseline mode crashes on non-AVX2 hardware)
-COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
 
 # Puppeteer configuration — fixed symlink resolves to the right browser per architecture
 # (chrome-headless-shell on amd64, distro chromium on arm64; both linked in the layer above)

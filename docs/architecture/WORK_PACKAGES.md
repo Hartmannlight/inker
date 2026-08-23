@@ -56,7 +56,7 @@ müssen.
 | Status | Paket | Ergebnis | Gate |
 |---|---|---|---|
 | [x] | WP-00 | Eindeutiges Repository und gesicherter Ausgangsstand | – |
-| [ ] | WP-01 | Reproduzierbare Toolchain und grüne Baseline-Prüfungen | WP-00 |
+| [x] | WP-01 | Reproduzierbare Toolchain und grüne Baseline-Prüfungen | WP-00 |
 | [ ] | WP-02 | Verbindliche Architecture Decision Records | WP-01 |
 | [ ] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
 | [ ] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
@@ -199,16 +199,16 @@ Baseline-Bericht. Keine Architekturrefaktorierung.
 
 **Aufgaben:**
 
-- [ ] Dokumentiere erforderliche Versionen von Bun, Node, Prisma, Redis und Docker.
-- [ ] Entscheide und dokumentiere pro Teilprojekt den kanonischen Paketmanager und
+- [x] Dokumentiere erforderliche Versionen von Bun, Node, Prisma, Redis und Docker.
+- [x] Entscheide und dokumentiere pro Teilprojekt den kanonischen Paketmanager und
   Umgang mit `bun.lock`/`package-lock.json`.
-- [ ] Vereinheitliche nicht-destruktive Skripte für Typecheck, Test, Build und
+- [x] Vereinheitliche nicht-destruktive Skripte für Typecheck, Test, Build und
   Prisma-Validierung.
-- [ ] Verhindere, dass ein Lint-Prüfbefehl ungefragt Dateien mit `--fix` verändert.
-- [ ] Führe Backend- und Frontend-Baseline vollständig aus.
-- [ ] Lege einen minimalen CI-Workflow mit denselben Befehlen an oder aktualisiere
+- [x] Verhindere, dass ein Lint-Prüfbefehl ungefragt Dateien mit `--fix` verändert.
+- [x] Führe Backend- und Frontend-Baseline vollständig aus.
+- [x] Lege einen minimalen CI-Workflow mit denselben Befehlen an oder aktualisiere
   den vorhandenen.
-- [ ] Dokumentiere bestehende, nicht durch dieses Paket verursachte Fehler separat.
+- [x] Dokumentiere bestehende, nicht durch dieses Paket verursachte Fehler separat.
 
 **Abnahme:** Eine dokumentierte Befehlsfolge läuft lokal und in CI identisch; alle
 vorhandenen Tests sind entweder grün oder mit reproduzierbarer Ursache erfasst.
@@ -217,6 +217,45 @@ vorhandenen Tests sind entweder grün oder mit reproduzierbarer Ursache erfasst.
 
 **Handoff:** Exakte Runtime-Versionen, kanonische Befehle und Baseline-Testzahlen
 notieren.
+
+### Abschluss WP-01
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Bun ist für Backend und Frontend als einziger Paketmanager auf
+  `1.3.14` festgelegt; Node `22.22.3`, Prisma `6.19.3`, Redis `8.0.2`, Docker
+  Engine `28.5.2` und Docker Compose `2.40.3` sind dokumentiert. Parallele
+  npm-Lockfiles wurden entfernt, Prüfskripte vereinheitlicht, Lint von
+  `lint:fix` getrennt und CI um die kanonische Baseline sowie einen
+  Docker-Health-Smoke-Test ergänzt. Details stehen in
+  `docs/architecture/TOOLCHAIN_BASELINE.md`.
+- Geänderte Kernpfade: `.bun-version`, `.node-version`, `backend/package.json`,
+  `frontend/package.json`, `backend/package-lock.json` (entfernt),
+  `frontend/package-lock.json` (entfernt), `.gitignore`, `Dockerfile`,
+  `.github/workflows/ci.yml`, `README.md` und
+  `docs/architecture/TOOLCHAIN_BASELINE.md`.
+- Ausgeführte Tests: echte Clean Installs mit
+  `bun install --frozen-lockfile`; Backend-Typecheck; 443 Backendtests in 36
+  Dateien; Backend-Build; `prisma validate`; Frontend-Typecheck; 21
+  Frontendtests in 4 Dateien; Frontend-Build; `docker compose config --quiet`;
+  Paketmanifest-Parsing und `git diff --check`. Alle genannten Prüfungen waren
+  grün.
+- Nicht ausführbare Tests und Grund: Docker-Image-Build und HTTP-Health-Smoke-Test
+  lokal nicht ausführbar, weil Docker Desktop installiert, die Linux-Engine aber
+  nicht gestartet war. Der identische Test ist im CI-Workflow hinterlegt.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: Backend-Lint hat 46 Fehler/43 Warnungen und Frontend-Lint
+  85 Fehler/9 Warnungen aus dem Bestand; Lint ist deshalb noch kein grünes
+  CI-Gate. Prisma warnt vor der in Prisma 7 entfallenden
+  `package.json#prisma`-Konfiguration. Frontend-Build warnt vor veralteten
+  Browserslist-Daten und einem großen Bundle-Chunk. Alle Befunde sind separat im
+  Baseline-Bericht erfasst.
+- Relevante Hinweise für WP-02: Toolchain- und CI-Entscheidungen sind jetzt
+  reproduzierbar dokumentiert; kanonische Befehle sind `bun run typecheck`,
+  `bun run test`, `bun run build` und im Backend zusätzlich
+  `bun run prisma:validate`. Folgepakete dürfen ausschließlich die vorhandenen
+  `bun.lock`-Dateien aktualisieren.
+- Git-Stand/Commit: Branch `codex/device-platform-spike`; dieser Handoff ist
+  Bestandteil des WP-01-Commits auf Basis von `d4503a2`.
 
 ## WP-02 – Architecture Decision Records anlegen
 
