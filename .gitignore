@@ -47,3 +47,13 @@ uploads/*
 # Test coverage
 coverage/
 .nyc_output/
+
+# Local reference checkouts and temporary recovery artifacts
+/upstream/
+/reference-checkouts/
+/.wp00-backups/
+/.tmp/
+/tmp/
+*.tmp
+*.bak
+*.orig
