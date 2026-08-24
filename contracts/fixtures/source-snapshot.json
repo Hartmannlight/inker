@@ -1,0 +1,11 @@
+{
+  "protocolVersion": "1.0",
+  "snapshotId": "snapshot-weather-42",
+  "sourceDefinitionId": "source-weather-home",
+  "schemaVersion": "1.0",
+  "connectorVersion": "weather-reference@1.0.0",
+  "createdAt": "2026-08-24T11:59:00Z",
+  "sourceTimestamp": "2026-08-24T11:58:30Z",
+  "freshness": { "state": "fresh", "staleAfterSeconds": 1800 },
+  "data": { "temperatureC": 21.5, "condition": "cloudy" }
+}

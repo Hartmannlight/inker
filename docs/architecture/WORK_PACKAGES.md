@@ -59,7 +59,7 @@ müssen.
 | [x] | WP-01 | Reproduzierbare Toolchain und grüne Baseline-Prüfungen | WP-00 |
 | [x] | WP-02 | Verbindliche Architecture Decision Records | WP-01 |
 | [x] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
-| [ ] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
+| [x] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
 | [ ] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
 | [ ] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
 | [ ] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
@@ -401,16 +401,16 @@ SourceSnapshot, InteractionEvent und CommandResult inklusive Laufzeitvalidierung
 
 **Aufgaben:**
 
-- [ ] Definiere `protocolVersion` und Kompatibilitätsregeln.
-- [ ] Modelliere Display-, Transport-, Energie- und Interaction-Capabilities
+- [x] Definiere `protocolVersion` und Kompatibilitätsregeln.
+- [x] Modelliere Display-, Transport-, Energie- und Interaction-Capabilities
   getrennt.
-- [ ] Lege Profile-Fixtures für Batterie-TRMNL, Netz-TRMNL, ESP32-Touch und
+- [x] Lege Profile-Fixtures für Batterie-TRMNL, Netz-TRMNL, ESP32-Touch und
   Pi-Browser an.
-- [ ] Definiere ein widgetneutrales PresentationManifest mit Artefakten,
+- [x] Definiere ein widgetneutrales PresentationManifest mit Artefakten,
   Revision, Refresh-Hinweisen und erlaubten Aktionen.
-- [ ] Definiere SourceSnapshot sowie InteractionEvent/CommandResult minimal.
-- [ ] Ergänze Parser-/Validatoren mit verständlichen Fehlern.
-- [ ] Teste gültige, unbekannte und inkompatible Protokollversionen.
+- [x] Definiere SourceSnapshot sowie InteractionEvent/CommandResult minimal.
+- [x] Ergänze Parser-/Validatoren mit verständlichen Fehlern.
+- [x] Teste gültige, unbekannte und inkompatible Protokollversionen.
 
 **Abnahme:** Alle vier Betriebsvarianten bestehen Contract-Tests; kein Vertrag
 importiert React, NestJS, Prisma oder einen Widgettyp.
@@ -418,6 +418,43 @@ importiert React, NestJS, Prisma oder einen Widgettyp.
 **Validierung:** Unit-/Fixture-Tests und Typechecks aller Consumer.
 
 **Handoff:** Vertragsschemas, Version und bewusst vertagte Felder notieren.
+
+### Abschluss WP-04
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: `@inker/contracts` stellt den Kernvertragssatz `1.0` für
+  `DeviceProfile`, getrennte Display-/Transport-/Energie-/Interaction-
+  Capabilities, `DeliveryPolicy`, `PresentationManifest`, `SourceSnapshot`,
+  `InteractionEvent` und `CommandResult` bereit. Parser liefern strukturierte
+  Fehler mit Code, JSON-Pfad und Meldung. Version `1.0` ist unterstützt; eine
+  unbekannte Minor-Version derselben Major-Linie wird mit Warnung angenommen,
+  eine andere Major-Version oder ungültige Syntax abgelehnt.
+- Geänderte Kernpfade: `contracts/src/`, `contracts/fixtures/`,
+  `contracts/test/core-contracts.test.ts`,
+  `contracts/test/package-boundary.test.ts`, `contracts/README.md` und
+  `docs/architecture/WORK_PACKAGES.md`.
+- Ausgeführte Tests: Contracts-Typecheck; 23 Contract-/Fixture-Tests in drei
+  Dateien, darunter alle vier Gerätevarianten sowie aktuelle, unbekannte Minor-,
+  inkompatible Major- und ungültige Protokollversionen; ESM-/CJS-Contracts-Build
+  und Export-Smokes; Backend-Typecheck und -Build; Frontend-Typecheck und -Build;
+  statischer Framework-/Widget-Grenzscan und `git diff --check`. Alle Prüfungen
+  waren grün.
+- Nicht ausführbare Tests und Grund: keine.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: Das ESP32-480×480-Profil sowie Poll-, Refresh- und
+  E-Ink-Werte bleiben ausdrücklich Referenz-Fixtures statt verifizierter
+  Produktdefaults. Parser tolerieren unbekannte Felder bei kompatiblen Minor-
+  Versionen; die Nutzung neuer Features erfordert spätere Capability-
+  Negotiation. `credentialId` referenziert nur das Transport-Credential; konkrete
+  Autorisierung und Idempotenzpersistenz folgen in den vorgesehenen Paketen.
+- Relevante Hinweise für WP-06/WP-13/WP-14/WP-21/WP-23: Kernversion ist `1.0`;
+  alle Laufzeitgrenzen nehmen `unknown` an und liefern `ParseResult<T>`. Geräte-
+  Persistenz referenziert `profileId` und hält Energie/Delivery getrennt.
+  Manifeste bleiben widgetneutral und read-only, Renderer erhalten nur
+  `SourceSnapshot.data`, und Interaction-Payloads sind JSON-Objekte ohne
+  beliebige Serveraufrufe.
+- Git-Stand/Commit: nicht committed; Branch `codex/device-platform-spike`,
+  auf Basis des WP-03-Commits `24f5e44`.
 
 ## WP-05 – Prisma-Migrationsbaseline schaffen
 

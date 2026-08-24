@@ -1,0 +1,31 @@
+{
+  "protocolVersion": "1.0",
+  "manifestId": "manifest-2026-08-24-001",
+  "publicationId": "publication-home",
+  "revision": "rev-42",
+  "profileId": "trmnl-byod-7.5-mono",
+  "variantId": "800x480-bmp1",
+  "generatedAt": "2026-08-24T12:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "artifact-primary",
+      "role": "primary",
+      "url": "/artifacts/42/display.bmp",
+      "mimeType": "image/bmp",
+      "sizeBytes": 48062,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "etag": "\"sha256-0123456789abcdef\""
+    }
+  ],
+  "refresh": {
+    "notBefore": "2026-08-24T12:00:00Z",
+    "refreshAfterSeconds": 900,
+    "nextTransitionAt": "2026-08-24T12:15:00Z",
+    "expiresAt": "2026-08-25T12:00:00Z"
+  },
+  "allowedActions": [
+    { "action": "view.next", "payloadSchemaVersion": "1.0" }
+  ],
+  "fallbackRevision": "rev-41",
+  "metadata": { "stale": false }
+}

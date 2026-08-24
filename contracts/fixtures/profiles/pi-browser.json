@@ -1,0 +1,55 @@
+{
+  "fixtureId": "pi-browser",
+  "profile": {
+    "protocolVersion": "1.0",
+    "profileId": "browser-hd-1920x1080",
+    "label": "Browser kiosk HD",
+    "display": {
+      "width": 1920,
+      "height": 1080,
+      "colorSpace": "rgb",
+      "bitDepth": 24,
+      "rotation": 0,
+      "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+      "scaling": "contain",
+      "renderFormats": ["html", "png", "jpeg"],
+      "mimeTypes": ["text/html", "image/png", "image/jpeg"]
+    },
+    "interaction": { "inputs": ["pointer"], "audioOutput": true },
+    "supportedTransports": ["websocket", "http-pull"],
+    "supportedEnergySources": ["mains"]
+  },
+  "capabilities": {
+    "protocolVersion": "1.0",
+    "profileId": "browser-hd-1920x1080",
+    "display": {
+      "width": 1920,
+      "height": 1080,
+      "colorSpace": "rgb",
+      "bitDepth": 24,
+      "rotation": 0,
+      "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+      "scaling": "contain",
+      "renderFormats": ["html", "png", "jpeg"],
+      "mimeTypes": ["text/html", "image/png", "image/jpeg"]
+    },
+    "transport": {
+      "modes": ["websocket", "http-pull"],
+      "conditionalGet": true,
+      "pushManifests": true,
+      "reconnect": true,
+      "heartbeat": true
+    },
+    "energy": { "source": "mains", "canSleep": false, "telemetry": "standard" },
+    "interaction": { "inputs": ["pointer"], "audioOutput": true }
+  },
+  "deliveryPolicy": {
+    "protocolVersion": "1.0",
+    "policyId": "reference-connected-browser",
+    "mode": "connected",
+    "heartbeatSeconds": 20,
+    "reconnectBackoffSeconds": 2,
+    "telemetryIntervalSeconds": 60,
+    "maxStaleSeconds": 3600
+  }
+}

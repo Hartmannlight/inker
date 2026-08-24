@@ -1,0 +1,13 @@
+{
+  "protocolVersion": "1.0",
+  "eventId": "event-device-7-0001",
+  "deviceId": "device-7",
+  "credentialId": "credential-device-7-current",
+  "publicationId": "publication-home",
+  "revision": "rev-42",
+  "action": "timer.pause",
+  "targetId": "timer-kitchen",
+  "payload": { "expectedStateRevision": "timer-rev-3" },
+  "occurredAt": "2026-08-24T12:01:00Z",
+  "clientSequence": 17
+}

@@ -1,0 +1,55 @@
+{
+  "fixtureId": "esp32-touch-reference",
+  "profile": {
+    "protocolVersion": "1.0",
+    "profileId": "esp32-touch-reference-480x480",
+    "label": "ESP32 touch reference fixture (hardware mapping unverified)",
+    "display": {
+      "width": 480,
+      "height": 480,
+      "colorSpace": "rgb",
+      "bitDepth": 16,
+      "rotation": 0,
+      "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+      "scaling": "contain",
+      "renderFormats": ["png", "jpeg"],
+      "mimeTypes": ["image/png", "image/jpeg"]
+    },
+    "interaction": { "inputs": ["touch"], "audioOutput": false, "maxTouchPoints": 1 },
+    "supportedTransports": ["websocket", "http-pull"],
+    "supportedEnergySources": ["mains"]
+  },
+  "capabilities": {
+    "protocolVersion": "1.0",
+    "profileId": "esp32-touch-reference-480x480",
+    "display": {
+      "width": 480,
+      "height": 480,
+      "colorSpace": "rgb",
+      "bitDepth": 16,
+      "rotation": 0,
+      "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+      "scaling": "contain",
+      "renderFormats": ["png", "jpeg"],
+      "mimeTypes": ["image/png", "image/jpeg"]
+    },
+    "transport": {
+      "modes": ["websocket", "http-pull"],
+      "conditionalGet": true,
+      "pushManifests": true,
+      "reconnect": true,
+      "heartbeat": true
+    },
+    "energy": { "source": "mains", "canSleep": false, "telemetry": "standard" },
+    "interaction": { "inputs": ["touch"], "audioOutput": false, "maxTouchPoints": 1 }
+  },
+  "deliveryPolicy": {
+    "protocolVersion": "1.0",
+    "policyId": "reference-connected-embedded",
+    "mode": "connected",
+    "heartbeatSeconds": 30,
+    "reconnectBackoffSeconds": 5,
+    "telemetryIntervalSeconds": 60,
+    "maxStaleSeconds": 3600
+  }
+}

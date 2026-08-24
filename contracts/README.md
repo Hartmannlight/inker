@@ -22,8 +22,32 @@ den stabilen Importnamen `@inker/contracts` eingebunden.
   `Buffer` und andere Laufzeitobjekte gehören nicht in Verträge.
 - Repräsentative JSON-Beispiele liegen unter `fixtures/` und werden im
   Contract-Test-Harness gegen die zugehörigen Laufzeitvalidatoren geprüft.
-- Fachliche Verträge und deren Versionsregeln werden erst in WP-04 ergänzt. Dieses
-  Paket enthält bewusst nur `DeviceStatus` als kompatiblen Durchstich.
+- Alle Kernverträge tragen `protocolVersion` im Format `major.minor`. Version
+  `1.0` ist aktuell. Eine unbekannte Minor-Version derselben Major-Linie wird mit
+  Warnung angenommen; unbekannte Felder und Features bleiben ungenutzt. Eine
+  andere Major-Version oder ungültige Syntax wird abgelehnt.
+- Parser nehmen `unknown` an und liefern `ParseResult<T>` mit maschinenlesbarem
+  Fehlercode, JSON-Pfad und verständlicher Meldung. Sie werfen nicht für reguläre
+  Eingabefehler.
+
+## Vertragssatz 1.0
+
+- `DeviceProfile`, `DeviceCapabilities` und `DeliveryPolicy` trennen Display,
+  Transport, Energie und Interaktion. Batterie- und Netz-TRMNL teilen dasselbe
+  Profil und unterscheiden sich nur in Energie-Capability und Delivery Policy.
+- `PresentationManifest` beschreibt unveränderliche Publication-Revisionen,
+  Artefakte, Refresh-Hinweise und erlaubte Aktionen ohne Widgettypen.
+- `SourceSnapshot` enthält nur validierte, normalisierte JSON-Daten und
+  Freshness-/Fehlerstatus; Providerzugriff und Secrets sind kein Teil des
+  Vertrags.
+- `InteractionEvent` und `CommandResult` bilden idempotente Aktionen und deren
+  Ergebnis ab. Das Geräte-Credential wird nur über `credentialId` referenziert,
+  nicht als Secret übertragen.
+
+Die vier Profile unter `fixtures/profiles/` sind Contract-Beispiele. Insbesondere
+ist das 480×480-ESP32-Profil ausdrücklich eine Referenz-Fixture und keine
+verifizierte Produktannahme. Poll-, Refresh- und E-Ink-Grenzwerte der Fixtures sind
+keine gemessenen Produktdefaults.
 
 ## Befehle
 

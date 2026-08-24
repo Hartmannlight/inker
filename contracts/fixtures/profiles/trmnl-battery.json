@@ -1,0 +1,56 @@
+{
+  "fixtureId": "trmnl-battery",
+  "profile": {
+    "protocolVersion": "1.0",
+    "profileId": "trmnl-byod-7.5-mono",
+    "label": "TRMNL BYOD 7.5 monochrome",
+    "display": {
+      "width": 800,
+      "height": 480,
+      "colorSpace": "monochrome",
+      "bitDepth": 1,
+      "rotation": 0,
+      "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+      "scaling": "contain",
+      "renderFormats": ["bmp1"],
+      "mimeTypes": ["image/bmp"],
+      "eInk": { "partialRefreshSupported": false }
+    },
+    "interaction": { "inputs": ["buttons"], "audioOutput": false },
+    "supportedTransports": ["http-pull"],
+    "supportedEnergySources": ["battery", "mains"]
+  },
+  "capabilities": {
+    "protocolVersion": "1.0",
+    "profileId": "trmnl-byod-7.5-mono",
+    "display": {
+      "width": 800,
+      "height": 480,
+      "colorSpace": "monochrome",
+      "bitDepth": 1,
+      "rotation": 0,
+      "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+      "scaling": "contain",
+      "renderFormats": ["bmp1"],
+      "mimeTypes": ["image/bmp"],
+      "eInk": { "partialRefreshSupported": false }
+    },
+    "transport": {
+      "modes": ["http-pull"],
+      "conditionalGet": true,
+      "pushManifests": false,
+      "reconnect": false,
+      "heartbeat": false
+    },
+    "energy": { "source": "battery", "canSleep": true, "telemetry": "minimal" },
+    "interaction": { "inputs": ["buttons"], "audioOutput": false }
+  },
+  "deliveryPolicy": {
+    "protocolVersion": "1.0",
+    "policyId": "reference-sleepy",
+    "mode": "sleepy",
+    "pollIntervalSeconds": 900,
+    "telemetryIntervalSeconds": 3600,
+    "maxStaleSeconds": 86400
+  }
+}

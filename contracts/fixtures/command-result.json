@@ -1,0 +1,9 @@
+{
+  "protocolVersion": "1.0",
+  "commandId": "command-event-device-7-0001",
+  "eventId": "event-device-7-0001",
+  "status": "completed",
+  "serverTime": "2026-08-24T12:01:00.125Z",
+  "stateRevision": "timer-rev-4",
+  "result": { "timerState": "paused" }
+}
