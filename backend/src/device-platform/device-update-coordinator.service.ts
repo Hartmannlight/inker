@@ -2,8 +2,8 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { Subscription } from 'rxjs';
 import { EventsService } from '../events/events.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEVICE_TRANSPORTS } from '../devices/drivers/device-driver';
 import { WebDisplayGateway } from './web-display.gateway';
+import { resolveDeviceConfiguration } from './device-configuration';
 
 @Injectable()
 export class DeviceUpdateCoordinator implements OnModuleInit, OnModuleDestroy {
@@ -30,10 +30,15 @@ export class DeviceUpdateCoordinator implements OnModuleInit, OnModuleDestroy {
   async refreshDevices(deviceIds: number[]) {
     const devices = await this.prisma.device.findMany({
       where: { id: { in: deviceIds }, isActive: true },
-      select: { id: true, transport: true },
+      include: { profile: true, deliveryPolicy: true },
     });
     await Promise.all(devices.map(async (device) => {
-      if (device.transport === DEVICE_TRANSPORTS.WEBSOCKET) {
+      const configuration = resolveDeviceConfiguration(
+        device.profile,
+        device.deliveryPolicy,
+        device.capabilitiesOverride,
+      );
+      if (configuration.capabilities.transport.modes.includes('websocket')) {
         await this.webDisplays.pushPresentation(device.id);
       }
     }));

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { generateToken, hashToken, verifyToken } from '../common/utils/crypto.util';
-import { DEVICE_TYPES } from '../devices/drivers/device-driver';
+import { BUILTIN_PROFILE_IDS } from './device-configuration.catalog';
 
 @Injectable()
 export class WebDisplayAuthService {
@@ -9,7 +9,7 @@ export class WebDisplayAuthService {
 
   async pair(externalId: string, pairingToken: string) {
     const device = await this.prisma.device.findUnique({ where: { externalId } });
-    if (!device || device.deviceType !== DEVICE_TYPES.WEB_DISPLAY) {
+    if (!device || device.profileId !== BUILTIN_PROFILE_IDS.BROWSER_HD) {
       throw new NotFoundException('Web display not found');
     }
     if (!device.pairingTokenHash || !device.pairingExpiresAt) {
@@ -51,7 +51,7 @@ export class WebDisplayAuthService {
       !credential ||
       credential.revokedAt ||
       credential.device.externalId !== externalId ||
-      credential.device.deviceType !== DEVICE_TYPES.WEB_DISPLAY ||
+      credential.device.profileId !== BUILTIN_PROFILE_IDS.BROWSER_HD ||
       !credential.device.isActive
     ) {
       throw new UnauthorizedException('Invalid device credentials');

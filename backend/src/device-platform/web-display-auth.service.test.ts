@@ -18,7 +18,7 @@ describe('WebDisplayAuthService', () => {
     prisma.device.findUnique.mockResolvedValue({
       id: 7,
       name: 'Office',
-      deviceType: 'web-display',
+      profileId: 'browser-hd-1920x1080',
       externalId: 'display-7',
       pairingTokenHash: hashToken(pairingToken),
       pairingExpiresAt: new Date(Date.now() + 60_000),
@@ -37,7 +37,7 @@ describe('WebDisplayAuthService', () => {
   it('rejects an expired pairing link', async () => {
     prisma.device.findUnique.mockResolvedValue({
       id: 7,
-      deviceType: 'web-display',
+      profileId: 'browser-hd-1920x1080',
       externalId: 'display-7',
       pairingTokenHash: hashToken('p'.repeat(48)),
       pairingExpiresAt: new Date(Date.now() - 1),
@@ -50,7 +50,7 @@ describe('WebDisplayAuthService', () => {
       id: 1,
       revokedAt: null,
       deviceId: 7,
-      device: { externalId: 'other', deviceType: 'web-display', isActive: true },
+      device: { externalId: 'other', profileId: 'browser-hd-1920x1080', isActive: true },
     });
     await expect(service.authenticate('display-7', 'credential')).rejects.toThrow(UnauthorizedException);
   });

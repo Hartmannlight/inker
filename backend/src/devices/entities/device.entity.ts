@@ -1,5 +1,5 @@
-import { Device as PrismaDevice } from '@prisma/client';
 import type { DeviceStatus } from '@inker/contracts';
+import { resolveDeviceConfiguration } from '../../device-platform/device-configuration';
 
 export type { DeviceStatus } from '@inker/contracts';
 
@@ -134,12 +134,45 @@ export function serializeDevice<T extends { isActive: boolean; lastSeenAt: Date 
   device: T,
 ): SerializedDevice<Omit<T, 'apiKey'>> {
   const online = isDeviceOnline(device);
-  const { apiKey, ...rest } = device as T & { apiKey?: string };
-  return {
+  const source = device as T & {
+    apiKey?: string;
+    pairingTokenHash?: string;
+    profile?: any;
+    deliveryPolicy?: any;
+    capabilitiesOverride?: unknown;
+    credentials?: Array<Record<string, unknown>>;
+  };
+  const {
+    profile,
+    deliveryPolicy,
+    capabilitiesOverride,
+    credentials,
+    ...rest
+  } = source;
+  delete (rest as Record<string, unknown>).apiKey;
+  delete (rest as Record<string, unknown>).pairingTokenHash;
+  const serialized: Record<string, unknown> = {
     ...rest,
+    capabilitiesOverride: capabilitiesOverride ?? null,
     status: online ? 'online' : 'offline',
     isOnline: online,
   };
+  if (profile && deliveryPolicy) {
+    const resolved = resolveDeviceConfiguration(profile, deliveryPolicy, capabilitiesOverride);
+    serialized.profile = resolved.profile;
+    serialized.deliveryPolicy = resolved.deliveryPolicy;
+    serialized.capabilities = resolved.capabilities;
+    serialized.width = resolved.capabilities.display.width;
+    serialized.height = resolved.capabilities.display.height;
+  }
+  if (credentials) {
+    serialized.credentials = credentials.map((sourceCredential) => {
+      const credential = { ...sourceCredential };
+      delete credential.tokenHash;
+      return credential;
+    });
+  }
+  return serialized as SerializedDevice<Omit<T, 'apiKey'>>;
 }
 
 /**

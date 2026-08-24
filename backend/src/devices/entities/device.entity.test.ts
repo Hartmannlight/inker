@@ -79,6 +79,21 @@ describe('device.entity', () => {
       expect(result.isOnline).toBe(true);
       expect(result.id).toBe(1);
     });
+
+    it('never serializes credential or pairing hashes', () => {
+      const device = {
+        id: 1,
+        isActive: true,
+        lastSeenAt: new Date(),
+        apiKey: 'raw-api-key',
+        pairingTokenHash: 'pairing-hash',
+        credentials: [{ credentialId: 'cred-1', tokenHash: 'token-hash', kind: 'device' }],
+      };
+      const result = serializeDevice(device) as any;
+      expect(result.apiKey).toBeUndefined();
+      expect(result.pairingTokenHash).toBeUndefined();
+      expect(result.credentials).toEqual([{ credentialId: 'cred-1', kind: 'device' }]);
+    });
   });
 
   describe('serializeDevices', () => {

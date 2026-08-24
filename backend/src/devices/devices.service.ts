@@ -17,6 +17,12 @@ import { Prisma } from '@prisma/client';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { serializeDevice, serializeDevices, isNewerVersion } from './entities/device.entity';
 import { FirmwareService } from '../firmware/firmware.service';
+import { DeviceConfigurationService } from '../device-platform/device-configuration.service';
+import {
+  BUILTIN_POLICY_IDS,
+  BUILTIN_PROFILE_IDS,
+} from '../device-platform/device-configuration.catalog';
+import type { DeviceCapabilitiesOverride } from '../device-platform/device-configuration';
 
 @Injectable()
 export class DevicesService {
@@ -27,6 +33,7 @@ export class DevicesService {
     private eventsService: EventsService,
     private firmwareService: FirmwareService,
     private driverRegistry: DeviceDriverRegistry,
+    private deviceConfiguration: DeviceConfigurationService,
   ) {}
 
   /**
@@ -34,9 +41,42 @@ export class DevicesService {
    * If MAC was previously blocked (deleted device), unblock it first
    */
   async create(createDeviceDto: CreateDeviceDto) {
-    const driver = this.driverRegistry.get(createDeviceDto.deviceType ?? DEVICE_TYPES.TRMNL);
-    const width = createDeviceDto.width ?? (driver.type === DEVICE_TYPES.WEB_DISPLAY ? 1920 : 800);
-    const height = createDeviceDto.height ?? (driver.type === DEVICE_TYPES.WEB_DISPLAY ? 1080 : 480);
+    const requestedDeviceType = createDeviceDto.deviceType ??
+      (createDeviceDto.profileId === BUILTIN_PROFILE_IDS.BROWSER_HD ||
+      createDeviceDto.profileId === BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE
+        ? DEVICE_TYPES.WEB_DISPLAY
+        : DEVICE_TYPES.TRMNL);
+    const profileId = createDeviceDto.profileId ??
+      (requestedDeviceType === DEVICE_TYPES.WEB_DISPLAY
+        ? BUILTIN_PROFILE_IDS.BROWSER_HD
+        : BUILTIN_PROFILE_IDS.TRMNL_7_5_MONO);
+    const profileDeviceType = this.legacyDeviceTypeForProfile(profileId);
+    if (createDeviceDto.deviceType && createDeviceDto.deviceType !== profileDeviceType) {
+      throw new BadRequestException('deviceType conflicts with the selected device profile');
+    }
+    const driver = this.driverRegistry.get(profileDeviceType);
+    const deliveryPolicyId = createDeviceDto.deliveryPolicyId ??
+      (profileId === BUILTIN_PROFILE_IDS.BROWSER_HD
+        ? BUILTIN_POLICY_IDS.CONNECTED_BROWSER
+        : profileId === BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE
+          ? BUILTIN_POLICY_IDS.CONNECTED_EMBEDDED
+          : BUILTIN_POLICY_IDS.SLEEPY);
+    const compatibilityOverride = createDeviceDto.capabilitiesOverride ??
+      (profileDeviceType === DEVICE_TYPES.TRMNL
+        ? { display: { renderFormats: ['png'], mimeTypes: ['image/png'] } }
+        : undefined);
+    const requestedOverride = this.withDisplayDimensions(
+      compatibilityOverride,
+      createDeviceDto.width,
+      createDeviceDto.height,
+    );
+    const resolved = await this.deviceConfiguration.resolve(
+      profileId,
+      deliveryPolicyId,
+      requestedOverride,
+    );
+    const width = resolved.capabilities.display.width;
+    const height = resolved.capabilities.display.height;
 
     if (driver.type === DEVICE_TYPES.TRMNL) {
       if (!createDeviceDto.macAddress) {
@@ -66,11 +106,14 @@ export class DevicesService {
       data: {
         name: createDeviceDto.name,
         deviceType: driver.type,
-        transport: driver.transport,
+        transport: resolved.capabilities.transport.modes.includes('websocket') ? 'websocket' : 'pull',
         externalId,
-        capabilities: driver.getDefaultCapabilities(width, height) as unknown as Prisma.InputJsonValue,
+        capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
         configuration: {},
         telemetry: {},
+        profileId,
+        capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
+        deliveryPolicyId,
         macAddress: createDeviceDto.macAddress ?? null,
         apiKey,
         pairingTokenHash: pairingToken ? hashToken(pairingToken) : null,
@@ -80,7 +123,8 @@ export class DevicesService {
         height,
       },
       include: {
-
+        profile: true,
+        deliveryPolicy: true,
         playlist: {
           include: {
             items: {
@@ -125,6 +169,8 @@ export class DevicesService {
               name: true,
             },
           },
+          profile: true,
+          deliveryPolicy: true,
         },
         orderBy: {
           createdAt: 'desc',
@@ -146,6 +192,8 @@ export class DevicesService {
       where: { id },
       include: {
         model: true,
+        profile: true,
+        deliveryPolicy: true,
         playlist: {
           include: {
             items: {
@@ -230,6 +278,27 @@ export class DevicesService {
       };
     }
 
+    const profileId = updateDeviceDto.profileId ?? device.profileId;
+    const deliveryPolicyId = updateDeviceDto.deliveryPolicyId ?? device.deliveryPolicyId;
+    if (
+      updateDeviceDto.profileId &&
+      this.legacyDeviceTypeForProfile(profileId) !== this.legacyDeviceTypeForProfile(device.profileId)
+    ) {
+      throw new BadRequestException(
+        'A device profile cannot switch between legacy transport families in place',
+      );
+    }
+    const requestedOverride = this.withDisplayDimensions(
+      updateDeviceDto.capabilitiesOverride ?? device.capabilitiesOverride,
+      modelDimensions.width ?? updateDeviceDto.width,
+      modelDimensions.height ?? updateDeviceDto.height,
+    );
+    const resolved = await this.deviceConfiguration.resolve(
+      profileId,
+      deliveryPolicyId,
+      requestedOverride,
+    );
+
     const updatedDevice = await this.prisma.device.update({
       where: { id },
       data: {
@@ -239,8 +308,13 @@ export class DevicesService {
         playlistId: updateDeviceDto.playlistId,
         modelId: updateDeviceDto.modelId,
         isActive: updateDeviceDto.isActive,
-        width: modelDimensions.width ?? updateDeviceDto.width,
-        height: modelDimensions.height ?? updateDeviceDto.height,
+        profileId,
+        deliveryPolicyId,
+        capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
+        capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
+        transport: resolved.capabilities.transport.modes.includes('websocket') ? 'websocket' : 'pull',
+        width: resolved.capabilities.display.width,
+        height: resolved.capabilities.display.height,
         // Quiet hours / sleep schedule (undefined = no change, null = clear/disable)
         sleepStartAt: updateDeviceDto.sleepStartAt,
         sleepStopAt: updateDeviceDto.sleepStopAt,
@@ -249,7 +323,8 @@ export class DevicesService {
         ...((playlistChanging || modelChanging) && { refreshPending: true }),
       },
       include: {
-
+        profile: true,
+        deliveryPolicy: true,
         playlist: {
           include: {
             items: {
@@ -418,7 +493,7 @@ export class DevicesService {
   async regeneratePairingToken(id: number) {
     const device = await this.prisma.device.findUnique({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (device.deviceType !== DEVICE_TYPES.WEB_DISPLAY || !device.externalId) {
+    if (device.profileId !== BUILTIN_PROFILE_IDS.BROWSER_HD || !device.externalId) {
       throw new BadRequestException('Pairing links are only available for web displays');
     }
 
@@ -444,6 +519,32 @@ export class DevicesService {
    */
   private generateApiKey(): string {
     return generateToken(32);
+  }
+
+  private withDisplayDimensions(
+    override: unknown,
+    width?: number,
+    height?: number,
+  ): DeviceCapabilitiesOverride | null {
+    const normalized = this.deviceConfiguration.normalizeOverride(override);
+    if (width === undefined && height === undefined) return normalized;
+    return {
+      ...normalized,
+      display: {
+        ...normalized?.display,
+        ...(width !== undefined ? { width } : {}),
+        ...(height !== undefined ? { height } : {}),
+      },
+    };
+  }
+
+  private legacyDeviceTypeForProfile(
+    profileId: string,
+  ): (typeof DEVICE_TYPES)[keyof typeof DEVICE_TYPES] {
+    return profileId === BUILTIN_PROFILE_IDS.BROWSER_HD ||
+      profileId === BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE
+      ? DEVICE_TYPES.WEB_DISPLAY
+      : DEVICE_TYPES.TRMNL;
   }
 
   /**

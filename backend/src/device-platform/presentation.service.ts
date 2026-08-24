@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresentationManifest } from './presentation.types';
+import { resolveDeviceConfiguration } from './device-configuration';
 
 @Injectable()
 export class PresentationService {
@@ -10,6 +11,8 @@ export class PresentationService {
     const device = await this.prisma.device.findUnique({
       where: { id: deviceId },
       include: {
+        profile: true,
+        deliveryPolicy: true,
         playlist: {
           include: {
             items: {
@@ -64,6 +67,13 @@ export class PresentationService {
     });
 
     const content = this.contentFor(item, device, updated.presentationRevision);
+    const viewport = device.profile && device.deliveryPolicy
+      ? resolveDeviceConfiguration(
+          device.profile,
+          device.deliveryPolicy,
+          device.capabilitiesOverride,
+        ).capabilities.display
+      : { width: device.width || 1920, height: device.height || 1080 };
     return {
       deviceId: device.id,
       externalId: device.externalId,
@@ -72,8 +82,8 @@ export class PresentationService {
       nextTransitionAt: nextTransitionAt?.toISOString() ?? null,
       content,
       viewport: {
-        width: device.width || 1920,
-        height: device.height || 1080,
+        width: viewport.width,
+        height: viewport.height,
       },
     };
   }

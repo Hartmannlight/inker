@@ -122,7 +122,14 @@ describe("Prisma migration baseline", () => {
       expect(migrations.map(({ migration_name }) => migration_name)).toEqual([
         "20260824000000_inker_0_6_0_baseline",
         "20260824001000_device_platform_schema",
+        "20260824002000_normalize_device_profiles_credentials",
       ]);
+      expect(
+        database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,
+      ).toBe(3);
+      expect(
+        database.query<{ count: number }, []>("SELECT count(*) AS count FROM delivery_policies").get()?.count,
+      ).toBe(4);
       expect(
         database
           .query<{ journal_mode: string }, []>("PRAGMA journal_mode")
@@ -157,10 +164,12 @@ describe("Prisma migration baseline", () => {
             device_type: string;
             transport: string;
             mac_address: string;
+            profile_id: string;
+            delivery_policy_id: string;
           },
           []
         >(
-          "SELECT label, device_type, transport, mac_address FROM devices WHERE id = 1",
+          "SELECT label, device_type, transport, mac_address, profile_id, delivery_policy_id FROM devices WHERE id = 1",
         )
         .get();
       expect(device).toEqual({
@@ -168,7 +177,14 @@ describe("Prisma migration baseline", () => {
         device_type: "trmnl",
         transport: "pull",
         mac_address: "02:00:00:00:00:01",
+        profile_id: "trmnl-byod-7.5-mono",
+        delivery_policy_id: "reference-sleepy",
       });
+      expect(
+        database.query<{ format: string; bit_depth: number }, []>(
+          "SELECT json_extract(capabilities_override, '$.display.renderFormats[0]') AS format, json_extract(capabilities_override, '$.display.bitDepth') AS bit_depth FROM devices WHERE id = 1",
+        ).get(),
+      ).toEqual({ format: "png", bit_depth: 1 });
       expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       database.close();
@@ -207,11 +223,19 @@ describe("Prisma migration baseline", () => {
       expect(
         database
           .query<
-            { token_hash: string },
+            { credential_id: string; token_hash: string },
             []
-          >("SELECT token_hash FROM device_credentials")
-          .get()?.token_hash,
-      ).toBe("fixture-sha256-hash-not-a-credential");
+          >("SELECT credential_id, token_hash FROM device_credentials")
+          .get(),
+      ).toEqual({
+        credential_id: "legacy-00000001",
+        token_hash: "fixture-sha256-hash-not-a-credential",
+      });
+      expect(
+        database.query<{ profile_id: string; width: number; height: number }, []>(
+          "SELECT profile_id, json_extract(capabilities_override, '$.display.width') AS width, json_extract(capabilities_override, '$.display.height') AS height FROM devices WHERE id = 2",
+        ).get(),
+      ).toEqual({ profile_id: "browser-hd-1920x1080", width: 1280, height: 720 });
     } finally {
       database.close();
     }
@@ -224,7 +248,7 @@ describe("Prisma migration baseline", () => {
     const brokenMigration = join(
       isolatedPrisma,
       "migrations",
-      "20260824002000_broken_test",
+      "20260824003000_broken_test",
     );
     mkdirSync(brokenMigration);
     writeFileSync(

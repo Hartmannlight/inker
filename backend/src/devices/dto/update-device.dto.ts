@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, IsBoolean, Min, Matches, ValidateIf, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, Min, Matches, ValidateIf, MaxLength, IsObject } from 'class-validator';
 
 export class UpdateDeviceDto {
   @ApiPropertyOptional({
@@ -10,6 +10,26 @@ export class UpdateDeviceDto {
   @IsString()
   @MaxLength(255)
   name?: string;
+
+  @ApiPropertyOptional({ example: 'trmnl-byod-7.5-mono' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  profileId?: string;
+
+  @ApiPropertyOptional({ example: 'reference-sleepy' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  deliveryPolicyId?: string;
+
+  @ApiPropertyOptional({
+    example: { energy: { source: 'mains', canSleep: false, telemetry: 'standard' } },
+    description: 'Partial capability override. Identity and protocol version cannot be overridden.',
+  })
+  @IsOptional()
+  @IsObject()
+  capabilitiesOverride?: Record<string, unknown>;
 
   @ApiPropertyOptional({
     example: 'AA:BB:CC:DD:EE:FF',
@@ -61,7 +81,7 @@ export class UpdateDeviceDto {
 
   @ApiPropertyOptional({
     example: 800,
-    description: 'Custom screen width in pixels (used instead of model dimensions)',
+    description: 'Deprecated compatibility input; stored as a display capability override.',
   })
   @IsOptional()
   @IsInt()
@@ -70,7 +90,7 @@ export class UpdateDeviceDto {
 
   @ApiPropertyOptional({
     example: 480,
-    description: 'Custom screen height in pixels (used instead of model dimensions)',
+    description: 'Deprecated compatibility input; stored as a display capability override.',
   })
   @IsOptional()
   @IsInt()

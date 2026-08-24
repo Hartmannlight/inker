@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, Min, Matches, MaxLength, MinLength, IsIn, ValidateIf } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Matches, MaxLength, MinLength, IsIn, ValidateIf, IsObject } from 'class-validator';
 
 export class CreateDeviceDto {
   @ApiProperty({
@@ -33,6 +33,32 @@ export class CreateDeviceDto {
   deviceType?: 'trmnl' | 'web-display';
 
   @ApiPropertyOptional({
+    example: 'trmnl-byod-7.5-mono',
+    description: 'Versioned device profile ID. Defaults from the legacy deviceType when omitted.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  profileId?: string;
+
+  @ApiPropertyOptional({
+    example: 'reference-sleepy',
+    description: 'Versioned delivery policy ID. Defaults from the selected profile/device type when omitted.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  deliveryPolicyId?: string;
+
+  @ApiPropertyOptional({
+    example: { display: { width: 1280, height: 720 } },
+    description: 'Partial capability override. Identity and protocol version cannot be overridden.',
+  })
+  @IsOptional()
+  @IsObject()
+  capabilitiesOverride?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
     example: 1,
     description: 'Playlist ID to assign',
   })
@@ -42,7 +68,7 @@ export class CreateDeviceDto {
 
   @ApiPropertyOptional({
     example: 800,
-    description: 'Custom screen width in pixels (used instead of model dimensions)',
+    description: 'Deprecated compatibility input; stored as a display capability override.',
   })
   @IsOptional()
   @IsInt()
@@ -51,7 +77,7 @@ export class CreateDeviceDto {
 
   @ApiPropertyOptional({
     example: 480,
-    description: 'Custom screen height in pixels (used instead of model dimensions)',
+    description: 'Deprecated compatibility input; stored as a display capability override.',
   })
   @IsOptional()
   @IsInt()

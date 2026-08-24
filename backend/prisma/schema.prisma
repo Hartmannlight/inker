@@ -21,6 +21,9 @@ model Device {
   capabilities         Json?
   configuration        Json?
   telemetry            Json?
+  profileId            String    @map("profile_id")
+  capabilitiesOverride Json?     @map("capabilities_override")
+  deliveryPolicyId     String    @map("delivery_policy_id")
   macAddress           String?   @unique @map("mac_address")
   apiKey               String?   @unique @map("api_key")
   pairingTokenHash     String?   @unique @map("pairing_token_hash")
@@ -54,20 +57,56 @@ model Device {
   logs              DeviceLog[]
   credentials       DeviceCredential[]
   screenAssignments DeviceScreenAssignment[]
+  profile           DeviceProfile            @relation(fields: [profileId], references: [profileId])
+  deliveryPolicy    DeliveryPolicy           @relation(fields: [deliveryPolicyId], references: [policyId])
 
   @@map("devices")
+}
+
+// Versioned profile contract plus the complete default capability view used as
+// the base for per-device overrides. Profile rows are shared and immutable by
+// identity; changing a built-in definition requires a new profileId.
+model DeviceProfile {
+  profileId           String   @id @map("profile_id")
+  protocolVersion     String   @map("protocol_version")
+  label               String
+  definition          Json
+  defaultCapabilities Json     @map("default_capabilities")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  devices Device[]
+
+  @@map("device_profiles")
+}
+
+// Delivery policy is persisted separately from profiles because power source
+// and operating mode may differ for devices with the same physical profile.
+model DeliveryPolicy {
+  policyId        String   @id @map("policy_id")
+  protocolVersion String   @map("protocol_version")
+  mode            String
+  definition      Json
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  devices Device[]
+
+  @@map("delivery_policies")
 }
 
 // Long-lived device credentials are stored as hashes so a database backup never
 // contains a usable browser-display token. Multiple credentials allow rotation.
 model DeviceCredential {
-  id         Int       @id @default(autoincrement())
-  deviceId   Int       @map("device_id")
-  kind       String    @default("device")
-  tokenHash  String    @unique @map("token_hash")
-  lastUsedAt DateTime? @map("last_used_at")
-  revokedAt  DateTime? @map("revoked_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id           Int       @id @default(autoincrement())
+  credentialId String    @unique @default(cuid()) @map("credential_id")
+  deviceId     Int       @map("device_id")
+  kind         String    @default("device")
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime? @map("expires_at")
+  lastUsedAt   DateTime? @map("last_used_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
 

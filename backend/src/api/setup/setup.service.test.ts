@@ -27,6 +27,16 @@ describe('SetupService', () => {
           }),
         }),
       } as any,
+      {
+        resolve: async (profileId: string, deliveryPolicyId: string, override: any) => ({
+          profile: { profileId },
+          deliveryPolicy: { policyId: deliveryPolicyId },
+          capabilitiesOverride: override,
+          capabilities: {
+            display: { width: override.display.width, height: override.display.height },
+          },
+        }),
+      } as any,
     );
   });
 

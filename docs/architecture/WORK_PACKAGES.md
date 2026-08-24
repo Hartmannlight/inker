@@ -61,7 +61,7 @@ müssen.
 | [x] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
 | [x] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
 | [x] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
-| [ ] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
+| [x] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
 | [ ] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
 | [ ] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
 | [ ] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
@@ -548,14 +548,14 @@ doppelt und verwendet freie Strings für Typ und Transport.
 
 **Aufgaben:**
 
-- [ ] Entwirf `DeviceProfile`, `Device`, `DeviceCredential` und DeliveryPolicy
+- [x] Entwirf `DeviceProfile`, `Device`, `DeviceCredential` und DeliveryPolicy
   entsprechend den Contracts.
-- [ ] Definiere klare Defaults und geprüfte Zustände.
-- [ ] Lege fest, welche Felder aus dem Profil stammen und wie Overrides funktionieren.
-- [ ] Migriere bestehende TRMNL- und Web-Display-Daten verlustfrei.
-- [ ] Aktualisiere Seed, DTOs, Serialisierung und Testmocks.
-- [ ] Entferne oder depreziere widersprüchliche Legacyfelder kontrolliert.
-- [ ] Ergänze Roundtrip- und Migrationsfälle für alle Zielprofile.
+- [x] Definiere klare Defaults und geprüfte Zustände.
+- [x] Lege fest, welche Felder aus dem Profil stammen und wie Overrides funktionieren.
+- [x] Migriere bestehende TRMNL- und Web-Display-Daten verlustfrei.
+- [x] Aktualisiere Seed, DTOs, Serialisierung und Testmocks.
+- [x] Entferne oder depreziere widersprüchliche Legacyfelder kontrolliert.
+- [x] Ergänze Roundtrip- und Migrationsfälle für alle Zielprofile.
 
 **Abnahme:** Aus jedem Gerät entsteht genau eine effektive Capability-Sicht; Profil
 und Override können nicht still auseinanderlaufen.
@@ -563,6 +563,76 @@ und Override können nicht still auseinanderlaufen.
 **Validierung:** Prisma-, Service-, Serialisierungs- und Migrationstests.
 
 **Handoff:** Neues Schema, Legacy-Kompatibilität und spätere Cleanup-Felder notieren.
+
+### Abschluss WP-06
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Die neue Vorwärtsmigration
+  `20260824002000_normalize_device_profiles_credentials` persistiert drei
+  versionierte `DeviceProfile`-Definitionen und vier getrennte
+  `DeliveryPolicy`-Definitionen gemäß `@inker/contracts`. Jedes `Device`
+  referenziert verpflichtend genau ein Profil und eine Policy und speichert nur
+  einen geprüften partiellen `capabilitiesOverride`; die effektive
+  `DeviceCapabilities`-Sicht entsteht an einer gemeinsamen Laufzeitgrenze aus
+  Profildefault und Override. Identitäts-/Protokollfelder und unbekannte
+  Legacy-Keys sind nicht überschreibbar, inkompatible Profile, Policies,
+  Energiequellen und Transporte werden abgelehnt. `DeviceCredential` besitzt
+  zusätzlich eine stabile `credentialId` und ein optionales Ablaufdatum; Token
+  bleiben ausschließlich gehasht und Hashes werden nicht serialisiert.
+- Legacy-Kompatibilität: Bestehende TRMNL-Datensätze werden auf
+  `trmnl-byod-7.5-mono`/`reference-sleepy`, Web-Displays auf
+  `browser-hd-1920x1080`/`reference-connected-browser` abgebildet. Auflösung,
+  Farbraum, Bit-Tiefe und PNG-/BMP-Format vorhandener `Model`-Zuordnungen werden
+  als explizite Display-Overrides übernommen; Browser-Viewport-Overrides und
+  bestehende gehashte Web-Display-Credentials bleiben erhalten. Die alte 0.6.0-
+  Datenbank, der frühere Device-Platform-`db push`-Stand, eine Neuinstallation und
+  ein Neustart erreichen dasselbe Prisma-Datamodel. Die Migrationen
+  `20260824000000_inker_0_6_0_baseline` und
+  `20260824001000_device_platform_schema` wurden nicht verändert.
+- Geänderte Kernpfade: `backend/prisma/schema.prisma`,
+  `backend/prisma/migrations/20260824002000_normalize_device_profiles_credentials/`,
+  `backend/prisma/seed.ts`, `backend/src/device-platform/device-configuration*`,
+  `backend/src/devices/`, `backend/src/api/setup/`,
+  `backend/test/migrations.integration.ts`, `backend/scripts/migrate-database.ts`
+  und `docs/architecture/WORK_PACKAGES.md`.
+- Ausgeführte Tests: `prisma validate`; Backend-Typecheck; gezielter ESLint-Lauf
+  über alle geänderten WP-06-Produktionsdateien; 454 Backendtests in 37 Dateien;
+  neun Device-Konfigurations-/Roundtripfälle für Batterie-TRMNL, Netz-TRMNL,
+  ESP32-Touch und Pi-Browser einschließlich inkompatibler Zustände und genau einer
+  serialisierten effektiven Capability-Sicht; vier Migrationstests für
+  Neuinstallation/Neustart, 0.6.0-Upgrade, Übernahme des bisherigen
+  Device-Platform-Schemas und fehlerhafte Migration, jeweils einschließlich
+  Datamodel- und Fremdschlüsselprüfung; zweimaliger Seed-Lauf gegen eine neue
+  Datenbank mit anschließend bestätigten drei Profilen und vier Policies;
+  Backend-Build; Contracts-Typecheck, 23 Contracttests und ESM-/CJS-Build;
+  Frontend-Typecheck und -Build; `git diff --check`. Alle paketbezogenen Prüfungen
+  waren grün.
+- Nicht ausführbare Tests und Grund: keine. Der repositoryweite Befehl
+  `bun run lint` ist weiterhin kein grünes Baseline-Gate: Die bestehende
+  ESLint-Projektkonfiguration schließt Testdateien aus dem TypeScript-Projekt aus
+  und meldet zusätzlich bereits vorhandene Fehler in nicht von WP-06 geänderten
+  Produktionsdateien. Der auf alle geänderten WP-06-Produktionsdateien begrenzte
+  ESLint-Lauf war grün.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: Die Spalten `device_type`, `transport`, `capabilities`,
+  `configuration`, `width`, `height` und das TRMNL-`api_key` bleiben kontrolliert
+  deprecated und werden für bestehende Protokoll-/UI-Pfade gespiegelt; fachlich
+  maßgeblich sind Profil, Policy und Override. `Model` bleibt bis zur Adapter-
+  Trennung die Legacy-Quelle konkreter TRMNL-Renderformate. Bestehende TRMNL-
+  API-Keys bleiben zur Firmware-Kompatibilität im bisherigen Klartext-Lookup;
+  neue Browser-Credentials liegen nur gehasht in `DeviceCredential`. Das ESP32-
+  Profil bleibt gemäß ADR-008 eine unverifizierte Referenzannahme. Die bereits in
+  WP-05 dokumentierte Prisma-7-Warnung zur `package.json#prisma`-Konfiguration
+  bleibt bestehen.
+- Relevante Hinweise für WP-09/WP-13: Pairing und Geräteauthentisierung sollen
+  `Device.profileId`, die stabile `DeviceCredential.credentialId` und gehashte
+  Tokens verwenden; Credential-Hashes dürfen keine DTO-Grenze überschreiten.
+  TransportAdapter und DeliveryPolicy müssen die effektive Capability-Sicht aus
+  `device-configuration.ts` nutzen. WP-13 kann danach die gespiegelt gehaltenen
+  Legacyfelder sowie die verbleibende `Model`-/Profil-Überlappung gezielt abbauen.
+- Git-Stand/Commit: Bestandteil dieses WP-06-Abschlusscommits auf Branch
+  `codex/device-platform-spike`, auf Basis von `6aa1005`. Es wurde kein Push
+  erstellt.
 
 ## WP-07 – Publication-, Outbox- und Zustandsmodelle persistieren
 

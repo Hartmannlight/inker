@@ -1,4 +1,8 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
+import {
+  BUILTIN_DELIVERY_POLICIES,
+  BUILTIN_DEVICE_PROFILES,
+} from '../src/device-platform/device-configuration.catalog';
 
 const prisma = new PrismaClient();
 
@@ -272,6 +276,44 @@ const WIDGET_TEMPLATES = [
  */
 async function main() {
   console.log('🌱 Starting database seed...');
+
+  for (const { profile, defaultCapabilities } of BUILTIN_DEVICE_PROFILES) {
+    await prisma.deviceProfile.upsert({
+      where: { profileId: profile.profileId },
+      update: {
+        protocolVersion: profile.protocolVersion,
+        label: profile.label,
+        definition: profile as unknown as Prisma.InputJsonValue,
+        defaultCapabilities: defaultCapabilities as unknown as Prisma.InputJsonValue,
+      },
+      create: {
+        profileId: profile.profileId,
+        protocolVersion: profile.protocolVersion,
+        label: profile.label,
+        definition: profile as unknown as Prisma.InputJsonValue,
+        defaultCapabilities: defaultCapabilities as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  for (const policy of BUILTIN_DELIVERY_POLICIES) {
+    await prisma.deliveryPolicy.upsert({
+      where: { policyId: policy.policyId },
+      update: {
+        protocolVersion: policy.protocolVersion,
+        mode: policy.mode,
+        definition: policy as unknown as Prisma.InputJsonValue,
+      },
+      create: {
+        policyId: policy.policyId,
+        protocolVersion: policy.protocolVersion,
+        mode: policy.mode,
+        definition: policy as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  console.log(`✅ Seeded ${BUILTIN_DEVICE_PROFILES.length} device profiles and ${BUILTIN_DELIVERY_POLICIES.length} delivery policies`);
 
   // Create device models
   const models = [

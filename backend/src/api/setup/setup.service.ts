@@ -9,6 +9,11 @@ import { SetupScreenService } from './setup-screen.service';
 import { DeviceDriverRegistry } from '../../devices/drivers/device-driver.registry';
 import { DEVICE_TYPES } from '../../devices/drivers/device-driver';
 import { Prisma } from '@prisma/client';
+import { DeviceConfigurationService } from '../../device-platform/device-configuration.service';
+import {
+  BUILTIN_POLICY_IDS,
+  BUILTIN_PROFILE_IDS,
+} from '../../device-platform/device-configuration.catalog';
 
 /**
  * Known device model dimensions for /api/setup provisioning.
@@ -53,6 +58,7 @@ export class SetupService {
     private prisma: PrismaService,
     private setupScreenService: SetupScreenService,
     private deviceDrivers: DeviceDriverRegistry,
+    private deviceConfiguration: DeviceConfigurationService,
   ) {}
 
   /**
@@ -136,6 +142,20 @@ export class SetupService {
     // it to an Inker model (resolution + colour depth).
     const resolved = await this.resolveDeviceModel(modelName, reportedWidth, reportedHeight);
     const driver = this.deviceDrivers.get(DEVICE_TYPES.TRMNL);
+    const configured = await this.deviceConfiguration.resolve(
+      BUILTIN_PROFILE_IDS.TRMNL_7_5_MONO,
+      BUILTIN_POLICY_IDS.SLEEPY,
+      {
+        display: {
+          width: resolved.width,
+          height: resolved.height,
+          colorSpace: resolved.colorSpace,
+          bitDepth: resolved.bitDepth,
+          renderFormats: resolved.renderFormats,
+          mimeTypes: resolved.mimeTypes,
+        },
+      },
+    );
     this.logger.log(
       `Provisioning ${macAddress}: model="${modelName ?? 'none'}" reported=${reportedWidth ?? '?'}x${reportedHeight ?? '?'} ` +
       `→ ${resolved.width}x${resolved.height}${resolved.modelId ? ` (modelId ${resolved.modelId})` : ''}`,
@@ -149,9 +169,12 @@ export class SetupService {
         deviceType: driver.type,
         transport: driver.transport,
         externalId: macAddress,
-        capabilities: driver.getDefaultCapabilities(resolved.width, resolved.height) as unknown as Prisma.InputJsonValue,
+        capabilities: configured.capabilities as unknown as Prisma.InputJsonValue,
         configuration: {},
         telemetry: {},
+        profileId: configured.profile.profileId,
+        capabilitiesOverride: configured.capabilitiesOverride as unknown as Prisma.InputJsonValue,
+        deliveryPolicyId: configured.deliveryPolicy.policyId,
         macAddress,
         apiKey,
         firmwareVersion,
@@ -187,7 +210,15 @@ export class SetupService {
     modelCode?: string,
     reportedWidth?: number,
     reportedHeight?: number,
-  ): Promise<{ modelId: number | null; width: number; height: number }> {
+  ): Promise<{
+    modelId: number | null;
+    width: number;
+    height: number;
+    colorSpace: 'monochrome' | 'grayscale';
+    bitDepth: number;
+    renderFormats: Array<'png' | 'jpeg' | 'bmp1'>;
+    mimeTypes: string[];
+  }> {
     let modelName: string | undefined;
     if (modelCode) {
       const lc = modelCode.toLowerCase();
@@ -202,10 +233,17 @@ export class SetupService {
     const validW = reportedWidth && reportedWidth > 0 ? reportedWidth : undefined;
     const validH = reportedHeight && reportedHeight > 0 ? reportedHeight : undefined;
 
+    const mimeType = modelRow?.mimeType ?? (modelName?.endsWith('_bmp') ? 'image/bmp' : 'image/png');
+    const renderFormat = mimeType === 'image/bmp' ? 'bmp1' : mimeType === 'image/jpeg' ? 'jpeg' : 'png';
+    const bitDepth = modelRow?.bitDepth ?? 1;
     return {
       modelId: modelRow?.id ?? null,
       width: validW ?? modelRow?.width ?? dimFromMap?.width ?? MODEL_DIMENSIONS.og_png.width,
       height: validH ?? modelRow?.height ?? dimFromMap?.height ?? MODEL_DIMENSIONS.og_png.height,
+      colorSpace: (modelRow?.colors ?? 2) > 2 ? 'grayscale' : 'monochrome',
+      bitDepth,
+      renderFormats: [renderFormat],
+      mimeTypes: [mimeType],
     };
   }
 

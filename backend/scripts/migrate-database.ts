@@ -1,5 +1,13 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -201,11 +209,21 @@ function configureSQLite(databasePath: string): void {
   }
 }
 
+function ensureSQLiteFile(databasePath: string): void {
+  if (existsSync(databasePath)) return;
+  mkdirSync(dirname(databasePath), { recursive: true });
+  closeSync(openSync(databasePath, "a"));
+}
+
 export async function migrateDatabase(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
   const databasePath = databasePathFromUrl(databaseUrl);
+  // Prisma's Windows schema engine cannot reliably create a missing SQLite
+  // file in every supported path. Creating the empty file is equivalent to
+  // SQLite's normal first connection and keeps fresh installs deterministic.
+  ensureSQLiteFile(databasePath);
   const tables = readApplicationTables(databasePath);
 
   if (tables.length > 0 && !tables.includes("_prisma_migrations")) {

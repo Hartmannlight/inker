@@ -28,6 +28,22 @@ describe('DevicesService', () => {
       }),
     }),
   };
+  const mockDeviceConfiguration = {
+    normalizeOverride: (value: any) => value ?? null,
+    resolve: async (profileId: string, deliveryPolicyId: string, override: any) => ({
+      profile: { profileId },
+      deliveryPolicy: { policyId: deliveryPolicyId },
+      capabilitiesOverride: override ?? null,
+      capabilities: {
+        protocolVersion: '1.0',
+        profileId,
+        display: { width: override?.display?.width ?? 800, height: override?.display?.height ?? 480 },
+        transport: { modes: profileId.startsWith('browser-') ? ['websocket'] : ['http-pull'] },
+        energy: { source: 'battery' },
+        interaction: { inputs: [] },
+      },
+    }),
+  };
 
   // Helper to build a device-like object that serializeDevice can process
   const makeDevice = (overrides: Record<string, any> = {}) => ({
@@ -38,6 +54,10 @@ describe('DevicesService', () => {
     isActive: true,
     lastSeenAt: new Date(),
     refreshRate: 900,
+    deviceType: 'trmnl',
+    profileId: 'trmnl-byod-7.5-mono',
+    deliveryPolicyId: 'reference-sleepy',
+    capabilitiesOverride: null,
     model: { name: 'og_png' },
     playlist: null,
     ...overrides,
@@ -57,12 +77,22 @@ describe('DevicesService', () => {
       mockEventsService as any,
       mockFirmwareService as any,
       mockDriverRegistry as any,
+      mockDeviceConfiguration as any,
     );
   });
 
   // ─── create ─────────────────────────────────────────────────────────
 
   describe('create()', () => {
+    it('rejects a legacy deviceType that conflicts with the selected profile', async () => {
+      await expect(service.create({
+        name: 'Conflicting',
+        deviceType: 'trmnl',
+        profileId: 'browser-hd-1920x1080',
+        macAddress: 'AA:BB:CC:DD:EE:FF',
+      } as any)).rejects.toThrow('deviceType conflicts with the selected device profile');
+    });
+
     it('should throw BadRequestException when MAC already exists', async () => {
       mockPrisma.device.findUnique.mockResolvedValue(makeDevice());
 
@@ -98,6 +128,8 @@ describe('DevicesService', () => {
       } as any);
 
       expect(mockPrisma.device.create.calls).toHaveLength(1);
+      expect(mockPrisma.device.create.calls[0][0].data.profileId).toBe('trmnl-byod-7.5-mono');
+      expect(mockPrisma.device.create.calls[0][0].data.deliveryPolicyId).toBe('reference-sleepy');
       // serializeDevice adds status and isOnline
       expect(result).toHaveProperty('status');
       expect(result).toHaveProperty('isOnline');
