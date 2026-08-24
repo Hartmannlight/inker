@@ -63,7 +63,7 @@ müssen.
 | [x] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
 | [x] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
 | [x] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
-| [ ] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
+| [x] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
 | [ ] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
 | [ ] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
 | [ ] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
@@ -750,12 +750,12 @@ bearbeitet werden.
 
 **Aufgaben:**
 
-- [ ] Schreibe zuerst Tests für neues Pairing trotz vorhandenem Credential.
-- [ ] Gib einem expliziten Pairing-Token Vorrang vor lokalem Credential.
-- [ ] Ersetze Storage erst nach erfolgreichem Pairing atomar.
-- [ ] Entferne widerrufene Credentials bei eindeutiger Auth-Ablehnung.
-- [ ] Verhindere Endlosschleifen und versehentliches Löschen bei Netzfehlern.
-- [ ] Bereinige Pairing-Parameter aus URL und Browserhistorie.
+- [x] Schreibe zuerst Tests für neues Pairing trotz vorhandenem Credential.
+- [x] Gib einem expliziten Pairing-Token Vorrang vor lokalem Credential.
+- [x] Ersetze Storage erst nach erfolgreichem Pairing atomar.
+- [x] Entferne widerrufene Credentials bei eindeutiger Auth-Ablehnung.
+- [x] Verhindere Endlosschleifen und versehentliches Löschen bei Netzfehlern.
+- [x] Bereinige Pairing-Parameter aus URL und Browserhistorie.
 
 **Abnahme:** Rotation, abgelaufener Link, Netzfehler und `4401` besitzen getestete,
 verständliche Zustände.
@@ -763,6 +763,60 @@ verständliche Zustände.
 **Validierung:** Frontend-Komponenten-/Hook-Tests und manueller Browser-Smoke-Test.
 
 **Handoff:** Storageformat und Migrationsverhalten für WP-10 notieren.
+
+### Abschluss WP-08
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Ein expliziter bestehender `?pair=`-Token hat nun unabhängig von einem
+  vorhandenen Browser-Credential Vorrang. Während des Pairings wird das alte
+  Credential weder für WebSocket-Authentisierung verwendet noch vorzeitig
+  überschrieben. Erst eine erfolgreiche Pairing-Antwort ersetzt den Storagewert
+  und startet die Verbindung mit dem neuen Credential. Abgelaufene Links und
+  Netzfehler zeigen einen stabilen Fehlerzustand, behalten aber das zuvor gültige
+  Credential. Nur die eindeutige WebSocket-Ablehnung `4401` beendet den
+  Reconnectpfad und entfernt wertgenau das abgelehnte Credential; ein inzwischen
+  anderweitig rotierter Storagewert wird nicht gelöscht. Der Parameter `pair`
+  wird vor dem Request per `history.replaceState` aus dem aktuellen
+  History-Eintrag entfernt, während andere Query-Parameter und der Hash erhalten
+  bleiben.
+- Geänderte Kernpfade: `frontend/src/pages/display/WebDisplay.tsx`,
+  `frontend/src/pages/display/WebDisplay.test.tsx` und
+  `docs/architecture/WORK_PACKAGES.md`. Backend, Prisma-Schema und alle
+  vorhandenen Migrationen blieben unverändert.
+- Ausgeführte Tests: Testgetriebener Red-Lauf vor der Produktionsänderung mit vier
+  erwarteten Fehlern und einem bereits grünen Netz-Reconnectfall; danach fünf
+  gezielte Credential-Lebenszyklustests grün. Frontend-Typecheck, gezielter
+  read-only ESLint-Lauf für `WebDisplay.tsx`, vollständige Frontend-Suite mit 26
+  Tests in fünf Dateien und Produktionsbuild waren grün. `git diff --check` und
+  die explizite Diffprüfung der vier bestehenden Migrationen waren ebenfalls
+  grün. Der manuelle Browser-Smoke-Test lief mit dem echten Vite-Frontend und
+  NestJS-/WebSocket-Backend gegen eine isolierte, anschließend entfernte
+  SQLite-Datenbank: Erstkopplung, Rotation trotz vorhandenem Credential,
+  abgelaufener Link mit erfolgreichem Reload, echter Backend-Ausfall mit
+  erfolgreichem Reload sowie serverseitiger Widerruf mit `4401` und dauerhaftem
+  Unpaired-Zustand waren erfolgreich; Pairing-Parameter waren in allen sichtbaren
+  Ergebnis-URLs entfernt.
+- Nicht ausführbare Tests und Grund: keine. Docker wurde nicht benötigt; die lokal
+  installierte Docker-Desktop-Engine war nicht verfügbar, der vorgeschriebene
+  Browser-Smoke-Test wurde vollständig mit den echten lokalen Prozessen
+  ausgeführt.
+- Bewusste Abweichungen vom Paket: keine. Insbesondere wurden weder
+  Short-Code-Pairing noch WP-09-/WP-10-Endpunkte oder -UI implementiert.
+- Neue Risiken/Schulden: Pairing-Fehler halten den expliziten Pairingversuch für
+  die aktuelle Seiteninstanz bewusst im Vordergrund. Ein Reload ohne den bereits
+  bereinigten Parameter verwendet das unverändert gespeicherte alte Credential;
+  eine spätere Pairing-UI kann dafür eine explizite Wiederholungsaktion anbieten.
+- Relevante Hinweise für WP-10: Das Browser-Storageformat bleibt unverändert:
+  Schlüssel `inker_display_<externalId>`, Wert ein opakes langes
+  Geräte-Credential. Für WP-10 ist deshalb keine Storage-Migration erforderlich.
+  Der Short-Code-Flow muss nach erfolgreichem Austausch denselben atomaren
+  Credential-Wechsel verwenden und darf den alten Wert bei Codeablauf,
+  Validierungs- oder Netzfehlern nicht löschen. Der Bootstrap-Parameter wird aus
+  URL und aktuellem History-Eintrag entfernt; dauerhafte Credentials dürfen weder
+  in URL/QR-Code noch über DTO-Grenzen zurück zum Admin-UI gelangen.
+- Git-Stand/Commit: Bestandteil dieses WP-08-Abschlusscommits auf Branch
+  `codex/device-platform-spike`, auf Basis von `528c568`. Es wurde kein Push
+  erstellt.
 
 ## WP-09 – Short-Code-Pairing im Backend implementieren
 

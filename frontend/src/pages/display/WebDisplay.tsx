@@ -11,25 +11,28 @@ interface PresentationManifest {
 
 type ConnectionState = 'pairing' | 'connecting' | 'connected' | 'offline' | 'unpaired' | 'error';
 
+const UNPAIRED_MESSAGE = 'This browser is not paired with the display. Create a new pairing link in Inker.';
+
+function removePairingParameter() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('pair');
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
 export function WebDisplay() {
   const { externalId = '' } = useParams<{ externalId: string }>();
   const storageKey = `inker_display_${externalId}`;
   const [credential, setCredential] = useState(() => localStorage.getItem(storageKey));
+  const [pairingToken, setPairingToken] = useState(() => new URLSearchParams(window.location.search).get('pair'));
   const [presentation, setPresentation] = useState<PresentationManifest | null>(null);
-  const [state, setState] = useState<ConnectionState>(credential ? 'connecting' : 'pairing');
-  const [message, setMessage] = useState('Connecting to Inker…');
+  const [state, setState] = useState<ConnectionState>(pairingToken ? 'pairing' : credential ? 'connecting' : 'unpaired');
+  const [message, setMessage] = useState(pairingToken || credential ? 'Connecting to Inker…' : UNPAIRED_MESSAGE);
   const pairingStarted = useRef(false);
 
   useEffect(() => {
-    const pairingToken = new URLSearchParams(window.location.search).get('pair');
-    if (credential || !pairingToken || pairingStarted.current) {
-      if (!credential && !pairingToken) {
-        setState('unpaired');
-        setMessage('This browser is not paired with the display. Create a new pairing link in Inker.');
-      }
-      return;
-    }
+    if (!pairingToken || pairingStarted.current) return;
     pairingStarted.current = true;
+    removePairingParameter();
     setState('pairing');
     fetch(`${config.apiUrl}/web-displays/pair`, {
       method: 'POST',
@@ -43,7 +46,7 @@ export function WebDisplay() {
       })
       .then((result: { credential: string }) => {
         localStorage.setItem(storageKey, result.credential);
-        window.history.replaceState({}, '', window.location.pathname);
+        setPairingToken(null);
         setCredential(result.credential);
         setState('connecting');
       })
@@ -51,10 +54,10 @@ export function WebDisplay() {
         setState('error');
         setMessage(error instanceof Error ? error.message : 'Pairing failed');
       });
-  }, [credential, externalId, storageKey]);
+  }, [externalId, pairingToken, storageKey]);
 
   useEffect(() => {
-    if (!credential) return;
+    if (!credential || pairingToken) return;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
@@ -97,9 +100,20 @@ export function WebDisplay() {
       };
       socket.onclose = (event) => {
         if (stopped) return;
+        if (event.code === 4401) {
+          const storedCredential = localStorage.getItem(storageKey);
+          if (storedCredential === credential) {
+            localStorage.removeItem(storageKey);
+            setCredential(null);
+          } else {
+            setCredential(storedCredential);
+          }
+          setState('unpaired');
+          setMessage('Pairing is no longer valid. Generate a new pairing link.');
+          return;
+        }
         setState('offline');
-        setMessage(event.code === 4401 ? 'Pairing is no longer valid. Generate a new pairing link.' : 'Connection lost. Reconnecting…');
-        if (event.code === 4401) return;
+        setMessage('Connection lost. Reconnecting…');
         const delay = Math.min(30_000, 1_000 * 2 ** attempt++);
         reconnectTimer = setTimeout(connect, delay);
       };
@@ -126,7 +140,7 @@ export function WebDisplay() {
       window.removeEventListener('resize', reportViewport);
       socket?.close(1000, 'Display closed');
     };
-  }, [credential, externalId]);
+  }, [credential, externalId, pairingToken, storageKey]);
 
   return (
     <main className="fixed inset-0 overflow-hidden" style={{ background: presentation?.content.background ?? '#050505' }}>
