@@ -9,8 +9,9 @@ mkdir -p /app/uploads/captures
 mkdir -p /app/uploads/drawings
 mkdir -p /app/logs
 
-# Run database migrations (ignore errors on fresh install)
-bunx prisma db push --skip-generate 2>&1 || echo "Warning: prisma db push failed (may need manual migration)"
+# Apply versioned migrations before the application can become ready. With
+# `set -e`, schema drift or a failed migration stops startup immediately.
+bun run scripts/migrate-database.ts
 
 # Execute the main command
 exec "$@"

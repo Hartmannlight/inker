@@ -34,14 +34,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     try {
       await this.$connect();
 
-      // Enable SQLite WAL mode for better read/write concurrency. WAL is persisted in
-      // the database file header, so this only needs to take effect once, but running
-      // it on every boot is cheap and idempotent. Non-fatal if it fails.
-      try {
-        await this.$queryRawUnsafe('PRAGMA journal_mode=WAL');
-      } catch (pragmaError) {
-        this.logger.warn(`Could not set SQLite WAL mode: ${(pragmaError as Error).message}`);
-      }
+      // WAL persists in the database file; busy_timeout is connection-local. Both
+      // settings are required by ADR-001, so startup must fail if SQLite rejects them.
+      await this.$queryRawUnsafe('PRAGMA journal_mode = WAL');
+      await this.$queryRawUnsafe('PRAGMA busy_timeout = 5000');
 
       this.logger.log('Database connection established');
     } catch (error) {

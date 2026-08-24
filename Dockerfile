@@ -204,6 +204,7 @@ COPY --from=contracts-builder /contracts/dist /contracts/dist
 
 # Copy Prisma schema and generated client
 COPY backend/prisma ./prisma/
+COPY backend/scripts ./scripts/
 COPY --from=backend-install /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=backend-install /app/node_modules/@prisma ./node_modules/@prisma
 

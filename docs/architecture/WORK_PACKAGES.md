@@ -60,7 +60,7 @@ müssen.
 | [x] | WP-02 | Verbindliche Architecture Decision Records | WP-01 |
 | [x] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
 | [x] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
-| [ ] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
+| [x] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
 | [ ] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
 | [ ] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
 | [ ] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
@@ -471,12 +471,12 @@ Keine fachliche Neumodellierung über den aktuellen Schema-Stand hinaus.
 
 **Aufgaben:**
 
-- [ ] Sichere ein anonymisiertes Testabbild des aktuellen Schemas.
-- [ ] Erzeuge eine nachvollziehbare Baseline für leere und bestehende Datenbanken.
-- [ ] Stelle Startskripte auf `prisma migrate deploy` um.
-- [ ] Entferne das Verschlucken von Migrationsfehlern.
-- [ ] Konfiguriere SQLite WAL, Busy Timeout und dokumentierte Backup-Regeln.
-- [ ] Ergänze Tests für Neuinstallation, Upgrade, Fehlerfall und erneuten Start.
+- [x] Sichere ein anonymisiertes Testabbild des aktuellen Schemas.
+- [x] Erzeuge eine nachvollziehbare Baseline für leere und bestehende Datenbanken.
+- [x] Stelle Startskripte auf `prisma migrate deploy` um.
+- [x] Entferne das Verschlucken von Migrationsfehlern.
+- [x] Konfiguriere SQLite WAL, Busy Timeout und dokumentierte Backup-Regeln.
+- [x] Ergänze Tests für Neuinstallation, Upgrade, Fehlerfall und erneuten Start.
 
 **Abnahme:** Eine frische und eine bestehende Testdatenbank erreichen dasselbe
 Schema; eine fehlerhafte Migration verhindert Readiness.
@@ -484,6 +484,55 @@ Schema; eine fehlerhafte Migration verhindert Readiness.
 **Validierung:** Automatisierter Migrationstest plus Docker-Smoke-Test.
 
 **Handoff:** Baseline-ID, Upgradepfad und Backuphinweis notieren.
+
+### Abschluss WP-05
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Prisma Migrate ersetzt in beiden Containerstartpfaden `prisma db push`.
+  Die Baseline `20260824000000_inker_0_6_0_baseline` bildet den veröffentlichten
+  Inker-0.6.0-Stand ab; `20260824001000_device_platform_schema` übernimmt ohne
+  fachliche Erweiterung die bereits im Fork vorhandenen Device-Platform-Felder.
+  Unverwaltete Bestandsdatenbanken werden vor dem Eintragen der Historie exakt
+  gegen diese bekannten Zustände geprüft. Unbekannter Drift oder eine fehlerhafte
+  Migration stoppt den Backendstart und damit Readiness.
+- Upgradepfad: Leere Datenbanken führen beide Migrationen aus. Exakte
+  0.6.0-Datenbanken markieren nur die Baseline als angewandt und führen danach die
+  Device-Platform-Migration aus. Bereits per `db push` aktualisierte Datenbanken
+  übernehmen beide Historieneinträge ohne erneutes DDL. Alle künftigen Änderungen
+  benötigen eine neue Vorwärtsmigration; vorhandene Migrationen dürfen nicht
+  verändert werden.
+- Backuphinweis: Vor jedem Upgrade den Container stoppen und das vollständige
+  `/app/uploads`-Volume sichern. Eine laufende WAL-Datenbank darf nicht durch das
+  alleinige Kopieren von `inker.db` gesichert werden. Restore und Rollback sind in
+  `docs/operations/DATABASE_BACKUP.md` dokumentiert.
+- Geänderte Kernpfade: `backend/prisma/migrations/`,
+  `backend/scripts/migrate-database.ts`, `backend/test/`,
+  `backend/src/prisma/prisma.service.ts`, `backend/docker-entrypoint.sh`,
+  `docker/services.d/backend/run`, `Dockerfile`, `.gitattributes`,
+  `.github/workflows/ci.yml`, `docs/operations/DATABASE_BACKUP.md`, `README.md` und
+  `backend/package.json`.
+- Ausgeführte Tests: Backend-Typecheck; 443 bestehende Backendtests in 36 Dateien;
+  vier automatisierte Migrationstests für Neuinstallation, Neustart, anonymisiertes
+  0.6.0-Upgrade, Übernahme des aktuellen `db push`-Schemas und ungültiges SQL;
+  zusätzlicher Datamodel-Diff; Backend-Build; `prisma validate`;
+  `docker compose config --quiet`; vollständiger Docker-Image-Build einschließlich
+  Frontend-Build; positiver Docker-Smoke mit interner `/ready`-Antwort 200 und
+  gesundem Container; negativer Docker-Smoke mit Prisma `P3018`, blockiertem
+  Health-/Readiness-Pfad und nicht gestarteter Anwendung; `git diff --check`. Alle
+  genannten Prüfungen waren grün.
+- Nicht ausführbare Tests und Grund: keine.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: Die automatische Übernahme ist absichtlich auf die beiden
+  getesteten, exakt passenden Bestandszustände begrenzt; abweichende manuelle
+  Schemata blockieren den Start und müssen aus einer Sicherung untersucht werden.
+  Prisma warnt weiterhin vor der in Prisma 7 entfallenden
+  `package.json#prisma`-Konfiguration; deren Umstellung ist nicht Teil von WP-05.
+- Relevante Hinweise für WP-06: Eine Schemaänderung ist ausschließlich als neue
+  Migration nach `20260824001000_device_platform_schema` zulässig. Die Baseline und
+  der getestete Übernahmepfad sind unveränderlich; WP-06 muss seine Migrationsfälle
+  sowohl auf einer frisch migrierten als auch auf einer Bestandsdatenbank ergänzen.
+- Git-Stand/Commit: Branch `codex/device-platform-spike`; Arbeitsbaum enthält die
+  uncommittierten WP-05-Änderungen. Es wurde kein Commit und kein Push erstellt.
 
 ## WP-06 – Device-, Profile- und Credential-Schema bereinigen
 

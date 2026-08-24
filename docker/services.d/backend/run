@@ -19,8 +19,11 @@ export DATABASE_URL="file:${SQLITE_FILE}"
 FRESH_INSTALL=0
 [ ! -f "$SQLITE_FILE" ] && FRESH_INSTALL=1
 
-echo "[backend] Applying SQLite schema (idempotent)..."
-s6-setuidgid inker node ./node_modules/prisma/build/index.js db push --skip-generate 2>&1 || echo "[backend] Warning: db push had issues, check logs"
+echo "[backend] Applying versioned database migrations..."
+if ! s6-setuidgid inker bun run scripts/migrate-database.ts; then
+    echo "[backend] Fatal: database migration failed; backend will not start"
+    exit 1
+fi
 
 # Seed default reference data (device models + widget templates) on EVERY boot. The seed
 # is fully idempotent: it upserts each row with `update: {}`, so it only ADDS what is

@@ -104,7 +104,7 @@ Pairing links expire after 15 minutes and are consumed after one use. The browse
 
 TRMNL firmware continues to use the existing `/api/setup` and `/api/display` pull protocol. Device type and transport are independent internally, so additional hardware drivers can be added without changing playlist or rendering code.
 
-> **Database:** Inker uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the `uploads` volume to back up all your data.
+> **Database:** Inker uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the complete `uploads` volume before every upgrade; see the [backup and restore rules](docs/operations/DATABASE_BACKUP.md).
 
 ## Configuration
 
@@ -161,7 +161,7 @@ docker compose pull
 docker compose up -d
 ```
 
-All data (screens, devices, playlists, settings) is preserved — database schema updates are applied automatically on startup.
+All data (screens, devices, playlists, settings) is preserved — versioned database migrations are applied before the backend starts. A failed migration keeps the container unready; restore the pre-upgrade backup before retrying.
 
 > **Warning:** Never use `docker compose down -v` to update — the `-v` flag deletes all volumes and you will lose your data.
 
