@@ -2,12 +2,28 @@
 # Bundles: frontend (nginx), backend (bun/nestjs). Data lives in a single SQLite file.
 
 # =============================================================================
-# Stage 1: Build frontend
+# Stage 1: Build shared contracts
+# =============================================================================
+FROM oven/bun:1.3.14-alpine AS contracts-builder
+
+WORKDIR /contracts
+
+COPY contracts/package.json contracts/bun.lock* ./
+RUN bun install --frozen-lockfile
+
+COPY contracts/ .
+RUN bun run build
+
+# =============================================================================
+# Stage 2: Build frontend
 # =============================================================================
 FROM oven/bun:1.3.14-alpine AS frontend-builder
 
 WORKDIR /app
 
+COPY --from=contracts-builder /contracts/package.json /contracts/package.json
+COPY --from=contracts-builder /contracts/README.md /contracts/README.md
+COPY --from=contracts-builder /contracts/dist /contracts/dist
 COPY frontend/package.json frontend/bun.lock* ./
 RUN bun install --frozen-lockfile
 
@@ -15,7 +31,7 @@ COPY frontend/ .
 RUN bun run build
 
 # =============================================================================
-# Stage 2: Install backend production dependencies
+# Stage 3: Install backend production dependencies
 # =============================================================================
 FROM oven/bun:1.3.14-slim AS backend-install
 
@@ -26,6 +42,9 @@ COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
+COPY --from=contracts-builder /contracts/package.json /contracts/package.json
+COPY --from=contracts-builder /contracts/README.md /contracts/README.md
+COPY --from=contracts-builder /contracts/dist /contracts/dist
 COPY backend/package.json backend/bun.lock* ./
 COPY backend/prisma ./prisma/
 
@@ -57,7 +76,7 @@ RUN bun install --frozen-lockfile && \
            node_modules/@img/sharp-linuxmusl-x64
 
 # =============================================================================
-# Stage 3: Build backend
+# Stage 4: Build backend
 # =============================================================================
 FROM oven/bun:1.3.14-slim AS backend-builder
 
@@ -67,6 +86,9 @@ COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
+COPY --from=contracts-builder /contracts/package.json /contracts/package.json
+COPY --from=contracts-builder /contracts/README.md /contracts/README.md
+COPY --from=contracts-builder /contracts/dist /contracts/dist
 COPY backend/package.json backend/bun.lock* ./
 RUN bun install --frozen-lockfile
 
@@ -77,7 +99,7 @@ COPY backend/ .
 RUN bun run build
 
 # =============================================================================
-# Stage 4: Production (all-in-one)
+# Stage 5: Production (all-in-one)
 # =============================================================================
 FROM debian:trixie-slim AS production
 
@@ -174,6 +196,11 @@ WORKDIR /app
 
 # Copy backend production dependencies
 COPY --from=backend-install /app/node_modules ./node_modules
+
+# Keep the local contracts dependency at the same sibling path used at install time.
+COPY --from=contracts-builder /contracts/package.json /contracts/package.json
+COPY --from=contracts-builder /contracts/README.md /contracts/README.md
+COPY --from=contracts-builder /contracts/dist /contracts/dist
 
 # Copy Prisma schema and generated client
 COPY backend/prisma ./prisma/

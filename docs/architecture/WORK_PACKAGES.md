@@ -58,7 +58,7 @@ müssen.
 | [x] | WP-00 | Eindeutiges Repository und gesicherter Ausgangsstand | – |
 | [x] | WP-01 | Reproduzierbare Toolchain und grüne Baseline-Prüfungen | WP-00 |
 | [x] | WP-02 | Verbindliche Architecture Decision Records | WP-01 |
-| [ ] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
+| [x] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
 | [ ] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
 | [ ] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
 | [ ] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
@@ -336,13 +336,13 @@ vollständigen Fachverträge.
 
 **Aufgaben:**
 
-- [ ] Wähle gemäß ADR einen `contracts`-Bereich innerhalb des bestehenden Projekts.
-- [ ] Richte TypeScript-Build ohne NestJS-, React- oder Prisma-Abhängigkeit ein.
-- [ ] Definiere Regeln für reine Typen, Laufzeitvalidierung und JSON-kompatible
+- [x] Wähle gemäß ADR einen `contracts`-Bereich innerhalb des bestehenden Projekts.
+- [x] Richte TypeScript-Build ohne NestJS-, React- oder Prisma-Abhängigkeit ein.
+- [x] Definiere Regeln für reine Typen, Laufzeitvalidierung und JSON-kompatible
   Werte.
-- [ ] Stelle Imports aus Backend und Frontend über einen stabilen Paketnamen bereit.
-- [ ] Lege Contract-Fixtures und einen Test-Harness an.
-- [ ] Migriere einen kleinen bestehenden Typ als Durchstich, ohne APIs zu brechen.
+- [x] Stelle Imports aus Backend und Frontend über einen stabilen Paketnamen bereit.
+- [x] Lege Contract-Fixtures und einen Test-Harness an.
+- [x] Migriere einen kleinen bestehenden Typ als Durchstich, ohne APIs zu brechen.
 
 **Abnahme:** Backend und Frontend importieren denselben Beispielvertrag und alle
 Builds bleiben grün.
@@ -350,6 +350,42 @@ Builds bleiben grün.
 **Validierung:** Contracts-Build, Backend-/Frontend-Typecheck und Fixture-Test.
 
 **Handoff:** Paketpfad, Importname und Konventionen notieren.
+
+### Abschluss WP-03
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Unter `contracts/` steht das eigenständige TypeScript-Paket
+  `@inker/contracts` mit ESM-/CJS-Ausgabe und Deklarationen bereit. Reine Typen,
+  seiteneffektfreie Laufzeitvalidatoren und die zulässige JSON-Wertemenge sind
+  dokumentiert und getestet. `DeviceStatus` wurde als kleiner kompatibler
+  Durchstich zentralisiert; Backend und Frontend importieren denselben Vertrag.
+- Geänderte Kernpfade: `contracts/`, `backend/package.json`, `backend/bun.lock`,
+  `backend/src/devices/entities/device.entity.ts`, `frontend/package.json`,
+  `frontend/bun.lock`, `frontend/src/types/index.ts`, `Dockerfile`,
+  `.github/workflows/ci.yml` und `docs/architecture/WORK_PACKAGES.md`.
+- Ausgeführte Tests: Contracts-Frozen-Lock-Prüfung, Contracts-Typecheck, sieben
+  Contract-/Fixture-Tests in zwei Dateien, Contracts-ESM-/CJS-Build und Import-
+  Smokes für beide Ausgabeformate; Backend-Typecheck und -Build; Frontend-
+  Typecheck und -Build; Frozen-Lock-Prüfung der beiden Consumer-Lockfiles,
+  `docker compose config --quiet` und `git diff --check`. Alle genannten
+  Prüfungen waren grün.
+- Nicht ausführbare Tests und Grund: `docker build --check .` konnte nicht gegen
+  Docker Desktop ausgeführt werden, weil die lokale Linux-Engine nicht gestartet
+  ist. Der CI- und Docker-Buildpfad baut Contracts vor den beiden Consumern.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: Das Contracts-Paket muss vor Backend und Frontend gebaut
+  werden; CI und Dockerfile erzwingen diese Reihenfolge. Bun 1.3.14 konnte die
+  lokale `file:`-Abhängigkeit im verwalteten Windows-Sandbox nicht direkt nach
+  `node_modules` kopieren (`EPERM`); Lockfiles wurden frozen geprüft und die
+  lokalen Consumer-Prüfungen über äquivalente Junctions ausgeführt. Vollständige
+  versionierte Fachverträge bleiben bewusst Scope von WP-04.
+- Relevante Hinweise für WP-04: Paketpfad ist `contracts/`, stabiler Importname
+  `@inker/contracts`. Neue Verträge bleiben frameworkfrei, nehmen an
+  Laufzeitgrenzen `unknown` entgegen und verwenden ausschließlich `JsonValue`-
+  kompatible Felder; repräsentative JSON-Fixtures gehören in `contracts/fixtures/`
+  und werden im Harness validiert. `DeviceStatus` ist der unversionierte
+  Kompatibilitätsdurchstich, nicht bereits das Kernvertragsschema von WP-04.
+- Git-Stand/Commit: nicht committed; Branch `codex/device-platform-spike`.
 
 ## WP-04 – Versionierte Kernverträge definieren
 

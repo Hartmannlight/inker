@@ -1,3 +1,5 @@
+import type { DeviceStatus } from '@inker/contracts';
+
 // Auth types - simplified for PIN-based auth
 export interface AuthState {
   token: string | null;
@@ -45,7 +47,7 @@ export interface Device {
   capabilities?: Record<string, unknown> | null;
   telemetry?: Record<string, unknown> | null;
   /** Computed status based on lastSeenAt */
-  status: 'online' | 'offline';
+  status: DeviceStatus;
   /** Computed boolean for online status */
   isOnline: boolean;
   /** Last time device connected */

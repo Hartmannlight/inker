@@ -1,0 +1,5 @@
+{
+  "contract": "DeviceStatus",
+  "valid": ["online", "offline"],
+  "invalid": ["unknown", "ONLINE", null, 0]
+}

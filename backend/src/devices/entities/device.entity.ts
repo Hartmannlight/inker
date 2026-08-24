@@ -1,4 +1,7 @@
 import { Device as PrismaDevice } from '@prisma/client';
+import type { DeviceStatus } from '@inker/contracts';
+
+export type { DeviceStatus } from '@inker/contracts';
 
 /**
  * Device entity with computed status and isOnline fields
@@ -6,8 +9,6 @@ import { Device as PrismaDevice } from '@prisma/client';
  * This serializer adds computed fields based on device activity
  * to match frontend expectations (online/offline status)
  */
-
-export type DeviceStatus = 'online' | 'offline';
 
 /**
  * Get the offline threshold in milliseconds from environment variable
