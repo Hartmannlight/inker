@@ -5,7 +5,9 @@
 Self-hosted e-ink device management server built for the homelab community. Works with [TRMNL](https://usetrmnl.com/) devices — including the 7.5″ **OG** (800×480, 1-bit) and the 10.3″ **TRMNL X** (1872×1404, 16-level grayscale) — and any BYOD e-ink display. Design screens, create custom widgets with live data from your local network, and manage your displays from a modern web interface.
 
 Project architecture, research, and the ordered implementation packages live in
-[`docs/architecture/`](docs/architecture/).
+[`docs/architecture/`](docs/architecture/). Binding technical decisions and open
+assumptions are indexed in the
+[`Architecture Decision Records`](docs/architecture/adr/README.md).
 
 Inker is heading in its own direction — focusing on homelab integrations like server monitoring, smart home dashboards, network stats, and self-hosted service displays. TRMNL device compatibility is maintained, but the plugin ecosystem will be Inker-native.
 

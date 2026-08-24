@@ -57,7 +57,7 @@ müssen.
 |---|---|---|---|
 | [x] | WP-00 | Eindeutiges Repository und gesicherter Ausgangsstand | – |
 | [x] | WP-01 | Reproduzierbare Toolchain und grüne Baseline-Prüfungen | WP-00 |
-| [ ] | WP-02 | Verbindliche Architecture Decision Records | WP-01 |
+| [x] | WP-02 | Verbindliche Architecture Decision Records | WP-01 |
 | [ ] | WP-03 | Frameworkunabhängiger Contracts-Bereich | WP-02 |
 | [ ] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
 | [ ] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
@@ -271,14 +271,14 @@ einzelner, änderbarer Entscheidungen.
 
 **Aufgaben:**
 
-- [ ] Lege ein ADR-Template mit Status, Kontext, Entscheidung, Folgen und
+- [x] Lege ein ADR-Template mit Status, Kontext, Entscheidung, Folgen und
   Alternativen an.
-- [ ] Erstelle ADRs für SQLite-Start/PostgreSQL-Grenze, Redis/BullMQ, explizites
+- [x] Erstelle ADRs für SQLite-Start/PostgreSQL-Grenze, Redis/BullMQ, explizites
   Publish-Modell, Hub-Föderation, Short-Code-Pairing und API-/Worker-Trennung.
-- [ ] Halte fest, dass Renderer nur Snapshots lesen und keine Provider abfragen.
-- [ ] Halte fest, dass dauerhafter Fachzustand nicht nur in RAM/Queue lebt.
-- [ ] Markiere offene Hardwaredetails als Annahme, nicht als feste Wahrheit.
-- [ ] Verlinke ADRs aus Architekturplan und README-Dokumentation.
+- [x] Halte fest, dass Renderer nur Snapshots lesen und keine Provider abfragen.
+- [x] Halte fest, dass dauerhafter Fachzustand nicht nur in RAM/Queue lebt.
+- [x] Markiere offene Hardwaredetails als Annahme, nicht als feste Wahrheit.
+- [x] Verlinke ADRs aus Architekturplan und README-Dokumentation.
 
 **Abnahme:** Jede spätere Designfrage kann auf eine konkrete Entscheidung oder eine
 explizit offene ADR verweisen.
@@ -286,6 +286,40 @@ explizit offene ADR verweisen.
 **Validierung:** Linkprüfung und Review auf Widersprüche zum Architekturplan.
 
 **Handoff:** ADR-Nummern und noch offene Entscheidungen notieren.
+
+### Abschluss WP-02
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Ein versioniertes ADR-Verzeichnis mit Template, Statuskonventionen und
+  Index wurde angelegt. ADR-001 bis ADR-007 dokumentieren verbindlich die
+  SQLite-/PostgreSQL-Grenze, Redis/BullMQ, das Publish-Modell, Hub-Föderation,
+  Short-Code-Pairing, API-/Worker-Trennung und Snapshot-only-Rendering. ADR-008 bis
+  ADR-010 halten bewusst offene Annahmen und Entscheidungen fest. Architekturplan
+  und Projekt-README verlinken den ADR-Index.
+- Geänderte Kernpfade: `docs/architecture/adr/`,
+  `docs/architecture/ARCHITECTURE_PLAN.md`, `README.md` und
+  `docs/architecture/WORK_PACKAGES.md`.
+- Ausgeführte Tests: repositoryweite Prüfung von 21 Markdown-Dateien und 28
+  relativen Links; Struktur- und Indexprüfung aller zehn Entscheidungs-ADRs;
+  automatisierte Stichwortprüfung der verbindlichen WP-02-Kernaussagen; manueller
+  Widerspruchsreview gegen die für WP-02 relevanten Abschnitte des
+  Architekturplans; Trailing-Whitespace-Prüfung der ADRs und `git diff --check`.
+  Alle Prüfungen waren grün.
+- Nicht ausführbare Tests und Grund: keine; produktive Build- und Laufzeittests
+  waren wegen des reinen Dokumentationsscopes nicht erforderlich.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: ADR-008 lässt ESP32-Hardwaredetails,
+  ESP32-Repositorygrenze und das minimale TRMNL-Refresh-Intervall bis zu realen
+  Messungen offen. ADR-009 lässt die Richtlinie für lokales HTTP-Pairing bis zum
+  Provisioning-Smoke-Test und Threat-Model-Review offen. ADR-010 lässt die konkrete
+  Isolation von Drittanbieter-Erweiterungen bis zum adversarialen Test offen.
+  Quantitative SQLite-Betriebsgrenzen sind noch im Last-/Betriebspaket festzulegen.
+- Relevante Hinweise für WP-03: Netzwerk- und Domänenverträge müssen die
+  versionierten Grenzen aus ADR-003 bis ADR-005 und ADR-007 ausdrücken und dürfen
+  weder Providerzugriffe im Renderer noch dauerhaften Fachzustand in RAM oder Queue
+  voraussetzen. Hardwarewerte bleiben Capabilities/Profile statt Produktkonstanten.
+- Git-Stand/Commit: Bestandteil dieses WP-02-Commits auf Branch
+  `codex/device-platform-spike`.
 
 ## WP-03 – Gemeinsamen Contracts-Bereich einrichten
 

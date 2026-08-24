@@ -7,6 +7,10 @@ Operative Abarbeitung: [`WORK_PACKAGES.md`](WORK_PACKAGES.md) zerlegt diesen Pla
 in geordnete, einzeln in einem neuen Chat ausführbare Arbeitspakete mit
 Abhängigkeiten, Abnahmekriterien, Tests und Handoff-Format.
 
+Verbindliche Einzelentscheidungen und bewusst offene Annahmen stehen im
+[ADR-Index](adr/README.md). Änderungen am Zielbild werden dort als neue,
+nachvollziehbare Entscheidung dokumentiert.
+
 ## 1. Ziel und Vorgehen
 
 StatusPanel soll als selbst gehosteter Server unterschiedliche Displays versorgen,
@@ -389,7 +393,7 @@ Status und ein eindeutiger Vergleich zu Upstream.
 **Warum:** Breaking Changes sind jetzt günstig. Ohne explizite Verträge wächst der
 aktuelle Spike sonst über String-Felder und Sonderfälle weiter.
 
-- [ ] Architecture Decision Records für SQLite/PostgreSQL-Grenze, Redis/BullMQ,
+- [x] Architecture Decision Records für SQLite/PostgreSQL-Grenze, Redis/BullMQ,
   Hub-Föderation, Publish-Modell und Geräte-Pairing erstellen.
 - [ ] Versionierte TypeScript-Verträge für DeviceProfile, DeviceCapabilities,
   PresentationManifest, InteractionEvent, Command und SourceSnapshot definieren.
