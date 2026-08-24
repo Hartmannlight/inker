@@ -27,6 +27,7 @@ import { PluginsModule } from './plugins/plugins.module';
 import { ModelsModule } from './models/models.module';
 import { DevicePlatformModule } from './device-platform/device-platform.module';
 import { PublicationsModule } from './publications/publications.module';
+import { DeviceEnrollmentModule } from './device-enrollment/device-enrollment.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 
@@ -87,6 +88,7 @@ import { validationSchema } from './config/validation.schema';
     EventsModule,
     DevicePlatformModule,
     PublicationsModule,
+    DeviceEnrollmentModule,
     SettingsModule,
     PluginsModule,
     ModelsModule,

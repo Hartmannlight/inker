@@ -33,6 +33,7 @@ export function createMockPrisma() {
     model: createModelMock(),
     deviceLog: createModelMock(),
     deviceCredential: createModelMock(),
+    deviceEnrollment: createModelMock(),
     deviceProfile: createModelMock(),
     deliveryPolicy: createModelMock(),
     publication: createModelMock(),

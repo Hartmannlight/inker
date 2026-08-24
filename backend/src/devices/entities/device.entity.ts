@@ -141,12 +141,14 @@ export function serializeDevice<T extends { isActive: boolean; lastSeenAt: Date 
     deliveryPolicy?: any;
     capabilitiesOverride?: unknown;
     credentials?: Array<Record<string, unknown>>;
+    enrollments?: Array<Record<string, unknown>>;
   };
   const {
     profile,
     deliveryPolicy,
     capabilitiesOverride,
     credentials,
+    enrollments,
     ...rest
   } = source;
   delete (rest as Record<string, unknown>).apiKey;
@@ -170,6 +172,13 @@ export function serializeDevice<T extends { isActive: boolean; lastSeenAt: Date 
       const credential = { ...sourceCredential };
       delete credential.tokenHash;
       return credential;
+    });
+  }
+  if (enrollments) {
+    serialized.enrollments = enrollments.map((sourceEnrollment) => {
+      const enrollment = { ...sourceEnrollment };
+      delete enrollment.codeHash;
+      return enrollment;
     });
   }
   return serialized as SerializedDevice<Omit<T, 'apiKey'>>;

@@ -12,6 +12,14 @@ export const validationSchema = Joi.object({
   // Rate limiting
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),
+  PAIRING_ALLOW_INSECURE_HTTP: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  PAIRING_TRUST_PROXY: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
 
   // File uploads
   MAX_FILE_SIZE: Joi.number().default(10485760),

@@ -80,7 +80,7 @@ describe('device.entity', () => {
       expect(result.id).toBe(1);
     });
 
-    it('never serializes credential or pairing hashes', () => {
+    it('never serializes credential, pairing or enrollment hashes', () => {
       const device = {
         id: 1,
         isActive: true,
@@ -88,11 +88,13 @@ describe('device.entity', () => {
         apiKey: 'raw-api-key',
         pairingTokenHash: 'pairing-hash',
         credentials: [{ credentialId: 'cred-1', tokenHash: 'token-hash', kind: 'device' }],
+        enrollments: [{ enrollmentId: 'enrollment-1', codeHash: 'code-hash', attemptCount: 1 }],
       };
       const result = serializeDevice(device) as any;
       expect(result.apiKey).toBeUndefined();
       expect(result.pairingTokenHash).toBeUndefined();
       expect(result.credentials).toEqual([{ credentialId: 'cred-1', kind: 'device' }]);
+      expect(result.enrollments).toEqual([{ enrollmentId: 'enrollment-1', attemptCount: 1 }]);
     });
   });
 

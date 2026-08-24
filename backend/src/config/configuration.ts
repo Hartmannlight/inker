@@ -26,6 +26,12 @@ export const configuration = () => ({
     limit: parseInt(process.env.THROTTLE_LIMIT || '100', 10),
   },
 
+  pairing: {
+    // ADR-009 keeps insecure local HTTP opt-in only; HTTPS is the default.
+    allowInsecureHttp: process.env.PAIRING_ALLOW_INSECURE_HTTP === 'true',
+    trustProxy: process.env.PAIRING_TRUST_PROXY === 'true',
+  },
+
   upload: {
     maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10), // 10MB
     screensDir: process.env.SCREENS_DIR || './uploads/screens',

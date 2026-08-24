@@ -24,6 +24,12 @@ async function bootstrap() {
   const port = configService.get<number>('port', 3000);
   const environment = configService.get<string>('environment', 'development');
 
+  // Pairing rate limits need the real client address behind one explicitly
+  // trusted TLS-terminating reverse proxy. Direct deployments leave this off.
+  if (configService.get<boolean>('pairing.trustProxy', false)) {
+    app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  }
+
   // Security middleware - allow cross-origin resource loading for images
   app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },

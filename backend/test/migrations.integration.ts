@@ -124,6 +124,7 @@ describe("Prisma migration baseline", () => {
         "20260824001000_device_platform_schema",
         "20260824002000_normalize_device_profiles_credentials",
         "20260824003000_publication_outbox_state",
+        "20260824004000_device_enrollments",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,
@@ -151,6 +152,24 @@ describe("Prisma migration baseline", () => {
       expect(publicationIndexes).toContain(
         "outbox_events_status_available_at_idx",
       );
+      expect(
+        database.query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'device_enrollments'",
+        ).get()?.count,
+      ).toBe(1);
+      expect(
+        database.query<{ name: string }, []>(
+          "PRAGMA table_info('device_enrollments')",
+        ).all().map(({ name }) => name),
+      ).toEqual([
+        'enrollment_id',
+        'device_id',
+        'code_hash',
+        'expires_at',
+        'used_at',
+        'attempt_count',
+        'created_at',
+      ]);
       expect(
         database
           .query<

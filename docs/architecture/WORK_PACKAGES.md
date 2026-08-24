@@ -64,7 +64,7 @@ müssen.
 | [x] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
 | [x] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
 | [x] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
-| [ ] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
+| [x] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
 | [ ] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
 | [ ] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
 | [ ] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
@@ -833,14 +833,14 @@ Rate Limits und Tests. Keine UI.
 
 **Aufgaben:**
 
-- [ ] Implementiere kryptografisch zufällige Crockford-Base32-Codes mit
+- [x] Implementiere kryptografisch zufällige Crockford-Base32-Codes mit
   normalisierter Eingabe.
-- [ ] Speichere nur Hash, Ablauf, Verwendungsstatus und Versuchszähler.
-- [ ] Erzeuge Enrollment nur über Adminberechtigung.
-- [ ] Tausche gültigen Code atomar gegen ein hochentropisches DeviceCredential.
-- [ ] Begrenze Credentialrechte auf das betreffende Gerät.
-- [ ] Implementiere Rotation, Replay-Schutz und konstante Fehlerantworten.
-- [ ] Ergänze Rate-Limit-, Parallel-, Ablauf- und Entropietests.
+- [x] Speichere nur Hash, Ablauf, Verwendungsstatus und Versuchszähler.
+- [x] Erzeuge Enrollment nur über Adminberechtigung.
+- [x] Tausche gültigen Code atomar gegen ein hochentropisches DeviceCredential.
+- [x] Begrenze Credentialrechte auf das betreffende Gerät.
+- [x] Implementiere Rotation, Replay-Schutz und konstante Fehlerantworten.
+- [x] Ergänze Rate-Limit-, Parallel-, Ablauf- und Entropietests.
 
 **Abnahme:** Derselbe Code kann auch bei parallelen Requests nur einmal erfolgreich
 verwendet werden; die Datenbank enthält weder Code noch Klartext-Credential.
@@ -848,6 +848,93 @@ verwendet werden; die Datenbank enthält weder Code noch Klartext-Credential.
 **Validierung:** Unit-, Integration-, Race- und API-Tests.
 
 **Handoff:** Endpunkte, DTOs, TTL und UI-Anforderungen für WP-10 notieren.
+
+### Abschluss WP-09
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Die neue Vorwärtsmigration
+  `20260824004000_device_enrollments` ergänzt ein gerätegebundenes
+  `DeviceEnrollment` mit ausschließlich `codeHash`, Ablaufzeit, `usedAt`,
+  persistentem Versuchszähler und Zeitstempeln. Zehn kryptografisch zufällige,
+  unverzerrte Crockford-Base32-Zeichen liefern 50 Bit Bootstrap-Entropie; Eingaben
+  werden ohne Beachtung von Groß-/Kleinschreibung und manuellen Trennzeichen
+  normalisiert, einschließlich der Crockford-Aliasse O/I/L. Der Service hält immer
+  nur ein unverbrauchtes Enrollment pro Gerät und tauscht es per serialisierbarer
+  Datenbanktransaktion genau einmal gegen ein zufälliges 48-Byte-Base64url-
+  Credential. Dabei werden alle bisherigen Credentials desselben Geräts atomar
+  widerrufen. Ein Insertfehler rollt Codeverbrauch, Versuchszähler und Widerruf
+  vollständig zurück. Weder Klartextcode noch Klartext-Credential werden
+  persistiert; generische Device-Serialisierung entfernt zusätzlich Enrollment-
+  und Credential-Hashes.
+- Endpunkte und DTOs: `POST /api/devices/:deviceId/enrollments` ist eine
+  admin-geschützte Control-Plane-Route ohne Request-Body. Die einmalige Antwort
+  enthält `enrollmentId`, `deviceId`, formatierten `code`, `expiresAt` und
+  `createdAt`, aber weder Credential noch Hash. Der öffentliche Device-Endpunkt
+  `POST /api/device-enrollments/exchange` akzeptiert ausschließlich
+  `{ code: string }`. Seine einmalige Erfolgsantwort enthält `credential`,
+  `credentialId` und `device` mit `id`, `name`, `externalId` und `profileId`, aber
+  weder Code noch Hash. Ungültige, abgelaufene, bereits verwendete und
+  ausgeschöpfte Codes liefern dieselbe Antwort `400 Pairing code is invalid or
+  unavailable`.
+- TTL und Limits: Ein Enrollment ist exakt zehn Minuten und damit höchstens die
+  von ADR-005 erlaubten zehn Minuten gültig. Pro Enrollment werden höchstens fünf
+  Einlöseversuche dauerhaft gezählt; der Device-Endpunkt ist zusätzlich auf fünf
+  Requests pro Clientadresse und Minute begrenzt. HTTPS ist Standard. Unsicheres
+  HTTP erfordert die explizite Administratoroption
+  `PAIRING_ALLOW_INSECURE_HTTP=true`. Hinter genau einem geschützten,
+  TLS-terminierenden Reverse Proxy muss `PAIRING_TRUST_PROXY=true` gesetzt werden,
+  damit Protokoll und Clientadresse für HTTPS-Prüfung und Rate Limit übernommen
+  werden; der Backendport darf dann nicht direkt exponiert sein.
+- Geänderte Kernpfade: `backend/prisma/schema.prisma`,
+  `backend/prisma/migrations/20260824004000_device_enrollments/`,
+  `backend/src/device-enrollment/`, `backend/src/app.module.ts`,
+  `backend/src/main.ts`, `backend/src/config/`,
+  `backend/src/devices/entities/device.entity.ts`,
+  `backend/test/device-enrollment.integration.ts`,
+  `backend/test/migrations.integration.ts` und diese Paketdokumentation. Die vier
+  ausdrücklich geschützten bestehenden Migrationen blieben unverändert.
+- Ausgeführte Tests: testgetriebener Rotlauf wegen der zunächst fehlenden
+  WP-09-Module; danach 11 gezielte Code-, Service- und API-Tests einschließlich
+  10.000 kollisionsfreier Entropiestichproben, Adminschutz, HTTPS-Grenze und
+  echtem 5/min-Rate-Limit; vier echte SQLite-Integrationsfälle für
+  Hashpersistenz, TTL, Normalisierung, Rotation, Replay-/Versuchslimit,
+  Transaktionsrollback und zwölf parallele Requests mit genau einem Erfolg;
+  vier vollständige Neuinstallations-/Upgrade-/Adoptions-/Fehlermigrationstests;
+  vollständige Backend-Suite mit 465 Tests in 40 Dateien; Backend-Typecheck,
+  gezieltes ESLint über alle geänderten Produktionsdateien, Prisma-Validierung,
+  Backend-Produktionsbuild und `git diff --check`. Alle paketbezogenen Prüfungen
+  waren grün; nach dem zusätzlichen DTO-/Rollback-Härtungslauf waren die 35 direkt
+  betroffenen Tests ebenfalls grün.
+- Nicht ausführbare Tests und Grund: keine. Prismas Schema-Engine-Prüfsumme war in
+  der eingeschränkten Netzwerksandbox nicht erreichbar; derselbe
+  `prisma validate`-Lauf wurde mit freigegebenem Zugriff erfolgreich ausgeführt.
+- Bewusste Abweichungen vom Paket: keine. Insbesondere wurden weder Pairing-UI,
+  QR-Erzeugung noch andere Aufgaben aus WP-10 begonnen. Der bestehende lange
+  Browser-Pairinglink aus WP-08 und sein Credential-Storageformat blieben
+  unverändert.
+- Neue Risiken/Schulden: Das zusätzliche Client-IP-Limit verwendet wie das
+  vorhandene NestJS-Throttling pro Prozess flüchtigen Zustand; der persistente
+  Pro-Code-Zähler bleibt auch über Neustarts erhalten. Vor mehreren API-Hosts ist
+  gemäß ADR-001 ohnehin die PostgreSQL-Grenze zu bearbeiten und dabei auch ein
+  gemeinsamer Rate-Limit-Store festzulegen. `PAIRING_TRUST_PROXY` setzt genau
+  einen netzseitig geschützten Proxy-Hop voraus.
+- Handoff an WP-10: Das Browser-Storageformat aus WP-08 bleibt zwingend Schlüssel
+  `inker_display_<externalId>` mit dem opaken `credential` als Wert. Die UI darf
+  den Admin-Erstellendpunkt verwenden, Basis-URL plus denselben zehnstelligen Code
+  manuell oder als QR-Bootstrap darstellen und am Gerät ausschließlich den
+  Exchange-Endpunkt aufrufen. Der Code darf nur in seiner einmaligen Admin-
+  Erstellantwort und im absichtlich daraus erzeugten manuellen/QR-Bootstrap
+  erscheinen, nicht in Logs, Telemetrie oder dauerhafter UI-Persistenz. Das
+  dauerhafte Credential darf ausschließlich in seiner einmaligen Device-
+  Erfolgsantwort erscheinen und niemals in URL, QR-Code, Admin-DTO, Logs oder
+  Telemetrie gelangen. Erst nach vollständigem Exchange-Erfolg darf WP-10 den
+  bisherigen Storagewert atomar durch das neue Credential ersetzen. Bei Ablauf,
+  `400`/`403`/`429`, Validierungs- oder Netzfehler muss das alte Credential
+  unverändert bleiben; dabei sind Bootstrap-Eingabe und Fehlerzustand kontrolliert
+  zu behandeln. `externalId` aus der Erfolgsantwort bestimmt den bestehenden
+  Browser-Storage-Schlüssel. Es ist keine Storage-Migration erforderlich.
+- Git-Stand: Arbeitsbaum auf Branch `codex/device-platform-spike` auf Basis von
+  `480b958`; gemäß Auftrag wurden weder Commit noch Push erstellt.
 
 ## WP-10 – Pairing-UI und QR-Flow umsetzen
 
