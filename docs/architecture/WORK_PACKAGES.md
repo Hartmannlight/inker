@@ -62,7 +62,7 @@ müssen.
 | [x] | WP-04 | Versionierte Device-, Presentation-, Source- und Interaction-Verträge | WP-03 |
 | [x] | WP-05 | Prisma-Migrationsbaseline und sicherer Containerstart | WP-01, WP-02 |
 | [x] | WP-06 | Bereinigtes Device-/Profile-/Credential-Datenmodell | WP-04, WP-05 |
-| [ ] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
+| [x] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
 | [ ] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
 | [ ] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
 | [ ] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
@@ -649,12 +649,12 @@ Delivery- oder Renderlogik.
 
 **Aufgaben:**
 
-- [ ] Modelliere unveränderliche Publication und PublicationRevision.
-- [ ] Modelliere gewünschte/zuletzt bestätigte Geräterevision getrennt.
-- [ ] Modelliere OutboxEvent mit Status, Attempts, Zeitpunkt und Payload-Version.
-- [ ] Definiere atomare Serviceoperationen für Fachänderung plus Outbox-Eintrag.
-- [ ] Ergänze Indizes, Aufbewahrung und Cleanup-Regeln.
-- [ ] Erstelle Migration, Tests und minimale Admin-/Debug-Abfragen.
+- [x] Modelliere unveränderliche Publication und PublicationRevision.
+- [x] Modelliere gewünschte/zuletzt bestätigte Geräterevision getrennt.
+- [x] Modelliere OutboxEvent mit Status, Attempts, Zeitpunkt und Payload-Version.
+- [x] Definiere atomare Serviceoperationen für Fachänderung plus Outbox-Eintrag.
+- [x] Ergänze Indizes, Aufbewahrung und Cleanup-Regeln.
+- [x] Erstelle Migration, Tests und minimale Admin-/Debug-Abfragen.
 
 **Abnahme:** Eine fachliche Änderung und ihr Event werden atomar gespeichert; ein
 Neustart verliert den ausstehenden Event nicht.
@@ -662,6 +662,78 @@ Neustart verliert den ausstehenden Event nicht.
 **Validierung:** Transaktions-, Rollback-, Restart- und Schema-Tests.
 
 **Handoff:** Eventtypen, Retention und noch nicht angeschlossene Producer notieren.
+
+### Abschluss WP-07
+
+- Status: abgeschlossen am 2026-08-24
+- Ergebnis: Die neue Vorwärtsmigration
+  `20260824003000_publication_outbox_state` ergänzt unveränderliche
+  `Publication`-Identitäten und append-only `PublicationRevision`-Snapshots.
+  Datenbanktrigger verhindern Änderungen an beiden Historientabellen; alte,
+  unreferenzierte Revisionen dürfen ausschließlich durch die definierte Retention
+  gelöscht werden. `DevicePublicationState` hält gewünschte und zuletzt
+  bestätigte Revision samt getrennten Zeitpunkten und Fremdschlüsseln auseinander,
+  sodass eine Bestätigung bewusst hinter dem Sollzustand zurückliegen kann.
+  `OutboxEvent` persistiert Status, Attempts, Verfügbarkeit, Ereignis-/Versuchs-/
+  Abschlusszeit, versioniertes JSON-Payload und Diagnosefehler mit passenden
+  Status-, Aggregat- und Zeitindizes.
+- Atomare Operationen und Debug-Grenze: `PublicationPersistenceService` legt eine
+  Publication mit erster Revision an, hängt Revisionen an, setzt die gewünschte
+  Geräterevision und bestätigt eine Geräterevision. Jede Fachänderung und ihr
+  Outbox-Ereignis werden in derselben kurzen Prisma-Transaktion gespeichert.
+  Read-only-Abfragen liefern Publications mit Revisionen, den Gerätezustand,
+  gefilterte/begrenzte Outbox-Ereignisse und Statuszähler für Admin-/Debug-Code.
+- Eventtypen und Payload-Version: `publication.revision.created`,
+  `device.publication.desired-revision.changed` und
+  `device.publication.revision.acknowledged`, jeweils Payload-Version `1`.
+  Neue Ereignisse starten mit Status `pending`, `attempts = 0` und identischem
+  Ereignis-/Verfügbarkeitszeitpunkt. Zulässige Zustände sind `pending`,
+  `processing`, `delivered` und `dead-letter`.
+- Retention/Cleanup: `delivered`-Events werden 30 Tage, `dead-letter`-Events 90
+  Tage aufbewahrt. `pending` und `processing` werden nie zeitbasiert gelöscht.
+  Unreferenzierte Publication-Revisionen dürfen nach 90 Tagen entfernt werden;
+  die jeweils neueste sowie gewünschte oder bestätigte Revisionen bleiben immer
+  erhalten. Publication-Identitäten werden nicht automatisch gelöscht. Die
+  Regeln sind als Konstanten und explizit aufrufbarer, transaktionaler
+  `PublicationCleanupService` umgesetzt; zeitliche Einplanung gehört zur späteren
+  Maintenance-/Worker-Anbindung.
+- Geänderte Kernpfade: `backend/prisma/schema.prisma`,
+  `backend/prisma/migrations/20260824003000_publication_outbox_state/`,
+  `backend/src/publications/`, `backend/src/app.module.ts`,
+  `backend/src/test/mocks/prisma.mock.ts`,
+  `backend/test/publication-persistence.integration.ts`,
+  `backend/test/migrations.integration.ts` und
+  `docs/architecture/WORK_PACKAGES.md`. Die Migrationen
+  `20260824000000_inker_0_6_0_baseline`,
+  `20260824001000_device_platform_schema` und
+  `20260824002000_normalize_device_profiles_credentials` wurden nicht verändert.
+- Ausgeführte Tests: `prisma validate`; Backend-Typecheck; gezielter ESLint-Lauf
+  über alle geänderten WP-07-Produktionsdateien; fünf reale SQLite-
+  Integrationsfälle für atomaren Write, erzwungenen Rollback, getrennten Soll-/
+  Bestätigungszustand, Retention/Schutz referenzierter Revisionen und Restart-
+  Persistenz; vier Migrationstests für Neuinstallation/Neustart, 0.6.0-Upgrade,
+  Übernahme des bisherigen Device-Platform-Schemas und fehlerhafte Migration,
+  jeweils mit Datamodel-Diff sowie ergänzter Index-/Triggerprüfung; 454 bestehende
+  Backendtests in 37 Dateien; Backend-Build und `git diff --check`. Alle
+  paketbezogenen Prüfungen waren grün.
+- Nicht ausführbare Tests und Grund: keine. Die bekannte Prisma-7-Warnung zur
+  `package.json#prisma`-Konfiguration bleibt unverändert und außerhalb von WP-07.
+- Bewusste Abweichungen vom Paket: keine.
+- Noch nicht angeschlossene Producer/Folgearbeit: Die bestehenden Draft-, Screen-,
+  Playlist-, WebSocket- und Legacy-`presentationRevision`-Pfade schreiben noch
+  nicht in diese Modelle. Der vollständige explizite Publish-/Manifest-Pfad folgt
+  in WP-17, die Delivery-Anbindung in WP-14 und Outbox-Dispatch, Statusübergänge,
+  Retry/Deduplizierung sowie Maintenance-Scheduling in WP-16. WP-07 startet weder
+  BullMQ-Jobs noch Render- oder Deliverylogik.
+- Neue Risiken/Schulden: `PublicationRevision.content` ist bewusst ein
+  versionierter, persistierter JSON-Snapshot als Basisgrenze; seine vollständige
+  Publish-Validierung und Manifest-Zusammensetzung folgen in WP-17. Gleichzeitige
+  Revisionserzeugung wird durch den eindeutigen `(publication_id, revision)`-
+  Index sicher abgewiesen; ein fachlicher Idempotenz-/Retryvertrag ist Aufgabe des
+  späteren Publish-Pfads.
+- Git-Stand/Commit: Bestandteil dieses WP-07-Abschlusscommits auf Branch
+  `codex/device-platform-spike`, auf Basis des WP-06-Commits `6399dcb`. Es wurde
+  kein Push erstellt.
 
 ## WP-08 – Browser-Credential-Lebenszyklus reparieren
 

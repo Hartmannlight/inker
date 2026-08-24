@@ -123,6 +123,7 @@ describe("Prisma migration baseline", () => {
         "20260824000000_inker_0_6_0_baseline",
         "20260824001000_device_platform_schema",
         "20260824002000_normalize_device_profiles_credentials",
+        "20260824003000_publication_outbox_state",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,
@@ -130,6 +131,34 @@ describe("Prisma migration baseline", () => {
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM delivery_policies").get()?.count,
       ).toBe(4);
+      expect(
+        database
+          .query<
+            { count: number },
+            []
+          >("SELECT count(*) AS count FROM publications")
+          .get()?.count,
+      ).toBe(0);
+      const publicationIndexes = database
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('publication_revisions', 'outbox_events') ORDER BY name",
+        )
+        .all()
+        .map(({ name }) => name);
+      expect(publicationIndexes).toContain(
+        "publication_revisions_publication_id_revision_key",
+      );
+      expect(publicationIndexes).toContain(
+        "outbox_events_status_available_at_idx",
+      );
+      expect(
+        database
+          .query<
+            { count: number },
+            []
+          >("SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name IN ('publications_prevent_update', 'publication_revisions_prevent_update')")
+          .get()?.count,
+      ).toBe(2);
       expect(
         database
           .query<{ journal_mode: string }, []>("PRAGMA journal_mode")

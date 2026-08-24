@@ -26,6 +26,7 @@ import { SettingsModule } from './settings/settings.module';
 import { PluginsModule } from './plugins/plugins.module';
 import { ModelsModule } from './models/models.module';
 import { DevicePlatformModule } from './device-platform/device-platform.module';
+import { PublicationsModule } from './publications/publications.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 
@@ -85,6 +86,7 @@ import { validationSchema } from './config/validation.schema';
     ScreenDesignerModule,
     EventsModule,
     DevicePlatformModule,
+    PublicationsModule,
     SettingsModule,
     PluginsModule,
     ModelsModule,

@@ -59,6 +59,7 @@ model Device {
   screenAssignments DeviceScreenAssignment[]
   profile           DeviceProfile            @relation(fields: [profileId], references: [profileId])
   deliveryPolicy    DeliveryPolicy           @relation(fields: [deliveryPolicyId], references: [policyId])
+  publicationState  DevicePublicationState?
 
   @@map("devices")
 }
@@ -112,6 +113,84 @@ model DeviceCredential {
 
   @@index([deviceId])
   @@map("device_credentials")
+}
+
+// A publication is a stable, immutable identity. User-facing draft/editor
+// models remain separate; only explicit publication revisions belong here.
+model Publication {
+  publicationId  String                @id @default(cuid()) @map("publication_id")
+  publicationKey String                @unique @map("publication_key")
+  createdAt      DateTime              @default(now()) @map("created_at")
+  revisions      PublicationRevision[]
+
+  @@map("publications")
+}
+
+// Revisions are append-only snapshots. The database migration rejects UPDATEs;
+// retention may delete old, unreferenced revisions according to the policy in
+// PublicationCleanupService.
+model PublicationRevision {
+  publicationRevisionId String   @id @default(cuid()) @map("publication_revision_id")
+  publicationId         String   @map("publication_id")
+  revision              Int
+  protocolVersion       String   @map("protocol_version")
+  content               Json
+  contentHash           String   @map("content_hash")
+  publishedAt           DateTime @default(now()) @map("published_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  publication           Publication              @relation(fields: [publicationId], references: [publicationId], onDelete: Cascade)
+  desiredByDevices      DevicePublicationState[] @relation("DesiredPublicationRevision")
+  acknowledgedByDevices DevicePublicationState[] @relation("AcknowledgedPublicationRevision")
+
+  @@unique([publicationId, revision])
+  @@index([publicationId, publishedAt])
+  @@map("publication_revisions")
+}
+
+// Delivery intent and observed device state deliberately use different foreign
+// keys so a slow/offline device can acknowledge an older revision while a newer
+// one is already desired.
+model DevicePublicationState {
+  deviceId                          Int       @id @map("device_id")
+  desiredPublicationRevisionId      String?   @map("desired_publication_revision_id")
+  acknowledgedPublicationRevisionId String?   @map("acknowledged_publication_revision_id")
+  desiredAt                         DateTime? @map("desired_at")
+  acknowledgedAt                    DateTime? @map("acknowledged_at")
+  createdAt                         DateTime  @default(now()) @map("created_at")
+  updatedAt                         DateTime  @updatedAt @map("updated_at")
+
+  device               Device               @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  desiredRevision      PublicationRevision? @relation("DesiredPublicationRevision", fields: [desiredPublicationRevisionId], references: [publicationRevisionId], onDelete: Restrict)
+  acknowledgedRevision PublicationRevision? @relation("AcknowledgedPublicationRevision", fields: [acknowledgedPublicationRevisionId], references: [publicationRevisionId], onDelete: Restrict)
+
+  @@index([desiredPublicationRevisionId])
+  @@index([acknowledgedPublicationRevisionId])
+  @@map("device_publication_states")
+}
+
+// Durable handoff from domain transactions to the later WP-16 dispatcher.
+// Status values and numeric invariants are additionally constrained by SQL.
+model OutboxEvent {
+  eventId        String    @id @default(cuid()) @map("event_id")
+  eventType      String    @map("event_type")
+  aggregateType  String    @map("aggregate_type")
+  aggregateId    String    @map("aggregate_id")
+  payloadVersion Int       @default(1) @map("payload_version")
+  payload        Json
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  availableAt    DateTime  @default(now()) @map("available_at")
+  occurredAt     DateTime  @default(now()) @map("occurred_at")
+  lastAttemptAt  DateTime? @map("last_attempt_at")
+  processedAt    DateTime? @map("processed_at")
+  lastError      String?   @map("last_error")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@index([occurredAt])
+  @@map("outbox_events")
 }
 
 model Model {
