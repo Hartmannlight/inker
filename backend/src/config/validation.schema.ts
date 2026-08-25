@@ -9,6 +9,18 @@ export const validationSchema = Joi.object({
   // Database
   DATABASE_URL: Joi.string().required(),
 
+  // Instance security
+  ADMIN_PIN: Joi.string().min(4).max(128).invalid('1111').required()
+    .messages({
+      'any.invalid': 'ADMIN_PIN must not use a known default',
+      'any.required': 'ADMIN_PIN is required',
+      'string.empty': 'ADMIN_PIN is required',
+    }),
+  INKER_INSTANCE_SECRET_PATH: Joi.string().default('./secrets/instance.json'),
+  ENCRYPTION_KEY: Joi.forbidden().messages({
+    'any.unknown': 'ENCRYPTION_KEY is no longer accepted; use the instance secret file',
+  }),
+
   // Rate limiting
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),

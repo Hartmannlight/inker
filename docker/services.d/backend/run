@@ -2,10 +2,13 @@
 exec 2>&1
 
 SQLITE_FILE=/app/uploads/inker.db
+SECRET_DIR=/app/secrets
+export INKER_INSTANCE_SECRET_PATH="${INKER_INSTANCE_SECRET_PATH:-${SECRET_DIR}/instance.json}"
 
 # Create required directories and set ownership for the non-root backend user
-mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets /app/uploads/captures /app/uploads/drawings /app/logs /tmp/inker-home
-chown -R inker:inker /app/uploads /app/logs /tmp/inker-home
+mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets /app/uploads/captures /app/uploads/drawings /app/logs "$SECRET_DIR" /tmp/inker-home
+chown -R inker:inker /app/uploads /app/logs "$SECRET_DIR" /tmp/inker-home
+chmod 700 "$SECRET_DIR"
 
 # Set HOME for the inker user (Puppeteer needs a writable home for config)
 export HOME=/tmp/inker-home
@@ -18,6 +21,12 @@ export DATABASE_URL="file:${SQLITE_FILE}"
 # Track whether this is a brand-new install (no database file yet) purely for logging.
 FRESH_INSTALL=0
 [ ! -f "$SQLITE_FILE" ] && FRESH_INSTALL=1
+
+echo "[backend] Validating instance security..."
+if ! s6-setuidgid inker bun run scripts/prepare-instance-secrets.ts --initialize; then
+    echo "[backend] Fatal: instance security validation failed; backend will not start"
+    exit 1
+fi
 
 echo "[backend] Applying versioned database migrations..."
 if ! s6-setuidgid inker bun run scripts/migrate-database.ts; then

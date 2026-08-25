@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { redactLogValue, redactSecretText } from '../../config/secret-redaction';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -26,6 +27,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       exception instanceof HttpException
         ? exception.getResponse()
         : 'Internal server error';
+    const safeMessage = redactLogValue(message);
 
     const safePath = this.sanitizeUrl(request.url);
 
@@ -34,15 +36,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       path: safePath,
       method: request.method,
-      message: typeof message === 'string' ? message : (message as any).message,
-      ...(typeof message === 'object' && message !== null ? message : {}),
+      message: typeof safeMessage === 'string' ? safeMessage : (safeMessage as any).message,
+      ...(typeof safeMessage === 'object' && safeMessage !== null ? safeMessage : {}),
     };
 
     // Log error details (query params stripped to prevent token leakage)
     if (status >= 500) {
       this.logger.error(
         `${request.method} ${safePath}`,
-        exception instanceof Error ? exception.stack : JSON.stringify(exception),
+        redactSecretText(
+          exception instanceof Error ? exception.stack || exception.message : JSON.stringify(exception),
+        ),
       );
     } else {
       this.logger.warn(

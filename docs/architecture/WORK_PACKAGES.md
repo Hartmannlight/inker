@@ -1066,13 +1066,13 @@ und Dokumentation. Admin-Session folgt in WP-12.
 
 **Aufgaben:**
 
-- [ ] Entferne konstante und aus PIN abgeleitete Encryption-Fallbacks.
-- [ ] Erzeuge beim kontrollierten Erstsetup einen zufälligen Instanzschlüssel.
-- [ ] Speichere Schlüssel in separatem Volume/Secret mit restriktiven Rechten.
-- [ ] Verweigere normalen Start bei fehlendem oder unsicherem Zustand.
-- [ ] Definiere Key-ID und Version für spätere Rotation.
-- [ ] Redigiere Secrets konsequent aus Logs und Fehlern.
-- [ ] Ergänze Setup-, Restart-, Missing-Secret- und Backup-Dokumentationstests.
+- [x] Entferne konstante und aus PIN abgeleitete Encryption-Fallbacks.
+- [x] Erzeuge beim kontrollierten Erstsetup einen zufälligen Instanzschlüssel.
+- [x] Speichere Schlüssel in separatem Volume/Secret mit restriktiven Rechten.
+- [x] Verweigere normalen Start bei fehlendem oder unsicherem Zustand.
+- [x] Definiere Key-ID und Version für spätere Rotation.
+- [x] Redigiere Secrets konsequent aus Logs und Fehlern.
+- [x] Ergänze Setup-, Restart-, Missing-Secret- und Backup-Dokumentationstests.
 
 **Abnahme:** Eine Default-Installation besitzt einen einzigartigen Schlüssel; das
 Kopieren nur der SQLite-Datei liefert keine direkt nutzbaren Provider-Secrets.
@@ -1080,6 +1080,79 @@ Kopieren nur der SQLite-Datei liefert keine direkt nutzbaren Provider-Secrets.
 **Validierung:** Startup-/Container-Tests und Secret-Redaction-Test.
 
 **Handoff:** Secretpfad, Rotationseinschränkungen und Backupanforderungen notieren.
+
+### Abschluss WP-11
+
+- Status: abgeschlossen am 2026-08-25
+- Ergebnis: Bekannte Admin- und Encryption-Defaults sind entfernt. `ADMIN_PIN`
+  ist explizit erforderlich, `1111` wird in Compose, Setup und Anwendung
+  abgelehnt, und der entfernte `ENCRYPTION_KEY`-Pfad kann nicht stillschweigend
+  weiterverwendet werden. Ein frisches kontrolliertes Container-Setup erzeugt
+  vor der SQLite-Datenbank einen zufälligen 256-Bit-Instanzschlüssel; bei einer
+  bestehenden Datenbank ohne passenden Schlüssel stoppt der Backendstart vor
+  Migration und Readiness, ohne einen Ersatzschlüssel anzulegen.
+- Secretpfad und Rechte: Der Container verwendet
+  `/app/secrets/instance.json` auf dem separaten `secrets_data`-Volume. Das
+  Verzeichnis gehört `inker:inker` und hat Modus `0700`, die atomar publizierte
+  Schlüsseldatei Modus `0600`. Lokale Starts können den Pfad über
+  `INKER_INSTANCE_SECRET_PATH` konfigurieren. Der Schlüssel liegt nie in SQLite,
+  URL, DTO oder Startlog.
+- Schlüssel- und Ciphertextformat: Die JSON-Datei enthält `version: 1`, eine
+  nicht geheime UUID als `keyId` und den zufälligen Base64-Schlüssel. Neue
+  AES-256-GCM-Werte tragen `v1`, `keyId`, IV, Auth-Tag und Ciphertext. Der
+  dreiteilige bisherige Ciphertext bleibt mit demselben Schlüssel lesbar; eine
+  fremde `keyId`, unbekannte Version oder ungültige Authentisierung wird ohne
+  Ausgabe von Key oder Ciphertext abgewiesen.
+- Rotationseinschränkungen: `version` und `keyId` bereiten die Auswahl mehrerer
+  Schlüssel vor, aber Multi-Key-Rotation und automatische Re-Encryption sind
+  noch nicht implementiert. Eine verlorene Schlüsseldatei darf nicht ersetzt
+  werden. Für Bestandsinstallationen ohne Secretdatei gibt es ausschließlich den
+  expliziten Einmalpfad `prepare-instance-secrets.ts --initialize-existing`;
+  dessen neuer Zufallsschlüssel kann alte, mit einem Fallback verschlüsselte
+  Plugin-/OAuth-Werte nicht lesen, sodass diese anschließend neu einzugeben sind.
+- Backupanforderungen: `/app/uploads` und `/app/secrets` sind getrennt zu sichern,
+  bilden aber genau ein gemeinsames Restore-Set. Backups müssen Dateirechte und
+  die Zuordnung zur nicht geheimen `keyId` bewahren und das Secretbackup selbst
+  wie ein Credential verschlüsseln und zugriffsbeschränken. Eine allein kopierte
+  SQLite-Datei reicht weder wegen WAL noch zum Entschlüsseln von Provider-Secrets.
+- Secret-Redaction: Strukturierte und textuelle Logdaten redigieren insbesondere
+  PINs, Passwörter, API-/Encryption-Keys, Tokens, Credentials, Authorization und
+  Cookies. Startup- und HTTP-Fehler geben keine Schlüsselwerte aus; `keyId` darf
+  als nicht geheime Diagnose- und Backupzuordnung erscheinen.
+- Geänderte Kernpfade: `backend/src/config/instance-secrets.ts`,
+  `backend/scripts/prepare-instance-secrets.ts`,
+  `backend/src/common/services/encryption.service.ts`,
+  `backend/src/config/secret-redaction.ts`, Startup-/Logger-Konfiguration,
+  `backend/docker-entrypoint.sh`, `docker/services.d/backend/run`, `Dockerfile`,
+  `docker-compose.yml`, `README.md` und
+  `docs/operations/DATABASE_BACKUP.md`.
+- Ausgeführte Tests: 480 Backend-Unit-/Controller-Tests in 44 Dateien; 15 gezielte
+  Secret-, Konfigurations-, Encryption- und Redaction-Tests; vier
+  Startup-/Restart-/Missing-Secret-/Dokumentations-Integrationstests; vier
+  vollständige WP-05-Migrationsfälle; Backend-Typecheck; gezieltes ESLint aller
+  geänderten, vom Projekt-TSConfig erfassten Produktionsdateien; Backend-Build;
+  Compose-Konfiguration positiv mit sicherem PIN und negativ ohne PIN;
+  vollständiger Docker-Image-Build; realer frischer Containerstart und Readiness;
+  Prüfung von Format, 32-Byte-Schlüssel, `0700`/`0600`, Logausschluss und
+  unveränderter `keyId` nach Restart; negativer Container-Smoke mit bestehender
+  SQLite-Datei und leerem Secret-Volume sowie Default-PIN-Ablehnung. Alle
+  genannten Prüfungen waren grün.
+- Nicht ausführbare Tests und Grund: keine.
+- Bewusste Abweichungen vom Paket: keine.
+- Neue Risiken/Schulden: Bestandsinstallationen, die bisher den konstanten oder
+  PIN-abgeleiteten Fallback benutzt haben, besitzen keinen wiederverwendbaren
+  sicheren Instanzschlüssel und müssen verschlüsselte Einstellungen nach dem
+  dokumentierten Übergang neu eingeben. Eine echte Key-Rotation bleibt ein
+  Folgepaket und darf nicht durch Überschreiben von `instance.json` simuliert
+  werden.
+- Relevante Hinweise für WP-12: Die bestehende PIN-basierte Admin-Session wurde
+  bewusst nicht verändert. WP-12 kann voraussetzen, dass kein Default-PIN mehr
+  startet und dass Secret-/Fehlerwerte über die zentrale Redaction geschützt
+  werden; die Instanzschlüsseldatei darf dabei weder in Session-DTOs noch in
+  Authentisierungslogs gelangen.
+- Git-Stand/Commit: Branch `codex/device-platform-spike`; WP-10 wurde als
+  `d58a4df` committed. Der Arbeitsbaum enthält ausschließlich die uncommittierten
+  WP-11-Änderungen. Es wurde kein Push erstellt.
 
 ## WP-12 – Sichere Admin-Session einführen
 

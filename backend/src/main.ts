@@ -10,8 +10,20 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { createLoggerConfig } from './config/logger.config';
+import {
+  DEFAULT_INSTANCE_SECRET_PATH,
+  loadInstanceSecrets,
+  validateAdminPin,
+} from './config/instance-secrets';
+import { redactSecretText } from './config/secret-redaction';
+import { resolve } from 'node:path';
 
 async function bootstrap() {
+  validateAdminPin(process.env.ADMIN_PIN);
+  loadInstanceSecrets(resolve(
+    process.env.INKER_INSTANCE_SECRET_PATH || DEFAULT_INSTANCE_SECRET_PATH,
+  ));
+
   // Create logger instance
   const logger = WinstonModule.createLogger(createLoggerConfig());
 
@@ -116,18 +128,13 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
   logger.log(`Inker Server running in ${environment} mode on port ${port} (listening on all interfaces)`);
 
-  // Warn if using default PIN
-  const adminPin = process.env.ADMIN_PIN || '1111';
-  if (adminPin === '1111') {
-    logger.warn('WARNING: Using default ADMIN_PIN "1111". Change it via the ADMIN_PIN environment variable for security.');
-  }
-
   if (environment !== 'production') {
     logger.log(`📚 API Documentation available at http://localhost:${port}/api/docs`);
   }
 }
 
 bootstrap().catch((error) => {
-  console.error('Failed to start application:', error);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Failed to start application: ${redactSecretText(message)}`);
   process.exit(1);
 });

@@ -187,7 +187,6 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production \
     PORT=3002 \
     DATABASE_URL=file:/app/uploads/inker.db \
-    ADMIN_PIN="1111" \
     CORS_ORIGINS=* \
     LOG_LEVEL=info
 
@@ -205,6 +204,8 @@ COPY --from=contracts-builder /contracts/dist /contracts/dist
 # Copy Prisma schema and generated client
 COPY backend/prisma ./prisma/
 COPY backend/scripts ./scripts/
+# The Bun startup helper imports only these two dependency-free security modules.
+COPY backend/src/config/instance-secrets.ts backend/src/config/secret-redaction.ts ./src/config/
 COPY --from=backend-install /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=backend-install /app/node_modules/@prisma ./node_modules/@prisma
 
@@ -234,11 +235,12 @@ RUN chmod +x /etc/cont-init.d/* && \
 # Create required directories
 RUN mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets \
     /app/uploads/captures /app/uploads/drawings /app/logs \
-    /data
+    /app/secrets /data
 
 # Create non-root user for backend process
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin inker && \
-    chown -R inker:inker /app
+    chown -R inker:inker /app && \
+    chmod 700 /app/secrets
 
 EXPOSE 80
 

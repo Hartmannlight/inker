@@ -1,9 +1,10 @@
 # SQLite migration, backup and restore
 
-Inker stores its SQLite database at `/app/uploads/inker.db`. Schema changes are
-forward-only Prisma migrations and run before the backend starts. A migration
-failure therefore keeps `/ready` unavailable instead of starting against a
-partially upgraded database.
+Inker stores its SQLite database at `/app/uploads/inker.db` and the instance
+encryption key at `/app/secrets/instance.json`. These paths must use separate
+persistent volumes. Schema changes are forward-only Prisma migrations and run
+after the instance-secret startup check. A missing, malformed, or overly
+permissive secret and a migration failure both keep `/ready` unavailable.
 
 ## Required backup before an upgrade
 
@@ -12,7 +13,10 @@ migrations.
 
 1. Stop the Inker container so no database or upload is changing.
 2. Snapshot or archive the complete `/app/uploads` volume, not only `inker.db`.
-3. Keep the snapshot until the upgraded container has started, `/ready` succeeds,
+3. Separately snapshot `/app/secrets`, preserving owner-only file permissions.
+4. Record the non-secret `keyId` from `instance.json` with the backup inventory,
+   but never copy the `encryptionKey` into logs, tickets, or backup labels.
+5. Keep both snapshots until the upgraded container has started, `/ready` succeeds,
    and representative devices and screens have been checked.
 
 Copying only `inker.db` while Inker is running is not a valid backup in WAL mode:
@@ -21,17 +25,32 @@ when downtime is impossible, or copy the database, `-wal` and `-shm` files as on
 atomic storage snapshot. The complete uploads-volume backup is preferred because
 it also keeps database references and uploaded artifacts consistent.
 
+The two snapshots form one restore set. Copying only the SQLite file does not make
+encrypted plugin, connector, or OAuth fields usable because the encryption key is
+outside the database. Conversely, a secret backup without its matching database
+is not a complete installation backup. Encrypt and access-control the secret
+backup as a credential.
+
 ## Restore and rollback
 
 1. Stop the container.
 2. Preserve the failed volume separately for diagnosis.
-3. Restore the complete pre-upgrade uploads snapshot into an empty volume.
-4. Start the last image version known to work with that snapshot.
-5. Confirm `/ready`, then check devices, playlists, screens and settings.
+3. Restore the complete pre-upgrade uploads snapshot into an empty data volume.
+4. Restore the matching secret snapshot into an empty secret volume and preserve
+   directory mode `0700` and file mode `0600` on Linux.
+5. Confirm that `instance.json` still contains the expected `version` and `keyId`.
+6. Start the last image version known to work with that restore set.
+7. Confirm `/ready`, then check devices, playlists, screens and encrypted provider
+   settings.
 
 Do not edit `_prisma_migrations`, rerun a failed SQL statement manually or use
 `prisma db push` against a production database. Prisma migrations are forward-only;
 rollback means restoring the matching data backup and application image.
+
+Do not create a new instance key when a database already exists. Normal startup
+refuses this state because silently replacing the key would make encrypted values
+unrecoverable. Multi-key rotation and automatic re-encryption are not implemented;
+`version: 1` and `keyId` only prepare a future rotation workflow.
 
 ## Existing installations
 
@@ -41,3 +60,11 @@ pre-migration schemas before any migration is recorded as applied. Exact 0.6.0
 databases then receive `20260824001000_device_platform_schema`; databases already
 updated by the former `db push` path adopt both history entries. Unknown drift is
 rejected and must be investigated from a copy of the pre-upgrade backup.
+
+Installations created before the separate secret volume need a controlled one-time
+transition before normal startup. Back up the current installation, mount an empty
+`/app/secrets` volume, explicitly run
+`scripts/prepare-instance-secrets.ts --initialize-existing`, and then re-enter any
+legacy encrypted plugin or OAuth settings. The command creates a random key and
+never derives it from `ADMIN_PIN`; it does not recover ciphertext written with the
+old fallback key.

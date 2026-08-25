@@ -55,6 +55,10 @@ Support project that uses inker:
 
 ## Quick start & Technical information
 
+Set `ADMIN_PIN` to an installation-specific value in your shell or secret manager
+before using these commands. The examples forward that value without embedding a
+known PIN in the image or Compose file.
+
 ### Docker Run
 
 ```bash
@@ -62,7 +66,9 @@ docker run -d \
   --name inker \
   --restart unless-stopped \
   -p 80:80 \
+  -e ADMIN_PIN \
   -v inker_uploads:/app/uploads \
+  -v inker_secrets:/app/secrets \
   wojooo/inker:latest
 ```
 
@@ -79,19 +85,23 @@ services:
       - "80:80"
     volumes:
       - uploads_data:/app/uploads
+      - secrets_data:/app/secrets
     environment:
       TZ: UTC
-      ADMIN_PIN: "1111"  # Quotes required — YAML strips leading zeros without them
+      ADMIN_PIN: "${ADMIN_PIN:?Set a unique ADMIN_PIN before starting Inker}"
 
 volumes:
   uploads_data:
+  secrets_data:
 ```
 
 ```bash
 docker compose up -d
 ```
 
-Open **http://your-server-ip** and log in with PIN `1111`.
+Open **http://your-server-ip** and log in with the PIN you configured. Inker
+refuses to start when `ADMIN_PIN` is missing or still set to the known `1111`
+default.
 
 ### Browser-based web display
 
@@ -104,13 +114,18 @@ Pairing links expire after 15 minutes and are consumed after one use. The browse
 
 TRMNL firmware continues to use the existing `/api/setup` and `/api/display` pull protocol. Device type and transport are independent internally, so additional hardware drivers can be added without changing playlist or rendering code.
 
-> **Database:** Inker uses an embedded **SQLite** database stored at `/app/uploads/inker.db` on the `uploads` volume — there's no separate database server to run or manage. Back up the complete `uploads` volume before every upgrade; see the [backup and restore rules](docs/operations/DATABASE_BACKUP.md).
+> **Data and secrets:** Inker stores its embedded **SQLite** database at
+> `/app/uploads/inker.db` and its versioned instance encryption key at
+> `/app/secrets/instance.json`. Use separate persistent volumes for these paths
+> and back up both before every upgrade; see the
+> [backup and restore rules](docs/operations/DATABASE_BACKUP.md).
 
 ## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ADMIN_PIN` | Login PIN | `1111` |
+| `ADMIN_PIN` | Required, installation-specific login PIN; `1111` is rejected | none |
+| `INKER_INSTANCE_SECRET_PATH` | Versioned instance encryption key file | `/app/secrets/instance.json` in the image |
 | `TZ` | Timezone for widgets | `UTC` |
 | `INKER_PORT` | External port (for custom port mapping, e.g. `INKER_PORT=800`) | `80` |
 | `CORS_ORIGINS` | Allowed CORS origins (comma-separated, or `*` for all) | same-origin |
@@ -121,11 +136,34 @@ docker run -d \
   --name inker \
   --restart unless-stopped \
   -p 80:80 \
-  -e ADMIN_PIN="1111" \
+  -e ADMIN_PIN \
   -e TZ=Europe/Warsaw \
   -v inker_uploads:/app/uploads \
+  -v inker_secrets:/app/secrets \
   wojooo/inker:latest
 ```
+
+### Instance secret lifecycle
+
+On a fresh installation, the container creates a unique 256-bit encryption key
+at `/app/secrets/instance.json` before creating the SQLite database. The file is
+owner-readable only, contains format `version: 1` and a non-secret `keyId`, and is
+reused unchanged on restart. The key and encrypted provider values are never
+written to startup logs.
+
+If the SQLite database exists but the matching secret file is missing, startup
+stops. Restore the matching `/app/secrets` backup; do not generate a replacement.
+For an upgrade from a legacy installation that never had a secret file, first
+back up the installation and explicitly initialize a new key:
+
+```bash
+docker compose run --rm \
+  --entrypoint bun inker run scripts/prepare-instance-secrets.ts --initialize-existing
+```
+
+Legacy encrypted plugin and OAuth settings cannot be decrypted with that new key
+and must be entered again. Automatic re-encryption and multi-key rotation are not
+supported yet. The version and `keyId` fields reserve that future rotation path.
 
 ### Build from source
 
@@ -144,7 +182,9 @@ docker run -d \
   --name inker \
   --restart unless-stopped \
   -p 80:80 \
+  -e ADMIN_PIN \
   -v inker_uploads:/app/uploads \
+  -v inker_secrets:/app/secrets \
   wojooo/inker:latest
 ```
 
@@ -161,9 +201,14 @@ docker compose pull
 docker compose up -d
 ```
 
-All data (screens, devices, playlists, settings) is preserved — versioned database migrations are applied before the backend starts. A failed migration keeps the container unready; restore the pre-upgrade backup before retrying.
+All data and the matching instance key are preserved when both named volumes are
+kept. Versioned database migrations are applied before the backend starts. A
+failed migration or secret check keeps the container unready; restore both
+pre-upgrade backups before retrying.
 
-> **Warning:** Never use `docker compose down -v` to update — the `-v` flag deletes all volumes and you will lose your data.
+> **Warning:** Never use `docker compose down -v` to update — the `-v` flag deletes
+> the data and secret volumes. Losing only the secret volume makes encrypted
+> provider settings unrecoverable.
 
 ## Troubleshooting
 
@@ -174,7 +219,8 @@ docker compose down -v
 docker compose up -d
 ```
 
-> **Note:** This removes all data (database, uploads). Only use on a fresh install or when you don't mind losing data.
+> **Note:** This removes the database, uploads, and instance secret. Only use it
+> when you intend to erase the complete installation.
 
 ## Testing
 

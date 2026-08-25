@@ -1,34 +1,27 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import {
+  DEFAULT_INSTANCE_SECRET_PATH,
+  loadInstanceSecrets,
+} from '../../config/instance-secrets';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
-const KEY_LENGTH = 32;
-const SALT = 'inker-plugin-settings';
+const CIPHERTEXT_VERSION = 'v1';
 
 @Injectable()
 export class EncryptionService {
   private readonly logger = new Logger(EncryptionService.name);
   private readonly key: Buffer;
+  private readonly keyId: string;
 
   constructor(private readonly config: ConfigService) {
-    const encryptionKey = config.get<string>('encryption.key');
-    const adminPin = config.get<string>('admin.pin');
-    let secret: string;
-
-    if (encryptionKey) {
-      secret = encryptionKey;
-    } else if (adminPin && adminPin !== '1111') {
-      secret = adminPin;
-      this.logger.warn('ENCRYPTION_KEY not set — falling back to ADMIN_PIN. Set ENCRYPTION_KEY for stronger encryption.');
-    } else {
-      secret = 'inker-default-key';
-      this.logger.warn('ENCRYPTION_KEY not set and ADMIN_PIN is default — plugin secrets use weak encryption. Set ENCRYPTION_KEY env variable.');
-    }
-
-    this.key = scryptSync(secret, SALT, KEY_LENGTH);
+    const secretPath = config.get<string>('encryption.secretPath', DEFAULT_INSTANCE_SECRET_PATH);
+    const secrets = loadInstanceSecrets(secretPath);
+    this.key = Buffer.from(secrets.encryptionKey, 'base64');
+    this.keyId = secrets.keyId;
   }
 
   encrypt(plaintext: string): string {
@@ -36,22 +29,40 @@ export class EncryptionService {
     const cipher = createCipheriv(ALGORITHM, this.key, iv, { authTagLength: AUTH_TAG_LENGTH });
     const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
-    return `${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
+    return [
+      CIPHERTEXT_VERSION,
+      this.keyId,
+      iv.toString('base64'),
+      authTag.toString('base64'),
+      encrypted.toString('base64'),
+    ].join(':');
   }
 
   decrypt(ciphertext: string): string {
     const parts = ciphertext.split(':');
-    if (parts.length !== 3) {
-      throw new Error('Invalid encrypted format');
+    if (/^v\d+$/.test(parts[0] || '') && parts[0] !== CIPHERTEXT_VERSION) {
+      throw new Error('The encrypted value uses an unsupported encrypted value version');
     }
-    const [ivB64, authTagB64, encryptedB64] = parts;
+    if (parts.length === 5 && parts[0] === CIPHERTEXT_VERSION && parts[1] !== this.keyId) {
+      throw new Error('The encrypted value encryption key is unavailable');
+    }
+
+    const payload = parts.length === 5 && parts[0] === CIPHERTEXT_VERSION
+      ? parts.slice(2)
+      : parts;
+    if (payload.length !== 3) throw new Error('Invalid encrypted value format');
+
+    const [ivB64, authTagB64, encryptedB64] = payload;
     const iv = Buffer.from(ivB64, 'base64');
     const authTag = Buffer.from(authTagB64, 'base64');
     const encrypted = Buffer.from(encryptedB64, 'base64');
-
-    const decipher = createDecipheriv(ALGORITHM, this.key, iv, { authTagLength: AUTH_TAG_LENGTH });
-    decipher.setAuthTag(authTag);
-    return decipher.update(encrypted) + decipher.final('utf8');
+    try {
+      const decipher = createDecipheriv(ALGORITHM, this.key, iv, { authTagLength: AUTH_TAG_LENGTH });
+      decipher.setAuthTag(authTag);
+      return decipher.update(encrypted) + decipher.final('utf8');
+    } catch {
+      throw new Error('Unable to decrypt encrypted value');
+    }
   }
 
   encryptObject(obj: Record<string, any>): Record<string, string> {

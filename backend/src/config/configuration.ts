@@ -45,11 +45,11 @@ export const configuration = () => ({
   },
 
   admin: {
-    pin: process.env.ADMIN_PIN || '1111',
+    pin: process.env.ADMIN_PIN,
   },
 
   encryption: {
-    key: process.env.ENCRYPTION_KEY,
+    secretPath: process.env.INKER_INSTANCE_SECRET_PATH || './secrets/instance.json',
   },
 
   oauth: {

@@ -8,9 +8,11 @@ services:
       - "${INKER_PORT:-80}:80"
     volumes:
       - uploads_data:/app/uploads
+      - secrets_data:/app/secrets
     environment:
       TZ: ${TZ:-UTC}
-      ADMIN_PIN: "${ADMIN_PIN:-1111}"
+      ADMIN_PIN: "${ADMIN_PIN:?Set ADMIN_PIN to a non-default value before starting Inker}"
+      INKER_INSTANCE_SECRET_PATH: /app/secrets/instance.json
       INKER_PORT: "${INKER_PORT:-80}"
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-UTC}
       # Inker stores all data in a single SQLite file under the uploads volume
@@ -25,4 +27,7 @@ services:
 volumes:
   # All application data, including the SQLite database (inker.db).
   uploads_data:
+    driver: local
+  # Versioned instance encryption keys. Back up with, but separately from, uploads_data.
+  secrets_data:
     driver: local
