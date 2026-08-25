@@ -116,6 +116,14 @@ export const authService = {
 };
 
 // Device Service
+export interface DeviceEnrollment {
+  enrollmentId: string;
+  deviceId: number;
+  code: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
 export const deviceService = {
   async getAll(page = 1, limit = 20): Promise<PaginatedResponse<Device>> {
     try {
@@ -218,6 +226,17 @@ export const deviceService = {
     try {
       const response = await apiClient.post<ApiResponse<{ deviceId: number; displayUrl: string; pairingExpiresAt: string }>>(
         `/devices/${deviceId}/pairing`
+      );
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  async createEnrollment(deviceId: string): Promise<DeviceEnrollment> {
+    try {
+      const response = await apiClient.post<ApiResponse<DeviceEnrollment>>(
+        `/devices/${deviceId}/enrollments`,
       );
       return response.data.data;
     } catch (error) {

@@ -43,6 +43,7 @@ function App() {
             <Routes>
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
+            <Route path="/display/pair" element={<WebDisplay />} />
             <Route path="/display/:externalId" element={<WebDisplay />} />
 
             {/* Protected routes */}

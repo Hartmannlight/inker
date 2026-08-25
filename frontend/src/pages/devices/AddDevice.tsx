@@ -1,16 +1,26 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button, Card, Input } from '../../components/common';
 import { MainLayout } from '../../components/layout';
 import { useMutation } from '../../hooks/useApi';
 import { deviceService } from '../../services/api';
 import type { Device, DeviceFormData } from '../../types';
+import { DevicePairingPanel } from '../../components/devices/DevicePairingPanel';
 
 type DeviceType = 'trmnl' | 'web-display';
+
+const DEVICE_PROFILES = {
+  'browser-hd-1920x1080': { label: 'Browser kiosk HD', type: 'web-display' as const, width: 1920, height: 1080 },
+  'esp32-touch-reference-480x480': { label: 'ESP32 touch reference (unverified hardware mapping)', type: 'web-display' as const, width: 480, height: 480 },
+  'trmnl-byod-7.5-mono': { label: 'TRMNL BYOD 7.5 monochrome', type: 'trmnl' as const, width: 800, height: 480 },
+};
+
+type ProfileId = keyof typeof DEVICE_PROFILES;
 
 export function AddDevice() {
   const navigate = useNavigate();
   const [deviceType, setDeviceType] = useState<DeviceType>('web-display');
+  const [profileId, setProfileId] = useState<ProfileId>('browser-hd-1920x1080');
   const [name, setName] = useState('');
   const [macAddress, setMacAddress] = useState('');
   const [width, setWidth] = useState('1920');
@@ -21,15 +31,23 @@ export function AddDevice() {
     { successMessage: 'Device created', onSuccess: setCreated },
   );
 
-  const displayUrl = useMemo(() => created?.displayUrl
-    ? new URL(created.displayUrl, window.location.origin).toString()
-    : null, [created]);
-
   const chooseType = (type: DeviceType) => {
     setDeviceType(type);
     setCreated(null);
-    setWidth(type === 'web-display' ? '1920' : '800');
-    setHeight(type === 'web-display' ? '1080' : '480');
+    const nextProfile: ProfileId = type === 'web-display'
+      ? 'browser-hd-1920x1080'
+      : 'trmnl-byod-7.5-mono';
+    const profile = DEVICE_PROFILES[nextProfile];
+    setProfileId(nextProfile);
+    setWidth(String(profile.width));
+    setHeight(String(profile.height));
+  };
+
+  const chooseProfile = (nextProfileId: ProfileId) => {
+    const profile = DEVICE_PROFILES[nextProfileId];
+    setProfileId(nextProfileId);
+    setWidth(String(profile.width));
+    setHeight(String(profile.height));
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -37,6 +55,7 @@ export function AddDevice() {
     await createDevice({
       name,
       deviceType,
+      profileId,
       ...(deviceType === 'trmnl' ? { macAddress } : {}),
       width: Number(width),
       height: Number(height),
@@ -64,18 +83,17 @@ export function AddDevice() {
                 <h2 className="font-semibold text-status-success-text">{created.name} is ready</h2>
                 <p className="mt-1 text-sm text-status-success-text">
                   {created.deviceType === 'web-display'
-                    ? 'Open the one-time link below on the PC that should become this display. It expires after 15 minutes.'
+                    ? 'Use the one-time code below on the target display. It expires after ten minutes.'
                     : 'The device can now use the existing TRMNL pull protocol.'}
                 </p>
               </div>
-              {displayUrl && (
-                <div className="space-y-3">
-                  <code className="block break-all rounded-lg bg-bg-muted border border-border-light p-3 text-sm">{displayUrl}</code>
-                  <div className="flex flex-wrap gap-3">
-                    <Button onClick={() => window.open(displayUrl, '_blank', 'noopener,noreferrer')}>Open display</Button>
-                    <Button variant="outline" onClick={() => navigator.clipboard.writeText(displayUrl)}>Copy link</Button>
-                  </div>
-                </div>
+              {created.deviceType === 'web-display' && (
+                <DevicePairingPanel
+                  deviceId={String(created.id)}
+                  deviceName={created.name}
+                  profileId={created.profileId ?? profileId}
+                  autoStart
+                />
               )}
               <Link to={`/devices/${created.id}`} className="inline-block text-sm text-accent underline">View device details</Link>
             </div>
@@ -84,10 +102,26 @@ export function AddDevice() {
               <div>
                 <h2 className="text-lg font-semibold text-text-primary">{deviceType === 'web-display' ? 'Create web display' : 'Register TRMNL device'}</h2>
                 <p className="text-sm text-text-muted mt-1">
-                  {deviceType === 'web-display' ? 'After creation you will receive a one-time pairing link.' : 'Automatic provisioning through /api/setup remains supported.'}
+                  {deviceType === 'web-display' ? 'After creation you will receive a ten-minute one-time pairing code.' : 'Automatic provisioning through /api/setup remains supported.'}
                 </p>
               </div>
               <Input label="Device name" value={name} onChange={(event) => setName(event.target.value)} required />
+              <div>
+                <label htmlFor="device-profile" className="block text-sm font-semibold text-text-secondary mb-2">Device profile</label>
+                <select
+                  id="device-profile"
+                  value={profileId}
+                  onChange={(event) => chooseProfile(event.target.value as ProfileId)}
+                  className="block w-full rounded-xl border-2 border-border-light bg-bg-input px-4 py-2.5 text-text-primary focus:border-accent focus:outline-none"
+                >
+                  {Object.entries(DEVICE_PROFILES)
+                    .filter(([, profile]) => profile.type === deviceType)
+                    .map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}
+                </select>
+                {profileId === 'esp32-touch-reference-480x480' && (
+                  <p className="mt-2 text-xs text-status-warning-text">Hardware mapping is a reference assumption until verified on a real device.</p>
+                )}
+              </div>
               {deviceType === 'trmnl' && <Input label="MAC address" value={macAddress} onChange={(event) => setMacAddress(event.target.value)} placeholder="AA:BB:CC:DD:EE:FF" required />}
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Width (px)" type="number" min="1" value={width} onChange={(event) => setWidth(event.target.value)} required />

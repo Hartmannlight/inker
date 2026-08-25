@@ -65,7 +65,7 @@ müssen.
 | [x] | WP-07 | Publication-, Outbox- und Zustandsmodelle | WP-04, WP-05 |
 | [x] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
 | [x] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
-| [ ] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
+| [x] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
 | [ ] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
 | [ ] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
 | [ ] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
@@ -949,14 +949,14 @@ im Admin-UI verwaltet werden.
 
 **Aufgaben:**
 
-- [ ] Ergänze Admin-Aktion „Gerät koppeln“ mit Profilwahl und Ablaufanzeige.
-- [ ] Zeige formatierten Code, Basis-URL und QR-Code ohne Klartext in Logs.
-- [ ] Ergänze am WebDisplay eine Eingabe für Basis-URL und Code.
-- [ ] Zeige abgelaufen, bereits benutzt, rate-limited, offline und erfolgreich
+- [x] Ergänze Admin-Aktion „Gerät koppeln“ mit Profilwahl und Ablaufanzeige.
+- [x] Zeige formatierten Code, Basis-URL und QR-Code ohne Klartext in Logs.
+- [x] Ergänze am WebDisplay eine Eingabe für Basis-URL und Code.
+- [x] Zeige abgelaufen, bereits benutzt, rate-limited, offline und erfolgreich
   verständlich an.
-- [ ] Lösche Code/URL nach Erfolg aus sichtbarer Historie, soweit möglich.
-- [ ] Ergänze Rotation/Widerruf im Gerätedetail.
-- [ ] Teste Tastatur-, Touch- und QR-Pfade.
+- [x] Lösche Code/URL nach Erfolg aus sichtbarer Historie, soweit möglich.
+- [x] Ergänze Rotation/Widerruf im Gerätedetail.
+- [x] Teste Tastatur-, Touch- und QR-Pfade.
 
 **Abnahme:** Ein neuer Pi-Browser lässt sich ohne lange Zeichenfolge koppeln; ein
 widerrufenes Display kann denselben Flow erneut durchführen.
@@ -964,6 +964,92 @@ widerrufenes Display kann denselben Flow erneut durchführen.
 **Validierung:** Frontendtests und End-to-End-Pairing-Smoke-Test.
 
 **Handoff:** Bedienablauf und Anforderungen für ESP32-Referenzclient notieren.
+
+### Abschluss WP-10
+
+- Status: abgeschlossen am 2026-08-25
+- Ergebnis: Das geschützte Admin-UI erstellt über
+  `POST /api/devices/:deviceId/enrollments` einen zehn Minuten gültigen
+  Einmalcode, zeigt Geräteprofil, Basis-URL, serverformatierten Code, lokalen
+  QR-Code und Ablaufzeit und warnt sichtbar vor ausdrücklich freigegebenem HTTP.
+  Die Profilwahl beim Anlegen unterstützt Browser-HD sowie das weiterhin als
+  unbestätigte Hardwareannahme gekennzeichnete ESP32-Referenzprofil. Im
+  Gerätedetail erzeugt derselbe Ablauf einen neuen Enrollment-Code; erst dessen
+  erfolgreicher Austausch rotiert und widerruft das bisherige Credential
+  atomar. Der bestehende lange `?pair=`-Bootstrap bleibt funktionsfähig und als
+  Legacy-Aktion erreichbar.
+- WebDisplay-Ablauf: Die neue öffentliche Route `/display/pair` akzeptiert
+  Basis-URL und manuell normalisierten Crockford-Code oder startet denselben
+  Austausch aus dem QR-Bootstrap. Sie verwendet unverändert
+  `POST /api/device-enrollments/exchange`. Erst eine vollständig validierte
+  Erfolgsantwort ersetzt per `localStorage.setItem` den Wert unter
+  `inker_display_<externalId>`. Validierungs-, Ablauf-/Replay-, `400`-, `403`-,
+  `429`-, Offline-, Netz- und Serverfehler verändern ein vorhandenes Credential
+  nicht. Da WP-09 abgelaufene, verwendete und sonst ungültige Codes absichtlich
+  mit derselben konstanten `400`-Antwort versieht, nennt die UI diese Fälle
+  gemeinsam und ohne Informationsleck. Code und Basis-URL werden vor dem Request
+  aus dem aktuellen History-Eintrag und nach Erfolg zusätzlich aus temporärem
+  Formularzustand sowie der sichtbaren Ergebnis-URL entfernt.
+- Sicherheitsgrenzen: Der QR-Code wird lokal erzeugt und enthält ausschließlich
+  die gewählte Basis-URL, den WebDisplay-Bootstrappfad und den kurzlebigen Code.
+  Das langlebige Credential erscheint nur in der einmaligen Device-Antwort und
+  im bestehenden Browser-Storagewert; es gelangt weder in Admin-DTO/QR/URL noch
+  in Logs oder Telemetrie. Der Admin-Aufruf verwendet weiterhin den gemeinsamen
+  Bearer-Session-Interceptor; die Backend-API-Prüfung bestätigt den Adminschutz.
+- Geänderte Kernpfade: `frontend/src/App.tsx`,
+  `frontend/src/components/devices/DevicePairingPanel.tsx`,
+  `frontend/src/pages/devices/AddDevice.tsx`,
+  `frontend/src/pages/devices/DeviceDetail.tsx`,
+  `frontend/src/pages/display/WebDisplay.tsx`,
+  `frontend/src/pages/display/pairing.ts`, `frontend/src/services/api.ts`,
+  `frontend/src/types/index.ts` und die zugehörigen Frontendtests. Backend,
+  Contracts, Prisma-Schema und Migrationen blieben unverändert.
+- Ausgeführte Tests: Der testgetriebene Rotlauf scheiterte zunächst an den noch
+  fehlenden Pairing-Helfern, dem Adminpanel und der Profilwahl. Danach waren alle
+  48 Frontendtests in neun Dateien grün, darunter 27 gezielte WP-10-/WP-08-Tests
+  für Adminberechtigung und DTO-Grenze, Profilwahl, Ablaufanzeige, QR-Inhalt,
+  Eingabenormalisierung, Tastatur-/Touch-/QR-Pfade, Erstkopplung, Rotation,
+  `400`/`403`/`429`, Ablauf/Replay, Offline/Netzfehler, URL-/Logbereinigung und den
+  vollständigen bisherigen WP-08-Credential-Lebenszyklus. Sieben gezielte
+  Backend-Controller-/Servicetests für Adminschutz, HTTPS-Grenze, Rate Limit,
+  konstante Fehler, Rotation und geheime Persistenz sowie vier echte
+  SQLite-Integrationsfälle für TTL, Replay, Rollback und Parallelität waren
+  ebenfalls grün. Frontend-Typecheck, gezielter ESLintlauf über die neuen Tests,
+  Helfer und geänderten UI-Komponenten, Produktionsbuild und `git diff --check`
+  waren grün. Der vollständige Frontend-Lint reproduziert unverändert die
+  dokumentierte Baseline von 85 Fehlern und neun Warnungen an unveränderten
+  Altzeilen und bleibt gemäß WP-01 kein grünes Gate.
+- Browser-Smoke-Test: Mit echtem Vite-Frontend, NestJS-/WebSocket-Backend und
+  einer anschließend vollständig entfernten isolierten SQLite-Datenbank wurden
+  Adminlogin, Browserprofilwahl, Code-/QR-/Ablaufanzeige, sichtbare HTTP-Warnung,
+  QR-Erstkopplung, verständlicher Fehler für einen ungültigen Code, erneute
+  Verbindung mit erhaltenem altem Credential sowie erfolgreiche Rotation
+  geprüft. Erfolgs- und Fehler-URLs enthielten danach keinen Code; Browserlogs
+  enthielten keinen der Bootstrap-Codes und keine Warnungen oder Fehler. Die beim
+  Smoke erzeugten temporären Datenbank- und Default-Screen-Artefakte wurden
+  entfernt beziehungsweise auf den vorherigen Git-Stand zurückgesetzt.
+- Nicht ausführbare Tests und Grund: keine.
+- Bewusste Abweichungen vom Paket: keine. Insbesondere wurden keine Endpunkte
+  verändert und kein Folgepaket begonnen.
+- Neue Risiken/Schulden: Die konkrete sichere Credentialablage und die genaue
+  Kamera-/QR-Integration eines ESP32 bleiben gerätespezifische Clientaufgaben.
+  Das ESP32-Touchprofil bleibt gemäß ADR-008 eine unbestätigte Referenzannahme.
+  HTTP-Pairing bleibt gemäß ADR-005/ADR-009 ausschließlich eine explizit
+  serverseitig freigegebene und in beiden UIs sichtbar gewarnte Ausnahme.
+- Handoff an den ESP32-Referenzclient: Der Client übernimmt eine kanonische
+  Basis-URL und denselben zehnstelligen Crockford-Code manuell, per Touch oder aus
+  dem QR-Bootstrap, entfernt Trennzeichen, normalisiert Groß-/Kleinschreibung und
+  O/I/L-Aliasse und sendet ausschließlich `{ code: string }` an
+  `POST /api/device-enrollments/exchange`. Bei Erfolg speichert er nur das opake
+  `credential` sicher und ordnet es der zurückgegebenen `device.externalId` und
+  `device.profileId` zu. Erst nach vollständig erfolgreicher Antwort darf er ein
+  altes Credential atomar ersetzen; bei jedem Fehler bleibt es unverändert.
+  Code und Credential dürfen weder in Diagnoseausgaben, Telemetrie noch URLs
+  gelangen. QR und manuelle Eingabe sind nur zwei Eingabemethoden desselben
+  Protokolls; Display-, Touch- und Netzwerkdetails dürfen nicht aus dem offenen
+  Referenzprofil als verifizierte Hardwareeigenschaften abgeleitet werden.
+- Git-Stand: Arbeitsbaum auf Branch `codex/device-platform-spike` auf Basis von
+  WP-09-Commit `0064d24`; gemäß Auftrag wurden weder Commit noch Push erstellt.
 
 ## WP-11 – Instanz-Secrets und unsichere Defaults härten
 

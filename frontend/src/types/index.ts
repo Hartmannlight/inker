@@ -38,6 +38,7 @@ export interface Device {
   deviceType: 'trmnl' | 'web-display';
   transport: 'pull' | 'websocket';
   externalId?: string | null;
+  profileId?: string;
   macAddress?: string | null;
   apiKey?: string;
   displayUrl?: string;
@@ -345,6 +346,7 @@ export interface PaginatedResponse<T> {
 export interface DeviceFormData {
   name: string;
   deviceType?: 'trmnl' | 'web-display';
+  profileId?: string;
   macAddress?: string;
   width?: number;
   height?: number;

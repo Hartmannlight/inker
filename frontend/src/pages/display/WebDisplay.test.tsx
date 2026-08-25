@@ -1,4 +1,5 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebDisplay } from './WebDisplay';
@@ -56,6 +57,15 @@ function renderDisplay(path: string) {
 function response(ok: boolean, body: unknown) {
   return {
     ok,
+    status: ok ? 200 : 400,
+    json: vi.fn().mockResolvedValue(body),
+  } as unknown as Response;
+}
+
+function statusResponse(status: number, body: unknown) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
     json: vi.fn().mockResolvedValue(body),
   } as unknown as Response;
 }
@@ -170,5 +180,125 @@ describe('WebDisplay credential lifecycle', () => {
     expect(screen.getByText('Connection lost. Reconnecting…')).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(1_000));
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it('normalizes manual keyboard input and atomically stores a first short-code exchange', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(statusResponse(200, {
+      data: {
+        credential: 'new-device-credential',
+        credentialId: 'credential-7',
+        device: {
+          id: 7,
+          name: 'Display 7',
+          externalId: DISPLAY_ID,
+          profileId: 'browser-hd-1920x1080',
+        },
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderDisplay('/display/pair');
+    await user.clear(screen.getByLabelText('Basis-URL'));
+    await user.type(screen.getByLabelText('Basis-URL'), 'https://inker.example');
+    await user.type(screen.getByLabelText('Kopplungscode'), 'abcd-o 1l23z');
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(localStorage.getItem(STORAGE_KEY)).toBe('new-device-credential'));
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://inker.example/api/device-enrollments/exchange',
+      expect.objectContaining({ body: JSON.stringify({ code: 'ABCD01123Z' }) }),
+    );
+    expect(window.location.pathname).toBe(`/display/${DISPLAY_ID}`);
+    expect(window.location.search).toBe('');
+    expect(window.location.href).not.toContain('new-device-credential');
+    expect(screen.getByText('Kopplung erfolgreich. Verbindung wird hergestellt…')).toBeInTheDocument();
+  });
+
+  it('supports the touch button path and replaces an old credential only after success', async () => {
+    localStorage.setItem(STORAGE_KEY, 'old-credential');
+    let finishExchange!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finishExchange = resolve; });
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(pending));
+
+    renderDisplay('/display/pair');
+    fireEvent.change(screen.getByLabelText('Kopplungscode'), { target: { value: 'ABCDE-FGHJK' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Koppeln' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Code wird geprüft…'));
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('old-credential');
+
+    finishExchange(statusResponse(200, {
+      data: {
+        credential: 'rotated-credential',
+        credentialId: 'credential-8',
+        device: { id: 7, name: 'Display 7', externalId: DISPLAY_ID, profileId: 'browser-hd-1920x1080' },
+      },
+    }));
+
+    await waitFor(() => expect(localStorage.getItem(STORAGE_KEY)).toBe('rotated-credential'));
+  });
+
+  it('automatically follows a QR bootstrap and removes its code from browser history before exchange', async () => {
+    const logSpies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'info').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(statusResponse(200, {
+      data: {
+        credential: 'qr-credential',
+        credentialId: 'credential-9',
+        device: { id: 7, name: 'Display 7', externalId: DISPLAY_ID, profileId: 'browser-hd-1920x1080' },
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderDisplay('/display/pair?code=ABCDE-FGHJK');
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(window.location.search).toBe('');
+    await waitFor(() => expect(localStorage.getItem(STORAGE_KEY)).toBe('qr-credential'));
+    expect(window.location.href).not.toContain('ABCDE');
+    expect(window.location.href).not.toContain('qr-credential');
+    const logged = JSON.stringify(logSpies.flatMap((spy) => spy.mock.calls));
+    expect(logged).not.toContain('ABCDE-FGHJK');
+    expect(logged).not.toContain('qr-credential');
+    for (const spy of logSpies) spy.mockRestore();
+  });
+
+  it.each([
+    [400, 'Der Code ist ungültig, abgelaufen oder wurde bereits verwendet.'],
+    [403, 'Der Server hat die Kopplung abgelehnt. Prüfe HTTPS und die Serverfreigabe.'],
+    [429, 'Zu viele Versuche. Bitte warte eine Minute und versuche es erneut.'],
+  ])('keeps the old credential for HTTP %s and shows a stable state', async (status, expectedMessage) => {
+    localStorage.setItem(STORAGE_KEY, 'keep-me');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(statusResponse(status, { message: 'opaque error' })));
+
+    renderDisplay('/display/pair?code=ABCDE-FGHJK');
+
+    expect(await screen.findByText(expectedMessage)).toBeInTheDocument();
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('keep-me');
+    expect(window.location.search).toBe('');
+  });
+
+  it('keeps the old credential for validation, offline and network errors', async () => {
+    localStorage.setItem(STORAGE_KEY, 'keep-me');
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderDisplay('/display/pair');
+    expect(screen.getByRole('alert')).toHaveTextContent('Unsicheres HTTP');
+    fireEvent.change(screen.getByLabelText('Kopplungscode'), { target: { value: 'short' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Koppeln' }));
+    expect(await screen.findByText('Gib einen gültigen zehnstelligen Code ein.')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('keep-me');
+
+    fireEvent.change(screen.getByLabelText('Kopplungscode'), { target: { value: 'ABCDE-FGHJK' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Koppeln' }));
+    expect(await screen.findByText('Inker ist nicht erreichbar. Prüfe Netzwerk und Basis-URL.')).toBeInTheDocument();
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('keep-me');
   });
 });

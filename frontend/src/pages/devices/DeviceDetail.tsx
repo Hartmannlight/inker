@@ -14,6 +14,7 @@ import { useApi, useMutation } from '../../hooks/useApi';
 import { deviceService, modelService } from '../../services/api';
 import { config } from '../../config';
 import type { Device, DeviceModel } from '../../types';
+import { DevicePairingPanel } from '../../components/devices/DevicePairingPanel';
 
 // Auto-refresh interval in milliseconds (30 seconds)
 const AUTO_REFRESH_INTERVAL = 30 * 1000;
@@ -226,7 +227,7 @@ export function DeviceDetail() {
                   disabled={isCreatingPairing}
                   className="inline-flex items-center px-4 py-2 rounded-lg font-medium bg-white/20 text-white border border-white/30 disabled:opacity-50"
                 >
-                  {isCreatingPairing ? 'Creating…' : 'New pairing link'}
+                  {isCreatingPairing ? 'Creating…' : 'Legacy pairing link'}
                 </button>
               )}
               <button
@@ -292,6 +293,12 @@ export function DeviceDetail() {
             </div>
           </div>
         )}
+
+        <DevicePairingPanel
+          deviceId={id!}
+          deviceName={device.name}
+          profileId={device.profileId ?? 'legacy-device-profile'}
+        />
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
