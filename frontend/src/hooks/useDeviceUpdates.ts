@@ -49,7 +49,6 @@ interface UseDeviceUpdatesResult {
 }
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
-const SESSION_KEY = 'inker_session';
 
 /**
  * Custom hook for subscribing to real-time device update notifications via SSE
@@ -95,15 +94,7 @@ export function useDeviceUpdates(
       eventSourceRef.current.close();
     }
 
-    const token = localStorage.getItem(SESSION_KEY);
-    if (!token) {
-      return;
-    }
-
-    // SSE endpoint with auth token as query param (SSE doesn't support custom headers)
-    const sseUrl = `${API_URL}/events/stream?token=${encodeURIComponent(token)}`;
-
-    const eventSource = new EventSource(sseUrl);
+    const eventSource = new EventSource(`${API_URL}/events/stream`, { withCredentials: true });
     eventSourceRef.current = eventSource;
 
     eventSource.onopen = () => {

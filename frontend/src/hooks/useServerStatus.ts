@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { config } from '../config';
 
-const SESSION_KEY = 'inker_session';
-
 /**
  * Custom hook for monitoring server health and status
  */
@@ -47,9 +45,7 @@ export function useServerStatus(): UseServerStatusResult {
       // Try to ping the health endpoint or dashboard stats
       const response = await axios.get('/api/dashboard/stats', {
         timeout: 5000, // 5 second timeout
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem(SESSION_KEY)}`,
-        },
+        withCredentials: true,
       });
 
       setStatus((prev) => ({

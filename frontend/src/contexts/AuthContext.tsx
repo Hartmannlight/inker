@@ -2,9 +2,7 @@
 import { createContext, useContext, useReducer, type ReactNode, useEffect } from 'react';
 import type { AuthState } from '../types';
 import { authService } from '../services/api';
-
-// Session storage key
-const SESSION_KEY = 'inker_session';
+import { discardLegacyAdminToken } from '../services/admin-session';
 
 // Context for auth state and dispatch
 const AuthStateContext = createContext<AuthState | null>(null);
@@ -13,15 +11,14 @@ const AuthDispatchContext = createContext<React.Dispatch<AuthAction> | null>(nul
 // Define action types for the reducer
 type AuthAction =
   | { type: 'LOGIN_START' }
-  | { type: 'LOGIN_SUCCESS'; payload: { token: string } }
+  | { type: 'LOGIN_SUCCESS' }
   | { type: 'LOGIN_FAILURE'; payload: string }
   | { type: 'LOGOUT' }
-  | { type: 'RESTORE_SESSION'; payload: { token: string } }
+  | { type: 'RESTORE_SESSION' }
   | { type: 'CLEAR_ERROR' };
 
 // Initial state - simplified without user
 const initialState: AuthState = {
-  token: null,
   isAuthenticated: false,
   isLoading: true,
   error: null,
@@ -38,10 +35,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
       };
 
     case 'LOGIN_SUCCESS':
-      localStorage.setItem(SESSION_KEY, action.payload.token);
       return {
         ...state,
-        token: action.payload.token,
         isAuthenticated: true,
         isLoading: false,
         error: null,
@@ -50,17 +45,14 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'LOGIN_FAILURE':
       return {
         ...state,
-        token: null,
         isAuthenticated: false,
         isLoading: false,
         error: action.payload,
       };
 
     case 'LOGOUT':
-      localStorage.removeItem(SESSION_KEY);
       return {
         ...state,
-        token: null,
         isAuthenticated: false,
         isLoading: false,
         error: null,
@@ -69,7 +61,6 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'RESTORE_SESSION':
       return {
         ...state,
-        token: action.payload.token,
         isAuthenticated: true,
         isLoading: false,
         error: null,
@@ -92,24 +83,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session on mount
   useEffect(() => {
-    const token = localStorage.getItem(SESSION_KEY);
-
-    if (token) {
-      // Validate the session with backend
-      authService
-        .validate()
-        .then(() => {
-          dispatch({ type: 'RESTORE_SESSION', payload: { token } });
-        })
-        .catch(() => {
-          // Session invalid, clear it
-          localStorage.removeItem(SESSION_KEY);
-          dispatch({ type: 'LOGOUT' });
-        });
-    } else {
-      // No session to restore
-      dispatch({ type: 'LOGOUT' });
-    }
+    discardLegacyAdminToken();
+    authService
+      .validate()
+      .then(() => dispatch({ type: 'RESTORE_SESSION' }))
+      .catch(() => dispatch({ type: 'LOGOUT' }));
   }, []);
 
   return (
@@ -143,15 +121,11 @@ export function useAuth() {
   const state = useAuthState();
   const dispatch = useAuthDispatch();
 
-  // Login function - now takes PIN instead of email/password
-  const login = async (pin: string) => {
+  const login = async (password: string) => {
     dispatch({ type: 'LOGIN_START' });
     try {
-      const response = await authService.login(pin);
-      dispatch({
-        type: 'LOGIN_SUCCESS',
-        payload: { token: response.token },
-      });
+      await authService.login(password);
+      dispatch({ type: 'LOGIN_SUCCESS' });
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Login failed';
@@ -170,6 +144,14 @@ export function useAuth() {
     dispatch({ type: 'LOGOUT' });
   };
 
+  const logoutAll = async () => {
+    try {
+      await authService.logoutAll();
+    } finally {
+      dispatch({ type: 'LOGOUT' });
+    }
+  };
+
   // Clear error function
   const clearError = () => {
     dispatch({ type: 'CLEAR_ERROR' });
@@ -179,6 +161,7 @@ export function useAuth() {
     ...state,
     login,
     logout,
+    logoutAll,
     clearError,
   };
 }

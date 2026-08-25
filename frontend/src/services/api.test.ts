@@ -68,42 +68,23 @@ describe('API service', () => {
     });
   });
 
-  describe('SESSION_KEY constant', () => {
-    it('should be inker_session', () => {
-      // This is critical - using wrong key breaks auth
-      const SESSION_KEY = 'inker_session';
-      expect(SESSION_KEY).toBe('inker_session');
-      expect(SESSION_KEY).not.toBe('token');
-    });
-  });
-
-  describe('request interceptor pattern', () => {
-    it('should add Bearer token from localStorage', () => {
-      const token = 'test-token-123';
+  describe('cookie and CSRF request pattern', () => {
+    it('should add the in-memory CSRF token to mutations', () => {
+      const csrfToken = 'csrf-for-current-session';
       const config = { headers: {} as Record<string, string> };
-
-      // Simulating the interceptor
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-
-      expect(config.headers.Authorization).toBe('Bearer test-token-123');
+      config.headers['X-CSRF-Token'] = csrfToken;
+      expect(config.headers['X-CSRF-Token']).toBe(csrfToken);
+      expect(config.headers.Authorization).toBeUndefined();
     });
 
-    it('should not add header when no token', () => {
-      const token = null;
+    it('should not synthesize an Authorization header', () => {
       const config = { headers: {} as Record<string, string> };
-
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-
       expect(config.headers.Authorization).toBeUndefined();
     });
   });
 
   describe('401 redirect pattern', () => {
-    it('should clear session and redirect on 401', () => {
+    it('should clear browser auth state and redirect on 401', () => {
       const status = 401;
       const currentPath = '/devices';
       let redirected = false;

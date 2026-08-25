@@ -1,10 +1,18 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, MinLength, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
 
 export class LoginDto {
-  @ApiProperty({ example: 'your-pin-here', description: 'Admin PIN for authentication' })
+  @ApiProperty({ description: 'Admin password', required: false })
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  @MaxLength(128) // Prevent DOS with extremely long PINs
-  pin: string;
+  @MaxLength(128)
+  password?: string;
+
+  @ApiProperty({ description: 'Legacy request field; use password', required: false })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  pin?: string;
 }

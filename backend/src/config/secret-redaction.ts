@@ -3,9 +3,10 @@ const SENSITIVE_KEY = /(?:pin|password|passphrase|secret|token|credential|author
 
 export function redactSecretText(text: string): string {
   return text
+    .replace(/((?:set-cookie|cookie)\s*:\s*)[^\r\n]+/gi, `$1${REDACTED}`)
     .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/gi, `$1${REDACTED}`)
     .replace(
-      /((?:admin[_-]?pin|encryption[_-]?key|secret|password|passphrase|token|credential)\s*[:=]\s*)[^\s,;]+/gi,
+      /((?:admin[_-]?pin|encryption[_-]?key|csrf[_-]?(?:secret|token)|secret|password|passphrase|token|credential)\s*[:=]\s*)[^\s,;]+/gi,
       `$1${REDACTED}`,
     );
 }

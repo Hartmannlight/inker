@@ -3,6 +3,7 @@ import { MainLayout } from '../../components/layout';
 import { DeviceConnection } from '../../components/settings/DeviceConnection';
 import { WelcomeScreenSettings } from '../../components/settings/WelcomeScreenSettings';
 import { ApiSettings } from '../../components/settings/ApiSettings';
+import { AdminSessions } from '../../components/settings/AdminSessions';
 import { Card } from '../../components/common';
 import { settingsService } from '../../services/api';
 import { useNotification } from '../../contexts/NotificationContext';
@@ -91,7 +92,7 @@ function NetworkSettings() {
 
 /**
  * Settings page component
- * Simplified for PIN-based auth (no user accounts)
+ * Single-administrator settings (no multi-tenant scope).
  */
 export function Settings() {
 
@@ -157,6 +158,11 @@ export function Settings() {
             <h2 className="text-xl font-semibold text-text-primary">Network Security</h2>
           </div>
           <NetworkSettings />
+        </div>
+
+        <div className="space-y-6">
+          <h2 className="text-xl font-semibold text-text-primary">Session Security</h2>
+          <AdminSessions />
         </div>
 
         {/* Server & Troubleshooting Section */}

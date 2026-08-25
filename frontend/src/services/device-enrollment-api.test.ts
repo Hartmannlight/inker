@@ -35,11 +35,12 @@ vi.mock('../config', () => ({
 }));
 
 import { deviceService } from './api';
+import { rememberCsrfFromHeaders, resetCsrfToken } from './admin-session';
 
 describe('device enrollment admin API', () => {
   beforeEach(() => {
     axiosClient.post.mockReset();
-    localStorage.clear();
+    resetCsrfToken();
   });
 
   it('uses the unchanged protected endpoint without a request DTO', async () => {
@@ -69,14 +70,18 @@ describe('device enrollment admin API', () => {
     expect(result).not.toHaveProperty('credentialId');
   });
 
-  it('adds the admin session as a bearer token through the shared interceptor', () => {
-    localStorage.setItem('inker_session', 'admin-session');
-    const requestInterceptor = requestUse.mock.calls[0][0] as (config: { headers: Record<string, string> }) => {
+  it('uses the HttpOnly cookie implicitly and adds the session-bound CSRF header', () => {
+    rememberCsrfFromHeaders({ 'x-csrf-token': 'admin-csrf' });
+    const requestInterceptor = requestUse.mock.calls[0][0] as (config: {
+      method: string;
+      headers: Record<string, string>;
+    }) => {
       headers: Record<string, string>;
     };
 
-    const result = requestInterceptor({ headers: {} });
+    const result = requestInterceptor({ method: 'post', headers: {} });
 
-    expect(result.headers.Authorization).toBe('Bearer admin-session');
+    expect(result.headers['X-CSRF-Token']).toBe('admin-csrf');
+    expect(result.headers.Authorization).toBeUndefined();
   });
 });

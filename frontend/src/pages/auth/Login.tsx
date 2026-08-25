@@ -4,18 +4,18 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/common';
 
 /**
- * Login page component - simplified for PIN-based auth
+ * Login page component for the installation-wide administrator.
  * Uses CSS variables for easy theme customization
  */
 export function Login() {
-  const [pin, setPin] = useState('');
+  const [password, setPassword] = useState('');
   const { login, isLoading, error } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
-    const result = await login(pin);
+    const result = await login(password);
     if (result.success) {
       navigate('/dashboard');
     }
@@ -103,24 +103,24 @@ export function Login() {
               Welcome back
             </h2>
             <p className="text-text-muted">
-              Enter your PIN to access the dashboard
+              Enter your administrator password to access the dashboard
             </p>
           </div>
 
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
-              <label htmlFor="pin" className="block text-sm font-medium text-text-secondary mb-1.5">
-                PIN
+              <label htmlFor="password" className="block text-sm font-medium text-text-secondary mb-1.5">
+                Password
               </label>
               <input
-                id="pin"
+                id="password"
                 type="password"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
-                placeholder="Enter your PIN"
+                placeholder="Enter your password"
                 className="w-full px-4 py-3 rounded-xl border-2 border-border-light bg-bg-input text-text-primary placeholder-text-placeholder focus:border-accent focus:ring-4 focus:ring-accent/10 transition-all outline-none text-center text-lg tracking-widest"
               />
             </div>

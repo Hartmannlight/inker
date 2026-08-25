@@ -10,7 +10,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { afterEach, describe, expect, it } from 'bun:test';
 import request from 'supertest';
 import { PinAuthGuard } from '../auth/guards/pin-auth.guard';
-import { PinAuthService } from '../auth/pin-auth.service';
+import { AdminSessionService } from '../auth/admin-session.service';
 import { TransformInterceptor } from '../common/interceptors/transform.interceptor';
 import { DeviceEnrollmentController } from './device-enrollment.controller';
 import { DeviceEnrollmentService } from './device-enrollment.service';
@@ -36,8 +36,13 @@ describe('DeviceEnrollmentController (API)', () => {
           },
         },
         {
-          provide: PinAuthService,
-          useValue: { validateSession: (token: string) => token === 'admin-session' },
+          provide: AdminSessionService,
+          useValue: {
+            validate: async (token: string) => token === 'admin-session'
+              ? { sessionId: 'session-1', adminId: 'admin-1', expiresAt: new Date(Date.now() + 60_000) }
+              : null,
+            verifyCsrf: async () => false,
+          },
         },
         {
           provide: DeviceEnrollmentService,

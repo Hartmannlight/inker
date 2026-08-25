@@ -67,7 +67,7 @@ müssen.
 | [x] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
 | [x] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
 | [ ] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
-| [ ] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
+| [x] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
 | [ ] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
 | [ ] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
 | [ ] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
@@ -1169,21 +1169,78 @@ Frontend-Anpassung und Tests.
 
 **Aufgaben:**
 
-- [ ] Definiere Password-/Passkey-fähiges Adminmodell ohne Multi-Tenant-Scope.
-- [ ] Speichere Passwort nur mit geeignetem adaptivem Hash und Parametern.
-- [ ] Implementiere kurzlebige, widerrufbare Sessions.
-- [ ] Setze HttpOnly, Secure in HTTPS, SameSite und sinnvolle Rotation.
-- [ ] Implementiere CSRF-Schutz für zustandsändernde Browserrequests.
-- [ ] Migriere Frontend weg vom langlebigen Auth-Token in `localStorage`.
-- [ ] Ergänze Login-Throttling, Logout-all und Sessionübersicht.
-- [ ] Teste CSRF, Fixation, Ablauf, Rotation und Rückwärtskompatibilität.
+- [x] Definiere Password-/Passkey-fähiges Adminmodell ohne Multi-Tenant-Scope.
+- [x] Speichere Passwort nur mit geeignetem adaptivem Hash und Parametern.
+- [x] Implementiere kurzlebige, widerrufbare Sessions.
+- [x] Setze HttpOnly, Secure in HTTPS, SameSite und sinnvolle Rotation.
+- [x] Implementiere CSRF-Schutz für zustandsändernde Browserrequests.
+- [x] Migriere Frontend weg vom langlebigen Auth-Token in `localStorage`.
+- [x] Ergänze Login-Throttling, Logout-all und Sessionübersicht.
+- [x] Teste CSRF, Fixation, Ablauf, Rotation und Rückwärtskompatibilität.
 
 **Abnahme:** Im Browser-Storage liegt kein Admin-Bearer-Token; gestohlene alte
 Sessions sind einzeln widerrufbar.
 
 **Validierung:** Backend-, Frontend- und Security-Integrationstests.
 
-**Handoff:** Sessionlaufzeiten und verbleibende Legacy-Authpfade notieren.
+**Handoff (abgeschlossen am 2026-08-25):**
+
+- Credential-Setup und Modell: Die Vorwärtsmigration
+  `20260825000000_admin_credentials_sessions` ergänzt genau einen
+  installationsweiten `AdminAccount`, Password-/Passkey-fähige
+  `AdminCredential`-Datensätze sowie persistente `AdminSession`-Datensätze. Beim
+  ersten Start einer noch nicht initialisierten Datenbank wird das gemäß
+  WP-11 weiterhin verpflichtende `ADMIN_PIN` einmalig als Adminpasswort
+  übernommen und ausschließlich als versionierter scrypt-Hash mit
+  `N=32768`, `r=8`, `p=2`, 32-Byte-Schlüssel, 16-Byte-Zufallssalz und 64 MiB
+  Speichergrenze gespeichert. Bei späteren Starts bleibt das persistierte
+  Credential maßgeblich; es gibt weder Defaultcredential noch
+  Multi-Tenant-Scope. Das Schema kann Passkey-Credentials aufnehmen, die
+  WebAuthn-Registrierungs- und Assertion-Ceremony ist in WP-12 nicht aktiviert.
+- Sessionvertrag: Adminsessions haben acht Stunden absolute und 30 Minuten
+  inaktive Laufzeit. Der zufällige Sessiontoken wird nach erfolgreichem Login
+  neu erzeugt, nach spätestens 15 Minuten atomar rotiert und nur als SHA-256-
+  Hash persistiert. Einzelwiderruf, Logout und Logout-all wirken serverseitig
+  unmittelbar. Die Sessionübersicht liefert nur ID, Zeitstempel,
+  bereinigten User-Agent, gehashte IP-Metadaten und Kennzeichnung der aktuellen
+  Session; Session- und CSRF-Secrets werden nicht ausgegeben.
+- Cookie- und CSRF-Vertrag: `inker_admin_session` ist `HttpOnly`,
+  `SameSite=Strict`, auf `/api` begrenzt und unter HTTPS einschließlich
+  vertrauenswürdig weitergereichtem HTTPS mit `Secure` gesetzt; unter reinem
+  HTTP bleibt `Secure` für lokale Entwicklung aus. Browser-Mutationsrequests
+  müssen zusätzlich den zur Session gehörenden `X-CSRF-Token` senden. Der
+  CSRF-Wert wird nur als Hash persistiert, bei Login beziehungsweise
+  `GET /api/auth/session` im Responseheader rotiert und im Frontend nur im
+  Arbeitsspeicher gehalten. Fehlende, falsche und zu einer anderen Session
+  gehörende Werte werden abgelehnt.
+- Browser- und API-Pfade: `POST /api/auth/login`, `GET /api/auth/session`,
+  `POST /api/auth/logout`, `POST /api/auth/logout-all`,
+  `GET /api/auth/sessions` und `DELETE /api/auth/sessions/:sessionId` bilden den
+  neuen Vertrag; Login ist auf fünf Versuche pro Minute gedrosselt. Axios,
+  Form-Data-Requests und SSE verwenden Cookies statt Bearerwerten. Das
+  Frontend liest oder schreibt keinen Admin-Bearer-Token mehr in
+  `localStorage` und entfernt den historischen Schlüssel `inker_session` beim
+  Start. Reload, Login, Logout, Logout-all und Sessionübersicht wurden im
+  gebauten Produktionscontainer per Browser-Smoke-Test verifiziert.
+- Kontrollierte Legacy-Kompatibilität: `POST /api/auth/login` akzeptiert neben
+  `password` vorübergehend das alte Requestfeld `pin`, liefert aber keinen
+  Bearertoken mehr. `POST /api/auth/validate`, `PinAuthService` und die
+  Bearer-Erkennung des Guards bleiben für vorhandene Nicht-Browser-Aufrufer
+  erhalten; der Browser verwendet diese Ausnahme nicht. Cookie-authentisierte
+  zustandsändernde Requests können CSRF nicht über diesen Pfad umgehen.
+- Migration und Regression: Die neue Migration folgt unverändert auf die
+  vorhandenen Prisma-Migrationen; Fresh-Install, Upgrade und Adoption einer
+  bestehenden Datenbank wurden geprüft. Backend (484 Tests), Frontend (54
+  Tests), Admin-/Migrationsintegration, Device-Enrollment und Pairing,
+  Publication sowie die WP-11-Instanzsecret-, Backup- und Redaction-Verträge
+  sind grün. Prisma-Validierung, Backend- und Frontend-Typechecks,
+  zielgerichtetes Linting, beide Produktionsbuilds, Compose-Konfiguration und
+  Container-Healthcheck sind ebenfalls grün. Im Smoke-Log wurden keine
+  Passwort-, Cookie-, CSRF- oder Bearerwerte gefunden. Der bereits bestehende
+  optionale Fresh-Install-Seed warnt im finalen Runtime-Image weiterhin über
+  eine dort nicht enthaltene TypeScript-Katalogdatei; der Startupvertrag und
+  WP-12 funktionieren anschließend, und dieser paketfremde Packagingpfad wurde
+  nicht verändert.
 
 ## WP-13 – Profile, TransportAdapter und DeliveryPolicy trennen
 

@@ -4,14 +4,10 @@ import {
   Post,
   Body,
   Sse,
-  Query,
   Logger,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { Observable, interval, map, merge } from 'rxjs';
-import { Public } from '../common/decorators/public.decorator';
 import { EventsService, DeviceEvent } from './events.service';
-import { PinAuthService } from '../auth/pin-auth.service';
 
 interface MessageEvent {
   data: string;
@@ -21,31 +17,17 @@ interface MessageEvent {
 export class EventsController {
   private readonly logger = new Logger(EventsController.name);
 
-  constructor(
-    private eventsService: EventsService,
-    private pinAuthService: PinAuthService,
-  ) {}
+  constructor(private eventsService: EventsService) {}
 
   /**
    * SSE endpoint for real-time device update notifications
    * Clients connect here to receive push notifications when content changes
    *
-   * Note: SSE doesn't support custom headers, so we use query param for auth
+   * The browser sends the HttpOnly admin cookie with this same-origin stream.
    */
-  @Public()
   @Get('stream')
   @Sse()
-  deviceUpdates(@Query('token') token: string): Observable<MessageEvent> {
-    // Validate session token from query parameter
-    if (!token || token.length > 128) {
-      throw new UnauthorizedException('Authentication token required');
-    }
-
-    if (!this.pinAuthService.validateSession(token)) {
-      this.logger.warn('Invalid SSE authentication token');
-      throw new UnauthorizedException('Invalid authentication token');
-    }
-
+  deviceUpdates(): Observable<MessageEvent> {
     this.logger.log('New SSE client connected');
 
     // Send heartbeat every 30 seconds to keep connection alive

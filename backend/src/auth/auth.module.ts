@@ -1,18 +1,22 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { PinAuthService } from './pin-auth.service';
 import { AuthController } from './auth.controller';
 import { PinAuthGuard } from './guards/pin-auth.guard';
+import { AdminCredentialService } from './admin-credential.service';
+import { AdminSessionService } from './admin-session.service';
+import { PasswordHasherService } from './password-hasher.service';
 
 @Module({
   controllers: [AuthController],
   providers: [
-    PinAuthService,
+    PasswordHasherService,
+    AdminCredentialService,
+    AdminSessionService,
     {
       provide: APP_GUARD,
       useClass: PinAuthGuard,
     },
   ],
-  exports: [PinAuthService],
+  exports: [AdminSessionService],
 })
 export class AuthModule {}

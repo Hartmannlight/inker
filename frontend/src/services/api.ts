@@ -26,9 +26,11 @@ import type {
   GitHubTokenTestResult,
 } from '../types';
 import { config } from '../config';
-
-// Session storage key (must match AuthContext)
-const SESSION_KEY = 'inker_session';
+import {
+  csrfHeadersFor,
+  rememberCsrfFromHeaders,
+  resetCsrfToken,
+} from './admin-session';
 
 // Use dynamic API URL from config
 const API_URL = config.apiUrl;
@@ -36,18 +38,17 @@ const API_URL = config.apiUrl;
 // Create axios instance with default config
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request interceptor to add auth token
+// Browser authentication is cookie-based. Only the non-secret, session-bound
+// CSRF token is attached to state-changing requests.
 apiClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem(SESSION_KEY);
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+    Object.assign(config.headers, csrfHeadersFor(config.method));
     return config;
   },
   (error) => {
@@ -57,14 +58,17 @@ apiClient.interceptors.request.use(
 
 // Response interceptor to handle errors
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    rememberCsrfFromHeaders(response.headers);
+    return response;
+  },
   (error: AxiosError) => {
     // Handle 401 errors by clearing auth and redirecting to login
     // Only redirect if not already on login page to avoid loops
     if (error.response?.status === 401) {
       const currentPath = window.location.pathname;
       if (currentPath !== '/login') {
-        localStorage.removeItem(SESSION_KEY);
+        resetCsrfToken();
         window.location.href = '/login';
       }
     }
@@ -85,13 +89,9 @@ function getErrorMessage(error: unknown): string {
 
 // Authentication Service - simplified for PIN-based auth
 export const authService = {
-  async login(pin: string): Promise<{ token: string }> {
+  async login(password: string): Promise<void> {
     try {
-      const response = await apiClient.post<ApiResponse<{ token: string }>>(
-        '/auth/login',
-        { pin }
-      );
-      return { token: response.data.data.token };
+      await apiClient.post('/auth/login', { password });
     } catch (error) {
       throw new Error(getErrorMessage(error));
     }
@@ -103,17 +103,53 @@ export const authService = {
     } catch (error) {
       // Ignore logout errors, clear local state anyway
       console.error('Logout error:', error);
+    } finally {
+      resetCsrfToken();
     }
   },
 
   async validate(): Promise<void> {
     try {
-      await apiClient.post('/auth/validate');
+      await apiClient.get('/auth/session');
     } catch (error) {
       throw new Error(getErrorMessage(error));
     }
   },
+
+  async listSessions(): Promise<AdminSessionSummary[]> {
+    try {
+      const response = await apiClient.get<ApiResponse<AdminSessionSummary[]>>('/auth/sessions');
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  async revokeSession(sessionId: string): Promise<void> {
+    try {
+      await apiClient.delete(`/auth/sessions/${encodeURIComponent(sessionId)}`);
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  async logoutAll(): Promise<void> {
+    try {
+      await apiClient.post('/auth/logout-all');
+    } finally {
+      resetCsrfToken();
+    }
+  },
 };
+
+export interface AdminSessionSummary {
+  sessionId: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  userAgent: string | null;
+  current: boolean;
+}
 
 // Device Service
 export interface DeviceEnrollment {
@@ -639,13 +675,13 @@ export const screenDesignerService = {
       formData.append('image', imageBlob, 'capture.png');
 
       // Use axios directly without apiClient default headers (Content-Type: application/json breaks FormData)
-      const token = localStorage.getItem(SESSION_KEY);
       const response = await axios.post<ApiResponse<{ captureUrl: string; filename: string; size: number }>>(
         `${config.apiUrl}/screen-designs/${id}/upload-capture`,
         formData,
         {
+          withCredentials: true,
           headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...csrfHeadersFor('post'),
             // Let browser set Content-Type with boundary automatically
           },
         }
@@ -669,13 +705,13 @@ export const screenDesignerService = {
         formData.append('drawing', drawingBlob, 'drawing.png');
       }
 
-      const token = localStorage.getItem(SESSION_KEY);
       const response = await axios.post<ApiResponse<{ captureUrl: string; filename: string; size: number }>>(
         `${config.apiUrl}/screen-designs/${id}/capture-with-drawing`,
         formData,
         {
+          withCredentials: true,
           headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...csrfHeadersFor('post'),
           },
         }
       );
@@ -802,13 +838,13 @@ export const screenDesignerService = {
 
       // Use axios directly without the apiClient default headers
       // This is necessary because apiClient has Content-Type: application/json which breaks FormData
-      const token = localStorage.getItem(SESSION_KEY);
       const response = await axios.post<ApiResponse<{ url: string; filename: string; size: number; compressed: boolean }>>(
         `${config.apiUrl}/screen-designs/upload-widget-image`,
         formData,
         {
+          withCredentials: true,
           headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...csrfHeadersFor('post'),
             // Let browser set Content-Type with boundary automatically
           },
         }

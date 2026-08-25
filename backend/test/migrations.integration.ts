@@ -125,6 +125,7 @@ describe("Prisma migration baseline", () => {
         "20260824002000_normalize_device_profiles_credentials",
         "20260824003000_publication_outbox_state",
         "20260824004000_device_enrollments",
+        "20260825000000_admin_credentials_sessions",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,
@@ -140,6 +141,17 @@ describe("Prisma migration baseline", () => {
           >("SELECT count(*) AS count FROM publications")
           .get()?.count,
       ).toBe(0);
+      const adminTables = database
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'admin_%' ORDER BY name",
+        )
+        .all()
+        .map(({ name }) => name);
+      expect(adminTables).toEqual([
+        "admin_accounts",
+        "admin_credentials",
+        "admin_sessions",
+      ]);
       const publicationIndexes = database
         .query<{ name: string }, []>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('publication_revisions', 'outbox_events') ORDER BY name",

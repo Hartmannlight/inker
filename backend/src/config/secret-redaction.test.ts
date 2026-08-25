@@ -10,6 +10,9 @@ describe('secret redaction', () => {
         encryption_key: 'base64-secret',
         credential: 'device-credential',
         refreshToken: 'oauth-refresh-token',
+        sessionToken: 'admin-session-token',
+        csrfSecret: 'server-csrf-secret',
+        cookie: 'inker_admin_session=cookie-secret',
         apiKey: 'provider-api-key',
         clientSecret: 'oauth-client-secret',
         keyId: 'safe-rotation-id',
@@ -23,6 +26,9 @@ describe('secret redaction', () => {
         encryption_key: '[REDACTED]',
         credential: '[REDACTED]',
         refreshToken: '[REDACTED]',
+        sessionToken: '[REDACTED]',
+        csrfSecret: '[REDACTED]',
+        cookie: '[REDACTED]',
         apiKey: '[REDACTED]',
         clientSecret: '[REDACTED]',
         keyId: 'safe-rotation-id',
@@ -40,5 +46,14 @@ describe('secret redaction', () => {
     expect(text).not.toContain('abc.def');
     expect(text).not.toContain('device-token');
     expect(text.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test('redacts session, CSRF and Cookie header material from text errors', () => {
+    const text = redactSecretText(
+      'sessionToken=admin-token csrf_secret=csrf-value Cookie: inker_admin_session=cookie-value',
+    );
+    expect(text).not.toContain('admin-token');
+    expect(text).not.toContain('csrf-value');
+    expect(text).not.toContain('cookie-value');
   });
 });

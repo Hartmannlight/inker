@@ -2,7 +2,6 @@ import type { DeviceStatus } from '@inker/contracts';
 
 // Auth types - simplified for PIN-based auth
 export interface AuthState {
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
