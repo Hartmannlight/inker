@@ -280,12 +280,7 @@ async function main() {
   for (const { profile, defaultCapabilities } of BUILTIN_DEVICE_PROFILES) {
     await prisma.deviceProfile.upsert({
       where: { profileId: profile.profileId },
-      update: {
-        protocolVersion: profile.protocolVersion,
-        label: profile.label,
-        definition: profile as unknown as Prisma.InputJsonValue,
-        defaultCapabilities: defaultCapabilities as unknown as Prisma.InputJsonValue,
-      },
+      update: {},
       create: {
         profileId: profile.profileId,
         protocolVersion: profile.protocolVersion,
@@ -299,11 +294,7 @@ async function main() {
   for (const policy of BUILTIN_DELIVERY_POLICIES) {
     await prisma.deliveryPolicy.upsert({
       where: { policyId: policy.policyId },
-      update: {
-        protocolVersion: policy.protocolVersion,
-        mode: policy.mode,
-        definition: policy as unknown as Prisma.InputJsonValue,
-      },
+      update: {},
       create: {
         policyId: policy.policyId,
         protocolVersion: policy.protocolVersion,
@@ -399,7 +390,7 @@ async function main() {
   for (const template of WIDGET_TEMPLATES) {
     await prisma.widgetTemplate.upsert({
       where: { name: template.name },
-      update: template.name === 'daysuntil' ? template : {},
+      update: {},
       create: template,
     });
     widgetTemplatesCreated++;
@@ -409,8 +400,7 @@ async function main() {
   console.log('');
   console.log('🎉 Database seeding completed!');
   console.log('');
-  console.log('📝 PIN Authentication:');
-  console.log(`   Default PIN: 1111`);
+  console.log('Administrator authentication uses the configured, non-default bootstrap secret.');
   console.log('');
 }
 

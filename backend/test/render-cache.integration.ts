@@ -358,6 +358,25 @@ describe('WP-19 persistent render cache', () => {
     expect(readdirSync(files.root)).toEqual([crashed.hash]);
   }, 30_000);
 
+  test('a timed-out job cannot publish late pixels or replace last-good state', async () => {
+    await requestAndRender();
+    const previous = await read();
+    await publish([device.id], 1, true);
+    const key = await cache.request(device.id);
+    const event = await claimRender(key!);
+    const abort = new AbortController();
+    await expect(cache.render(event, async (...args) => {
+      const artifact = await renderSnapshot(...args);
+      abort.abort();
+      return artifact;
+    }, abort.signal)).rejects.toThrow('RENDER_FAILED');
+    expect((await prisma.renderRequest.findUniqueOrThrow({ where: { key } })).completedAt).toBeNull();
+    expect(readdirSync(files.root)).toEqual([previous!.artifact.sha256]);
+    const fallback = await read();
+    expect(fallback?.artifact.sha256).toBe(previous!.artifact.sha256);
+    expect(fallback?.fallback).toBe(true);
+  });
+
   test('invalid rendered bytes are never published and corrupt current files fall back without writes', async () => {
     const first = await requestAndRender();
     const previous = await read();

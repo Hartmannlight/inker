@@ -8,6 +8,12 @@ import {
   retryDelay,
 } from './outbox.types';
 
+export interface OutboxClaimBudget {
+  /** The complete queue group, even if this worker claims a narrower subset. */
+  where: Prisma.OutboxEventWhereInput;
+  limit: number;
+}
+
 @Injectable()
 export class OutboxStore {
   constructor(private readonly prisma: PrismaService) {}
@@ -22,23 +28,52 @@ export class OutboxStore {
     };
   }
 
-  async claim(owner: string, now = new Date()): Promise<OutboxEvent | null> {
-    // CAS outside a read transaction avoids SQLite read-to-write lock upgrades.
+  async claim(
+    owner: string,
+    now = new Date(),
+    filter: Prisma.OutboxEventWhereInput = {},
+    budget?: OutboxClaimBudget,
+  ): Promise<OutboxEvent | null> {
+    if (!budget) return this.claimFrom(this.prisma, owner, now, filter);
+    if (!Number.isSafeInteger(budget.limit) || budget.limit < 1
+      || !budget.where || typeof budget.where !== 'object' || Array.isArray(budget.where)) {
+      throw new Error('OUTBOX_INVALID_CLAIM_BUDGET');
+    }
+    return this.prisma.$transaction(async tx => {
+      // SQLite takes the writer lock for UPDATE even when its predicate matches
+      // no rows. Acquire it before reading capacity, avoiding read-to-write
+      // upgrades and reservations racing across independent worker processes.
+      await tx.$executeRaw`UPDATE outbox_events SET event_id = event_id WHERE 1 = 0`;
+      const active = await tx.outboxEvent.count({ where: {
+        AND: [budget.where, { status: 'processing', claimUntil: { gt: now } }],
+      } });
+      if (active >= budget.limit) return null;
+      return this.claimFrom(tx, owner, now, { AND: [filter, budget.where] });
+    });
+  }
+
+  private async claimFrom(
+    db: Prisma.TransactionClient,
+    owner: string,
+    now: Date,
+    filter: Prisma.OutboxEventWhereInput,
+  ): Promise<OutboxEvent | null> {
+    // Without a queue budget the existing single-row CAS remains sufficient.
     const eligible: Prisma.OutboxEventWhereInput = {
-      OR: [
+      AND: [filter, { OR: [
         { status: 'pending', availableAt: { lte: now } },
         {
           status: 'processing',
           OR: [{ claimUntil: { lte: now } }, { claimUntil: null }],
         },
-      ],
+      ] }],
     };
-    const exhausted = await this.prisma.outboxEvent.findMany({
+    const exhausted = await db.outboxEvent.findMany({
       where: { ...eligible, attempts: { gte: POLICY.maxAttempts } },
       take: POLICY.batchSize,
     });
     for (const row of exhausted)
-      await this.prisma.outboxEvent.updateMany({
+      await db.outboxEvent.updateMany({
         where: {
           ...eligible,
           eventId: row.eventId,
@@ -56,13 +91,13 @@ export class OutboxStore {
           }),
         },
       });
-    const candidate = await this.prisma.outboxEvent.findFirst({
+    const candidate = await db.outboxEvent.findFirst({
       where: { ...eligible, attempts: { lt: POLICY.maxAttempts } },
       orderBy: [{ occurredAt: 'asc' }, { eventId: 'asc' }],
     });
     if (!candidate) return null;
     const claimToken = randomUUID();
-    const claimed = await this.prisma.outboxEvent.updateMany({
+    const claimed = await db.outboxEvent.updateMany({
       where: {
         ...eligible,
         eventId: candidate.eventId,
@@ -78,7 +113,7 @@ export class OutboxStore {
       },
     });
     if (!claimed.count) return null;
-    return this.prisma.outboxEvent.findUnique({
+    return db.outboxEvent.findUnique({
       where: { eventId: candidate.eventId },
     });
   }

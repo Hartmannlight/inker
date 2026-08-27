@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { spawn } from 'bun';
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -24,7 +26,7 @@ describe('durable outbox with real SQLite transactions', () => {
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), 'inker-wp16-'));
     url = `file:${join(directory, 'test.db').replaceAll('\\', '/')}`;
-    const child = Bun.spawn({
+    const child = spawn({
       cmd: [process.execPath, 'scripts/migrate-database.ts'],
       cwd: root,
       env: { ...process.env, DATABASE_URL: url },
@@ -106,6 +108,73 @@ describe('durable outbox with real SQLite transactions', () => {
     } finally {
       await other.$disconnect();
     }
+  });
+  test('WP-20 two worker clients atomically share one render reservation across different candidates', async () => {
+    const now = new Date();
+    await p.outboxEvent.createMany({ data: ['render-a', 'render-b'].map(eventId => ({
+      eventId, eventType: 'render.requested', aggregateType: 'RenderRequest', aggregateId: eventId,
+      payload: {}, availableAt: now,
+    })) });
+    const other = new PrismaClient({ datasources: { db: { url } } });
+    await p.$queryRawUnsafe('PRAGMA journal_mode = WAL');
+    await p.$queryRawUnsafe('PRAGMA busy_timeout = 5000');
+    await other.$queryRawUnsafe('PRAGMA busy_timeout = 5000');
+    const budget = { where: { eventType: 'render.requested' }, limit: 1 };
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    try {
+      // Different candidates prevent a single-row CAS collision from hiding a
+      // missing queue-wide capacity check. Both stores use the real same SQLite DB.
+      const claims = [store, new OutboxStore(other as any)].map(async (worker, index) => {
+        await barrier;
+        return worker.claim(`worker-${index}`, now, { eventId: index ? 'render-b' : 'render-a' }, budget);
+      });
+      release();
+      const results = await Promise.all(claims);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await p.outboxEvent.count({ where: { status: 'processing' } })).toBe(1);
+      expect(await p.outboxEvent.count({ where: { status: 'pending', attempts: 0 } })).toBe(1);
+      expect(await store.claim('still-full', now, {}, budget)).toBeNull();
+      const winner = results.find(result => result !== null)!;
+      expect(await store.ack(winner, now)).toBe(true);
+      const next = await new OutboxStore(other as any).claim('after-ack', now, {}, budget);
+      expect(next?.eventId).not.toBe(winner.eventId);
+      expect(next?.attempts).toBe(1);
+    } finally {
+      release();
+      await other.$disconnect();
+    }
+  });
+  test('WP-20 queue budgets ignore expired leases and terminal rows without blocking other groups', async () => {
+    const now = new Date();
+    await p.outboxEvent.createMany({ data: [
+      { eventId: 'old-render', eventType: 'render.requested', status: 'processing', claimToken: randomUUID(),
+        claimOwner: 'expired', claimUntil: new Date(now.getTime() - 1) },
+      { eventId: 'terminal-render', eventType: 'render.requested', status: 'delivered', processedAt: now },
+      { eventId: 'next-render', eventType: 'render.requested', status: 'pending' },
+      { eventId: 'delivery-event', eventType: 'device.refresh', status: 'pending' },
+    ].map(event => ({ ...event, aggregateType: 'Test', aggregateId: event.eventId, payload: {}, availableAt: now })) });
+    const renderBudget = { where: { eventType: 'render.requested' }, limit: 1 };
+    const render = await store.claim('render', now, { eventId: 'next-render' }, renderBudget);
+    expect(render?.eventId).toBe('next-render');
+    const delivery = await store.claim('delivery', now, {}, { where: { eventType: 'device.refresh' }, limit: 1 });
+    expect(delivery?.eventId).toBe('delivery-event');
+    expect(await store.claim('blocked-render', now, { eventId: 'old-render' }, renderBudget)).toBeNull();
+    const expired = new Date(now.getTime() + OUTBOX_POLICY.leaseMs + 1);
+    expect((await store.claim('recovered-render', expired, { eventId: 'old-render' }, renderBudget))?.eventId).toBe('old-render');
+    expect(await p.outboxEvent.count({ where: { eventType: 'render.requested', status: 'processing', claimUntil: { gt: expired } } })).toBe(1);
+  });
+  test('WP-20 validates reservation limits and preserves compound candidate filters', async () => {
+    const now = new Date();
+    await p.outboxEvent.createMany({ data: ['unrelated', 'allowed'].map((eventId, index) => ({
+      eventId, eventType: 'test', aggregateType: 'Test', aggregateId: eventId, payload: {},
+      availableAt: now, occurredAt: new Date(now.getTime() + index),
+    })) });
+    for (const limit of [0, -1, NaN, Infinity, 1.5]) {
+      await expect(store.claim('invalid', now, {}, { where: {}, limit })).rejects.toThrow('OUTBOX_INVALID_CLAIM_BUDGET');
+    }
+    expect(await p.outboxEvent.count({ where: { attempts: { gt: 0 } } })).toBe(0);
+    expect((await store.claim('filtered', now, { OR: [{ eventId: 'allowed' }, { eventId: 'missing' }] }, { where: {}, limit: 1 }))?.eventId).toBe('allowed');
   });
   test('retry delays and exhausted/orphaned attempts remain persistently visible', async () => {
     await events.notifyDevicesRefresh([(await device()).id]);

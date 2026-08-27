@@ -28,6 +28,7 @@ import {
   PLAYBACK_DUE,
 } from "./playback.events";
 import { effectKey } from "../events/outbox.types";
+import { QUEUE_POLICIES } from "../jobs/queue-policy";
 
 type Tx = Prisma.TransactionClient;
 const positive = (v: unknown): v is number =>
@@ -303,7 +304,11 @@ export class PlaybackService {
   }
 
   /** Existing WP-16 claims/retries transport this persisted due event. No per-device timers. */
-  async advanceDue(event: OutboxEvent) {
+  async advanceDue(event: OutboxEvent, signal?: AbortSignal) {
+    const checkAbort = () => {
+      if (signal?.aborted) throw new Error("PLAYBACK_ABORTED");
+    };
+    checkAbort();
     const parsed = parsePlaybackEvent(event);
     const key = effectKey(
       event.eventType,
@@ -315,6 +320,7 @@ export class PlaybackService {
       throw new Error("OUTBOX_INVALID_PAYLOAD");
     return this.prisma.$transaction(
       async (tx) => {
+        checkAbort();
         const now = this.clock.now();
         // First statement takes the writer lock and fences all domain writes.
         if (
@@ -353,6 +359,7 @@ export class PlaybackService {
             device.isActive ? "restart" : "stop",
             now,
           );
+          checkAbort();
           await this.persist(
             tx,
             state.deviceId,
@@ -363,11 +370,13 @@ export class PlaybackService {
             device.isActive ? "restart" : "stop",
           );
         }
+        checkAbort();
         await tx.outboxEffect.create({
           data: { key, eventId: event.eventId, completedAt: new Date(now) },
         });
+        checkAbort();
       },
-      { timeout: 10_000 },
+      { timeout: QUEUE_POLICIES.timer.timeoutMs },
     );
   }
 

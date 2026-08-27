@@ -39,8 +39,10 @@ delivery process crash: delivery recovered in two attempts and rendering in
 three. BullMQ's 30-second lock/stalled checks can outlive the first SQLite lease;
 the bounded integration test budgets 100 seconds for complete recovery and
 requires no dead letters. A simple Redis restart is tested separately.
-The WP-19 bootstrap still shares the application process; process separation and
-general timeout/abort policies are the explicit WP-20/WP-22 gates.
+Since WP-20, rendering runs in the separate worker process with a 20-second
+processing budget and abort checks before domain commits. See
+[worker operations](WORKER_OPERATIONS.md). Untrusted plugin isolation remains
+the separate WP-22 gate.
 
 Cache hits and fallbacks, misses, completed renders and failures are available
 through `RenderCacheService.metrics()`. Persistent diagnostics are

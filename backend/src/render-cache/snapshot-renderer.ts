@@ -9,6 +9,7 @@ const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).def
 import { encodeBmp1bit } from '../common/utils/bmp1bit.util';
 import { publicationArtifacts, sha256, type PublishedArtifact } from '../publications/publication-content';
 import { MAX_RENDER_BYTES, MAX_RENDER_PIXELS, MAX_SNAPSHOT_BYTES, RENDER_MIME_TYPES, validateRenderTarget, type RenderTarget } from './render-input';
+import { QUEUE_POLICIES } from '../jobs/queue-policy';
 
 const sharpOptions = { limitInputPixels: MAX_RENDER_PIXELS, animated: false, failOn: 'warning' as const };
 const unavailable = () => new ServiceUnavailableException('Snapshot rendering unavailable');
@@ -75,7 +76,14 @@ export async function validateRenderedArtifact(artifact: PublishedArtifact, targ
 }
 
 /** Reads immutable PublicationRevision bytes only; no URLs, disk reads or providers. */
-export async function renderSnapshot(revision: PublicationRevision, target: RenderTarget): Promise<PublishedArtifact> {
+export async function renderSnapshot(revision: PublicationRevision, target: RenderTarget, signal?: AbortSignal): Promise<PublishedArtifact> {
+  signal?.throwIfAborted();
+  const deadline = Date.now() + QUEUE_POLICIES.render.timeoutMs;
+  const bounded = (pipeline: Sharp) => {
+    signal?.throwIfAborted();
+    if (Date.now() >= deadline) throw unavailable();
+    return pipeline.timeout({ seconds: Math.max(1, Math.ceil((deadline - Date.now()) / 1000)) });
+  };
   validateRenderTarget(target);
   const artifacts = publicationArtifacts(revision);
   const native = artifacts.find(artifact => 'fixtureId' in artifact && artifact.format === target.format && artifact.width === target.width &&
@@ -110,11 +118,11 @@ export async function renderSnapshot(revision: PublicationRevision, target: Rend
       image = image.extend({ left: Math.floor(padX / 2), right: Math.ceil(padX / 2), top: Math.floor(padY / 2), bottom: Math.ceil(padY / 2), background: '#ffffff' });
     } else image = image.resize(width, height, { fit: target.scaling, background: '#ffffff', kernel: 'lanczos3' });
     // Materialize before safe-area padding: Sharp applies each operation only once.
-    const intermediate = await image.png().toBuffer();
+    const intermediate = await bounded(image.png()).toBuffer();
     image = sharp(intermediate, sharpOptions).extend({ top, right, bottom, left, background: '#ffffff' });
     const grayscale = target.colorSpace !== 'rgb';
     if (grayscale) image = image.toColourspace('b-w');
-    const { data: pixels, info } = await image.removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data: pixels, info } = await bounded(image.removeAlpha().raw()).toBuffer({ resolveWithObject: true });
     if (info.width !== target.width || info.height !== target.height || info.channels !== (grayscale ? 1 : 3)) throw unavailable();
     quantizePixels(pixels, target);
     let bytes: Buffer;
@@ -123,8 +131,8 @@ export async function renderSnapshot(revision: PublicationRevision, target: Rend
       image = sharp(pixels, { raw: { width: target.width, height: target.height, channels: grayscale ? 1 : 3 } });
       if (grayscale) image = image.toColourspace('b-w');
       bytes = target.format === 'jpeg'
-        ? await image.jpeg({ quality: 90, chromaSubsampling: '4:4:4', progressive: false }).toBuffer()
-        : await image.png({ compressionLevel: 9, adaptiveFiltering: false, ...(grayscale && target.bitDepth < 8 ? { palette: true, colours: 2 ** target.bitDepth, dither: 0 } : {}) }).toBuffer();
+        ? await bounded(image.jpeg({ quality: 90, chromaSubsampling: '4:4:4', progressive: false })).toBuffer()
+        : await bounded(image.png({ compressionLevel: 9, adaptiveFiltering: false, ...(grayscale && target.bitDepth < 8 ? { palette: true, colours: 2 ** target.bitDepth, dither: 0 } : {}) })).toBuffer();
     }
     const artifact: PublishedArtifact = { format: target.format, mimeType: RENDER_MIME_TYPES[target.format], width: target.width,
       height: target.height, colorSpace: target.colorSpace, bitDepth: target.bitDepth, rotation: target.rotation, bytes, sha256: sha256(bytes) };

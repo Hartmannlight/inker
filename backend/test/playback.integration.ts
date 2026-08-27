@@ -345,6 +345,53 @@ describe("WP-18 persistent playback", () => {
     await playback.advanceDue(event);
     expect((await playback.read(deviceId)).version).toBe(2);
   });
+  test("WP-20 timer abort inside an open transaction rolls back playback, desired state and outbox", async () => {
+    await execute();
+    now += 10_000;
+    const event = await due();
+    const snapshot = () => Promise.all([
+      p.playbackState.findMany({ orderBy: { id: 'asc' } }),
+      p.devicePublicationState.findMany({ orderBy: { deviceId: 'asc' } }),
+      p.device.findMany({ orderBy: { id: 'asc' } }),
+      p.outboxEvent.findMany({ orderBy: { eventId: 'asc' } }),
+      p.outboxEffect.findMany({ orderBy: { key: 'asc' } }),
+    ]);
+    const before = await snapshot();
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort('sensitive-test-reason');
+    writes.length = 0;
+    await expect(playback.advanceDue(event, alreadyAborted.signal)).rejects.toThrow('PLAYBACK_ABORTED');
+    expect(writes).toEqual([]);
+
+    let entered!: () => void;
+    let release!: () => void;
+    const inside = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    class HeldPublicationPersistence extends PublicationPersistenceService {
+      override async setDesiredRevision(...args: Parameters<PublicationPersistenceService['setDesiredRevision']>) {
+        // Execute real writes first, then keep the same real SQLite transaction open.
+        const result = await super.setDesiredRevision(...args);
+        entered();
+        await held;
+        return result;
+      }
+    }
+    const delayed = new PlaybackService(p as PrismaService, new HeldPublicationPersistence(p as PrismaService), { now: () => now });
+    const controller = new AbortController();
+    const pending = delayed.advanceDue(event, controller.signal);
+    try {
+      await inside;
+      expect(writes.some(query => query.includes('device_publication_states'))).toBe(true);
+      // A real timer cancels work after domain writes, before commit. No production fail switch.
+      const timer = setTimeout(() => { controller.abort('sensitive-test-reason'); release(); }, 25);
+      try { await expect(pending).rejects.toThrow('PLAYBACK_ABORTED'); }
+      finally { clearTimeout(timer); }
+    } finally { release(); }
+    expect(await snapshot()).toEqual(before);
+    // The durable claim remains retryable after rollback.
+    await playback.advanceDue(event);
+    expect((await playback.read(deviceId)).version).toBe(2);
+  });
   test("crash-before-dispatch and crash-after-commit recover through WP-16 leases and persistent effects", async () => {
     await execute();
     now += 10_000;

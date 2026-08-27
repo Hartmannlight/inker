@@ -3,7 +3,7 @@ set -e
 exec 2>&1
 
 if [ ! -f /run/inker-init.ready ]; then
-    echo "[backend] Fatal: shared initialization did not complete"
+    echo "[worker] Fatal: shared initialization did not complete"
     exit 1
 fi
 export DATABASE_URL=file:/app/uploads/inker.db
@@ -12,5 +12,6 @@ export INKER_RENDER_CACHE_PATH="${INKER_RENDER_CACHE_PATH:-/app/render-cache}"
 export HOME=/tmp/inker-home
 cd /app
 
-echo "[backend] Starting Inker API..."
-exec s6-setuidgid inker bun run dist/main.js
+# Independently supervised: s6-svc -d/-u /run/service/worker never restarts API.
+echo "[worker] Starting Inker worker..."
+exec s6-setuidgid inker bun run dist/worker.js

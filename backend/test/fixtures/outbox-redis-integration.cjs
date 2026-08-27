@@ -35,6 +35,7 @@ async function command(child, command, data = {}) {
   const id = randomUUID(); child.send({ id, command, ...data });
   await until(() => child.messages.some(m => m.id === id));
   assert.equal(child.messages.find(m => m.id === id).error, undefined);
+  return child.messages.find(m => m.id === id);
 }
 async function connect(child, d) {
   const socket = new WebSocket(child.url); sockets.push(socket);
@@ -98,6 +99,15 @@ async function main() {
     await p.deviceCredential.create({ data: { deviceId: d.id, kind: 'web-display', tokenHash: createHash('sha256').update(secret).digest('hex') } });
     progress('starting hosts');
     let a = await host(), b = await host();
+    progress('worker connection readiness');
+    await until(async () => (await command(a, 'worker-status')).workerReady && (await command(b, 'worker-status')).workerReady);
+    await command(a, 'worker-connection-off');
+    const unavailableWorker = await command(a, 'worker-status');
+    assert.equal(unavailableWorker.redisReady, true, 'Publisher remains connected during worker-only fault');
+    assert.equal(unavailableWorker.workerReady, false, 'Running worker with disconnected command client is not ready');
+    await until(async () => (await command(b, 'worker-status')).background.workers === 1);
+    await command(a, 'worker-connection-on');
+    await until(async () => (await command(a, 'worker-status')).workerReady && (await command(b, 'worker-status')).background.workers === 2);
     let ca = await connect(a, d), cb = await connect(b, d);
     progress('design fanout');
     const design = await p.screenDesign.create({ data: { name: 'design' } });
@@ -106,7 +116,7 @@ async function main() {
     const designEvent = await delivered('screen_design:updated');
     // Draft notifications are durable but cannot implicitly publish.
     assert.equal(ca.messages.length, 1); assert.equal(cb.messages.length, 1);
-    assert.equal(await p.outboxEvent.count(), 1);
+    assert.equal(await p.outboxEvent.count({ where: { eventType: { not: 'maintenance.cleanup.due' } } }), 1);
     await command(a, 'publish', { deviceId: d.id }); await delivered();
     await bothSequences(ca, cb, 2); await drain();
     assert.equal(designEvent.eventType, 'screen_design:updated');

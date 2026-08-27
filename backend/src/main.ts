@@ -17,6 +17,8 @@ import {
 } from './config/instance-secrets';
 import { redactSecretText } from './config/secret-redaction';
 import { resolve } from 'node:path';
+import { ApiDeliveryLifecycle } from './device-platform/api-delivery.module';
+import { OutboxRedisService } from './events/outbox-redis.service';
 
 async function bootstrap() {
   validateAdminPin(process.env.ADMIN_PIN);
@@ -111,10 +113,15 @@ async function bootstrap() {
 
   // Graceful shutdown handling
   const shutdownSignals = ['SIGTERM', 'SIGINT'];
+  let stopping = false;
   shutdownSignals.forEach((signal) => {
     process.on(signal, async () => {
+      if (stopping) return;
+      stopping = true;
       logger.log(`Received ${signal}, starting graceful shutdown...`);
       try {
+        await app.get(ApiDeliveryLifecycle).stop();
+        await app.get(OutboxRedisService).close();
         await app.close();
         logger.log('Application closed successfully');
         process.exit(0);

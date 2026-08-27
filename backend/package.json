@@ -14,6 +14,8 @@
     "start:dev": "bun --watch run src/main.ts",
     "start:debug": "bun --watch --inspect run src/main.ts",
     "start:prod": "bun run dist/main.js",
+    "start:worker": "bun run src/worker.ts",
+    "start:worker:prod": "bun run dist/worker.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "bun run lint --fix",
     "typecheck": "tsc --noEmit",

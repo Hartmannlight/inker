@@ -1,14 +1,12 @@
 import { Module } from "@nestjs/common";
-import { PrismaModule } from "../prisma/prisma.module";
-import { PublicationCleanupService } from "./publication-cleanup.service";
-import { PublicationPersistenceService } from "./publication-persistence.service";
+import { PublicationsCoreModule } from './publications-core.module';
 import { PublishService } from './publish.service';
 import { PublicationsController } from './publications.controller';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PublicationsCoreModule],
   controllers: [PublicationsController],
-  providers: [PublicationPersistenceService, PublicationCleanupService, PublishService],
-  exports: [PublicationPersistenceService, PublicationCleanupService],
+  providers: [PublishService],
+  exports: [PublicationsCoreModule],
 })
 export class PublicationsModule {}

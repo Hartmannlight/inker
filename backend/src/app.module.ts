@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
@@ -18,16 +17,16 @@ import { FirmwareModule } from './firmware/firmware.module';
 import { HealthModule } from './health/health.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ApiModule } from './api/api.module';
-import { JobsModule } from './jobs/jobs.module';
 import { CommonModule } from './common/common.module';
 import { ScreenDesignerModule } from './screen-designer/screen-designer.module';
 import { EventsModule } from './events/events.module';
-import { OutboxModule } from './events/outbox.module';
+import { ApiDeliveryModule } from './device-platform/api-delivery.module';
 import { SettingsModule } from './settings/settings.module';
 import { PluginsModule } from './plugins/plugins.module';
 import { ModelsModule } from './models/models.module';
 import { DevicePlatformModule } from './device-platform/device-platform.module';
 import { PublicationsModule } from './publications/publications.module';
+import { PlaybackModule } from './playback/playback.module';
 import { DeviceEnrollmentModule } from './device-enrollment/device-enrollment.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
@@ -51,9 +50,6 @@ import { validationSchema } from './config/validation.schema';
         limit: config.get<number>('throttle.limit', 100),
       }],
     }),
-
-    // Scheduled tasks (in-process cron)
-    ScheduleModule.forRoot(),
 
     // Health checks
     TerminusModule,
@@ -84,12 +80,12 @@ import { validationSchema } from './config/validation.schema';
     CustomWidgetsModule,
     FirmwareModule,
     DashboardModule,
-    JobsModule,
     ScreenDesignerModule,
     EventsModule,
-    OutboxModule,
+    ApiDeliveryModule,
     DevicePlatformModule,
     PublicationsModule,
+    PlaybackModule,
     DeviceEnrollmentModule,
     SettingsModule,
     PluginsModule,

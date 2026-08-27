@@ -1,8 +1,37 @@
-#!/bin/sh
+#!/command/with-contenv sh
 set -e
+exec 2>&1
 
-echo "[init] Creating application directories..."
-mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets /app/uploads/captures /app/uploads/drawings /app/logs
-mkdir -p /data
+READY_FILE=/run/inker-init.ready
+SQLITE_FILE=/app/uploads/inker.db
+SECRET_DIR=/app/secrets
+rm -f "$READY_FILE"
+umask 077
+export DATABASE_URL="file:${SQLITE_FILE}"
+export INKER_INSTANCE_SECRET_PATH="${INKER_INSTANCE_SECRET_PATH:-${SECRET_DIR}/instance.json}"
+export INKER_RENDER_CACHE_PATH="${INKER_RENDER_CACHE_PATH:-/app/render-cache}"
+export HOME=/tmp/inker-home
 
-echo "[init] Application directories ready"
+echo "[init] Preparing shared API/worker storage..."
+mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets \
+    /app/uploads/captures /app/uploads/drawings /app/logs "$SECRET_DIR" \
+    "$INKER_RENDER_CACHE_PATH" "$HOME" /data
+chown -R inker:inker /app/uploads /app/logs "$SECRET_DIR" "$INKER_RENDER_CACHE_PATH" "$HOME"
+chmod 700 "$SECRET_DIR" "$INKER_RENDER_CACHE_PATH" "$HOME"
+cd /app
+
+# s6 executes cont-init before starting API, worker, Redis or Nginx. Only this
+# initializer may create secrets, migrate or seed; service restarts do none of it.
+echo "[init] Validating instance security..."
+s6-setuidgid inker bun run scripts/prepare-instance-secrets.ts --initialize
+echo "[init] Applying versioned database migrations..."
+s6-setuidgid inker bun run scripts/migrate-database.ts
+echo "[init] Synchronizing reference data (idempotent)..."
+s6-setuidgid inker bun run prisma/seed.ts
+
+# Catch incomplete images before either process can advertise readiness. This
+# volatile root-owned marker is intentionally not stored on a persistent volume.
+test -s dist/main.js
+test -s dist/worker.js
+: > "$READY_FILE"
+echo "[init] Shared storage, migrations and reference data are ready"

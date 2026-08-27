@@ -75,7 +75,7 @@ müssen.
 | [x] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
 | [x] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
 | [x] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
-| [ ] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
+| [x] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
 | [ ] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
 | [ ] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
 | [ ] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
@@ -2590,14 +2590,14 @@ Shutdown und Health. Noch keine echte Source.
 
 **Aufgaben:**
 
-- [ ] Trenne API- und Worker-Bootstrap bei weiterhin einfachem Dockerbetrieb.
-- [ ] Zentralisiere Queue-Namen, Redis-Konfiguration und Jobversionen.
-- [ ] Definiere Standard für Timeout, Attempts, Backoff/Jitter, Retention und
+- [x] Trenne API- und Worker-Bootstrap bei weiterhin einfachem Dockerbetrieb.
+- [x] Zentralisiere Queue-Namen, Redis-Konfiguration und Jobversionen.
+- [x] Definiere Standard für Timeout, Attempts, Backoff/Jitter, Retention und
   Idempotenz-Key.
-- [ ] Implementiere graceful Shutdown und Job-Lease-Verhalten.
-- [ ] Vereinheitliche Cron/Repeatable Jobs und entferne doppelte Cleanup-Wege.
-- [ ] Ergänze Worker-Readiness und Queue-Degraded-Status.
-- [ ] Teste API-Betrieb bei gestopptem, langsamem und neu startendem Worker.
+- [x] Implementiere graceful Shutdown und Job-Lease-Verhalten.
+- [x] Vereinheitliche Cron/Repeatable Jobs und entferne doppelte Cleanup-Wege.
+- [x] Ergänze Worker-Readiness und Queue-Degraded-Status.
+- [x] Teste API-Betrieb bei gestopptem, langsamem und neu startendem Worker.
 
 **Abnahme:** API und vorhandene Displays bleiben nutzbar, wenn der Worker gestoppt
 oder neu gestartet wird; Jobs werden danach kontrolliert fortgesetzt.
@@ -2605,6 +2605,58 @@ oder neu gestartet wird; Jobs werden danach kontrolliert fortgesetzt.
 **Validierung:** Prozess-, Redis-, Shutdown- und Docker-Integrationstests.
 
 **Handoff:** Startbefehle, Queue-Defaults und Deploymentauswirkungen notieren.
+
+### Abschluss WP-20 – 2026-08-28
+
+- Status: abgeschlossen und abgenommen; lokaler Paketcommit folgt unmittelbar.
+- Ergebnis: API und Worker besitzen getrennte Nest-Bootstraps und Bundles.
+  Controllerfreie Core-Module vermeiden HTTP-/Socket-Listener im Worker;
+  API-Delivery und WebSockets bleiben im API-Prozess. Ein s6-Initializer führt
+  Secret-Prüfung, Migration und idempotenten Seed einmal vor beiden Diensten aus.
+- Kernpfade: `backend/src/worker.ts`, `worker.module.ts`, `webpack.config.js`,
+  `src/events/outbox-{dispatcher,redis}.service.ts`, `outbox.store.ts`,
+  `src/jobs/{queue-policy,maintenance.service}.ts`, Core-Module, Docker/s6/Nginx.
+- Queue-Defaults: fünf versionierte Gruppen; globale/lokale Concurrency und
+  Rate-Limits, 8s Source/Delivery/Timer bzw. 20s Render/Maintenance, fünf dauerhafte
+  Versuche mit 1–60s Backoff plus 0–20% Jitter. SQL-Claim30s, BullMQ transportiert
+  nur Event-ID/Claim-Fence, keine Secrets. Atomic-Claim-Budgets verhindern
+  verfrühten Leaseverbrauch durch konkurrierende Worker. Siehe
+  [Worker-Betrieb](../operations/WORKER_OPERATIONS.md) für alle Werte.
+- Shutdown: 22s Drain vor Nest-Providerabbau, Abortprüfung vor Domain-Commit,
+  s6Grace28s/Compose35s; echte erfolgreiche Workerbeendigung mit Exit0 und ohne
+  Kill-Signal nachgewiesen. Deterministische UTC-Stunden-Maintenance ersetzt
+  Cleanup-Cron/Startuptimer und wahrt ihren ursprünglichen Cutoff bei Wiederholung.
+- Health: Nginx proxyt echte API-Probes. Worker prüft DB und beide tatsächlichen
+  Redis-Clients aller Queueworker; fehlende/pausierte Worker führen zu Background
+  `degraded`, ohne die weiterhin lesefähige API unready zu machen.
+- Hauptagent-Prüfungen: 605 Backend-Units; 44 Maintenance/Playback/Cache/Migration,
+  34 Outbox/Publication und neun echte Secret-Startup/WebSocket-Integrationen.
+  Alle bestanden, keine übersprungenen Fälle. Typechecks für Anwendung und
+  Integrationstests sowie gezieltes Lint aller geänderten TS-Dateien grün.
+  Bestehende repo-weite Lintschulden werden dadurch nicht als behoben behauptet.
+- Reales Redis/BullMQ/SQLite mit zwei Node-Prozessen: Verbindungsverlust eines
+  Workerclients bei gesundem Publisher korrekt erkannt/recovered; verlorene
+  Subscription/Bestätigung, 8s Deliverytimeout, Redis-Leerstart und Prozesscrash
+  grün. Überlappende Render-/Delivery-Recovery61,726s, Delivery2/Render3Versuche;
+  100Events5,982s (16,7/s), keine Deadletters oder Testsecret-Leaks.
+- Finales Produktionsimage `inker:wp20-test`: kompletter Smoke inkl. WP15/17/18/19
+  grün. Workerstop lässt Login/Admin/Manifest/Artefakte und vorhandenen Socket
+  nutzbar; währenddessen veröffentlichte Revision wird nach Workerstart gerendert
+  und gepusht. Echter SIGSTOP: 20 parallele Manifestlesevorgänge p95=37,4ms.
+  Containerrestart erhält Schlüsselidentität, Cachehash und Playlistzustand.
+- Regressionen aus den Prüfungen behoben: fehlender PlaybackController-Import,
+  blockierendes BullMQ-pause(false), fehlender Timer-Abort vor Commit,
+  konkurrierende Reservierung und fälschlich positive Queue-Readiness.
+  S6-Tests benutzen absolute `/command`-Pfade; Seed überschreibt bestehende
+  Profile/Policies/Templates nicht und gibt keinen falschen Standard-PIN aus.
+- Zusätzliche reale s6-Start-Negativtests bestanden: verbotener PIN und künstlich
+  fehlerhafter Seed führen jeweils zu Containerexit1, ohne API-/Workerstart und
+  ohne Ready-Marker. Gesamttest Exit0; nur eigene Container ohne Netzwerk/Volumes.
+  Die Ursache wird geprüft, nicht jede beliebige Dockerfehlermeldung akzeptiert.
+- Keine Hardwareprüfung für WP-20 erforderlich; bestehende physische Firmware-
+  und Leistungsmessungen bleiben ausdrücklich offen. Kein Provider aktiviert,
+  keine zusätzlichen Widgets, kein Push/Merge/Deployment.
+- Nächster Schritt: WP-21; WP-22 bleibt Voraussetzung für unbekannten Code.
 
 ## WP-21 – SourceSnapshot-Fundament und Resilienz-Connectoren
 

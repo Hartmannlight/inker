@@ -38,7 +38,7 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 1. WP-11-Korrektur und WP-11/WP-14-Index/Handoffs in `6b6139f` lokal committed.
    WP-14 nicht erneut implementiert.
-2. WP-19 abgenommen: Render-Key/Sharp-Renderer, atomarer privater Artefaktstore,
+2. WP-19 abgenommen und lokal in `dc45346` committed: Render-Key/Sharp-Renderer, atomarer privater Artefaktstore,
    SQLite-RenderRequest/RenderBinding, Outbox→BullMQ-render-Queue und Fallback
    implementiert. Zehn neue Integrationen nach P1008-/Reaktivierungsfix grün.
    Neu: persistente `Device.renderRevision` plus
@@ -71,7 +71,48 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    beforeApplicationShutdown, daher explizit vor app.close drainen.
    Aktive doppelte Log-Cleanup-Wege vereinheitlichen, inaktiven externen
    Model-Poller nicht reaktivieren. Queue-/Worker-Degraded darf Read-API nicht
-   unready machen. Noch keine WP-20-Implementierung.
+   unready machen. Umsetzung im Arbeitsbaum: controllerfreie Event/Publication/
+   Playback-Core-Module; API-Delivery-Lifecycle; separates `worker.ts` mit lokaler
+   Readiness3001 und eigenem Bundle; gemeinsame Queuepolicy; gefencete
+   Stunden-Maintenance mit dauerhaftem Effektbeleg; einmaliger s6-Init vor beiden
+   non-root Services. Shutdown drain22s vor Nest-close, s6 grace28s,
+   Compose stop grace35s. Nginx-Health/Ready jetzt echte Backend-Probes.
+   Seed ist fail-closed, fehlender Catalog wird mitkopiert; kein falscher PIN-
+   Hinweis/überschreibender Bootstrap-Upsert mehr.
+   Erste Nachweise: beide Bundles/Typecheck und gezieltes Lint grün; 599
+   Backendtests; 19 Cache-/Migrationsfälle einschließlich Seed-Replay und spätem
+   abgebrochenem Render; Maintenance9+Publication18+Outbox13 =40 Integrationen
+   grün. Erster Redisrun hing im Test bei pause(false) unbenutzter Queueworker;
+   korrigiert auf nichtblockierende pause(true), Wiederholung grün (122,8s;
+   überlappende Crash-Recovery62,209s, Delivery2/Render3Versuche). Gemessener
+   Durchsatz6,8/s motiviert sofortiges Nachfüllen freier Slots mit weiterhin
+   500ms-begrenzter Renderreconciliation; erneute Messung ausstehend.
+   Erstes `inker:wp20-test`-Image gebaut: neuer Stop/Resume/SIGSTOP-Block grün,
+   20 parallele API-Lesevorgänge p95 38,2ms bei pausiertem Worker. Nachfolgender
+   WP18-Smoke-Assertionsfehler wird vom Auditagenten eingegrenzt.
+   Zweites Review fand fehlendes Timer-Abortsignal vor Commit; Rendereragent
+   behebt PlaybackService und ergänzt echte Transaktions-Abortprüfung.
+   Finaler Imagebuild nach Queue-Health-/Routing-/Timerhärtung inzwischen grün.
+   Reviewbefunde behoben: PlaybackModule explizit API-importiert; atomare
+   Queuebudgetprüfung+Claim unter SQLite-Writerlock (echte zwei Clients, verschiedene
+   Kandidaten bei gemeinsamem Renderlimit); Worker-Readiness beobachtet tatsächliche
+   Command-/Blocking-Clients, nicht bloß BullMQ-isRunning. Heartbeat wird bei
+   Connectionverlust oder Pause zurückgezogen. 605 Unit-Tests bestanden.
+   Hauptagent: 44 Maintenance/Playback/Cache/Migration +34 Outbox/Publication
+   Integrationen, 0 Fehler. Typechecks für Anwendung und Tests in ihren passenden
+   CommonJS-/ES-Modi sowie gezieltes Lint aller Änderungen erfolgreich.
+   Finaler Redisrun grün (118,2s): getrennter Worker-Client-Ausfall bei gesundem
+   Publisher korrekt degraded/recovered; Crash-Recovery61,726s, Delivery2/Render3;
+   100Events5,982s=16,7/s. Kein Deadletter/Secretleck. Finaler Docker-Smoke grün:
+   s6 Workerstop beweist Exit0 ohneSignal, API/WS/Artefakte bleiben erreichbar,
+   wartende neue Revision wird nachStart verarbeitet. SIGSTOP mit20APIreads
+   p95=37,4ms; vollständige WP15/17/18/19-Regressionsstrecke und Restart/Secretaudit
+   bestanden. Hauptagent hat Summary und konkrete Assertions selbst geprüft.
+   Ergänzende neun Secret-/WS-Integrationen bestanden. Zwei echte s6-Negativtests
+   für verbotenen PIN/fehlerhaften Seed bestanden: Containerexit1, keinerlei
+   API-/Workerstart, Ready-Marker fehlt; GesamttestExit0. Nur eigene Container
+   ohneMounts/Netzwerk, bereinigt. Hauptagent hat finalen Report überprüft.
+   WP-20 abgenommen; lokaler Commit unmittelbar als nächster Schritt.
 4. Danach bis WP-29 in Indexreihenfolge; keine unerfüllten Gates überspringen.
 
-Kein Foundation-Abschluss behauptet. WP-20 bis WP-29 sind noch offen.
+Kein Foundation-Abschluss behauptet. WP-21 bis WP-29 sind noch offen.

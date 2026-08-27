@@ -3,21 +3,7 @@ import type { DeviceEvent } from './events.service';
 import { PUBLICATION_EVENT_TYPES as PUB } from '../publications/publication-persistence.types';
 import { parsePlaybackEvent, PLAYBACK_CHANGED } from '../playback/playback.events';
 
-export const OUTBOX_POLICY = {
-  maxAttempts: 5,
-  leaseMs: 30_000,
-  dispatchTimeoutMs: 8_000,
-  pollMs: 500,
-  batchSize: 16,
-  consumerLeaseMs: 15_000,
-} as const;
-
-export function retryDelay(attempt: number, random = Math.random): number {
-  return (
-    Math.min(60_000, 1000 * 2 ** Math.max(0, attempt - 1)) *
-    (1 + random() * 0.2)
-  );
-}
+export { OUTBOX_POLICY, retryDelay } from '../jobs/queue-policy';
 
 export function effectKey(
   type: string,

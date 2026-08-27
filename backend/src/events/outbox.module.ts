@@ -1,15 +1,14 @@
 import { Module } from '@nestjs/common';
-import { EventsModule } from './events.module';
-import { PublicationsModule } from '../publications/publications.module';
-import { DevicePlatformModule } from '../device-platform/device-platform.module';
+import { EventsCoreModule } from './events-core.module';
 import { OutboxDispatcher } from './outbox-dispatcher.service';
-import { OutboxRedisService } from './outbox-redis.service';
-import { PlaybackModule } from '../playback/playback.module';
+import { PlaybackCoreModule } from '../playback/playback-core.module';
 import { RenderCacheModule } from '../render-cache/render-cache.module';
+import { OutboxTransportModule } from './outbox-transport.module';
+import { JobsModule } from '../jobs/jobs.module';
 
 @Module({
-  imports: [EventsModule, PublicationsModule, DevicePlatformModule, PlaybackModule, RenderCacheModule],
-  providers: [OutboxDispatcher, OutboxRedisService],
+  imports: [EventsCoreModule, PlaybackCoreModule, RenderCacheModule, OutboxTransportModule, JobsModule],
+  providers: [OutboxDispatcher],
   exports: [OutboxDispatcher],
 })
 export class OutboxModule {}

@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -18,7 +19,7 @@ export const PUBLICATION_RETENTION_POLICY = {
 export class PublicationCleanupService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async cleanup(now = new Date()) {
+  async cleanup(now = new Date(), transaction?: Prisma.TransactionClient) {
     const deliveredCutoff = this.daysBefore(
       now,
       PUBLICATION_RETENTION_POLICY.deliveredOutboxDays,
@@ -32,7 +33,7 @@ export class PublicationCleanupService {
       PUBLICATION_RETENTION_POLICY.unreferencedRevisionDays,
     );
 
-    return this.prisma.$transaction(async (transaction) => {
+    const execute = async (transaction: Prisma.TransactionClient) => {
       await transaction.outboxConsumer.deleteMany({ where: { expiresAt: { lt: now } } });
       // Retain only opaque idempotency tombstones after normal event retention.
       // Pending/processing work has no age-only deletion path.
@@ -92,7 +93,8 @@ export class PublicationCleanupService {
         deadLetterOutboxEvents: deadLetter.count,
         publicationRevisions: oldRevisions.count,
       };
-    });
+    };
+    return transaction ? execute(transaction) : this.prisma.$transaction(execute);
   }
 
   private daysBefore(now: Date, days: number) {

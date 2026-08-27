@@ -1,5 +1,5 @@
 # All-in-one Dockerfile for Inker
-# Bundles: frontend (nginx), backend (bun/nestjs). Data lives in a single SQLite file.
+# Bundles: frontend (nginx), API and worker (bun/nestjs), Redis. One SQLite file.
 
 # =============================================================================
 # Stage 1: Build shared contracts
@@ -188,6 +188,9 @@ ENV NODE_ENV=production \
     PORT=3002 \
     DATABASE_URL=file:/app/uploads/inker.db \
     INKER_RENDER_CACHE_PATH=/app/render-cache \
+    WORKER_HEALTH_PORT=3001 \
+    S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
+    S6_SERVICES_GRACETIME=28000 \
     CORS_ORIGINS=* \
     LOG_LEVEL=info
 
@@ -207,6 +210,9 @@ COPY backend/prisma ./prisma/
 COPY backend/scripts ./scripts/
 # The Bun startup helper imports only these two dependency-free security modules.
 COPY backend/src/config/instance-secrets.ts backend/src/config/secret-redaction.ts ./src/config/
+# The single pre-service seed imports this pure reference catalog. Keeping it
+# available makes seed failures fatal instead of silently skipping reference data.
+COPY backend/src/device-platform/device-configuration.catalog.ts ./src/device-platform/
 COPY --from=backend-install /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=backend-install /app/node_modules/@prisma ./node_modules/@prisma
 

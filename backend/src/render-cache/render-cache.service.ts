@@ -99,10 +99,10 @@ export class RenderCacheService {
   }
 
   /** Outbox lease fences both side effects and completion after process/queue loss. */
-  async render(event: OutboxEvent, renderer = renderSnapshot) {
+  async render(event: OutboxEvent, renderer = renderSnapshot, signal?: AbortSignal) {
     const existing = this.rendering.get(event.eventId);
     if (existing) return existing;
-    const run = this.renderOnce(event, renderer).catch(error => {
+    const run = this.renderOnce(event, renderer, signal).catch(error => {
       this.logger.warn({ code: error instanceof Prisma.PrismaClientKnownRequestError ? `RENDER_DB_${error.code}` : 'RENDER_DISPATCH_FAILED', renderKey: event.aggregateId });
       throw error;
     }).finally(() => { this.rendering.delete(event.eventId); });
@@ -110,7 +110,8 @@ export class RenderCacheService {
     return run;
   }
 
-  private async renderOnce(event: OutboxEvent, renderer: typeof renderSnapshot) {
+  private async renderOnce(event: OutboxEvent, renderer: typeof renderSnapshot, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (event.eventType !== RENDER_REQUESTED || event.aggregateType !== 'RenderRequest' || event.aggregateRevision !== '1' || event.payloadVersion !== 1 ||
       !/^[a-f0-9]{64}$/.test(event.aggregateId) || canonicalJson(event.payload) !== canonicalJson({ renderKey: event.aggregateId }))
       throw new Error('OUTBOX_INVALID_PAYLOAD');
@@ -122,9 +123,11 @@ export class RenderCacheService {
     let artifact: PublishedArtifact;
     let stage = 'RENDER_PIXELS_FAILED';
     try {
-      artifact = await renderer(request.revision, target);
+      artifact = await renderer(request.revision, target, signal);
+      signal?.throwIfAborted();
       stage = 'RENDER_VALIDATION_FAILED';
       await validateRenderedArtifact(artifact, target);
+      signal?.throwIfAborted();
       stage = 'RENDER_STALE_CLAIM';
       if (!await this.current(this.prisma, event)) throw new Error('RENDER_STALE_CLAIM');
       stage = 'RENDER_STORAGE_FAILED';
@@ -135,6 +138,7 @@ export class RenderCacheService {
       throw new Error('RENDER_FAILED');
     }
     await this.prisma.$transaction(async tx => {
+      signal?.throwIfAborted();
       await tx.$executeRaw`UPDATE outbox_events SET event_id = event_id WHERE event_id = ${event.eventId}`;
       if (!await this.current(tx, event)) throw new Error('RENDER_STALE_CLAIM');
       const current = await tx.renderRequest.findUniqueOrThrow({ where: { key: request.key } });
@@ -152,6 +156,7 @@ export class RenderCacheService {
       }
       if (deviceIds.length) await tx.outboxEvent.create({ data: { eventType: RENDER_READY, aggregateType: 'RenderRequest',
         aggregateId: request.key, aggregateRevision: event.eventId, payloadVersion: 1, payload: { renderKey: request.key, deviceIds } } });
+      signal?.throwIfAborted();
     });
     this.counts.rendered++;
   }

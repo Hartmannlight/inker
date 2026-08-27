@@ -101,6 +101,32 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-20 startup seed is repeatable and preserves existing configuration', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp20-seed.db');
+    expect((await deploy(databasePath)).exitCode).toBe(0);
+    async function seed() {
+      const child = Bun.spawn({ cmd: [process.execPath, 'prisma/seed.ts'], cwd: backendRoot,
+        env: { ...process.env, DATABASE_URL: databaseUrl(databasePath) }, stdout: 'pipe', stderr: 'pipe' });
+      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, out + err).toBe(0);
+      expect(out + err).not.toContain('Default PIN: 1111');
+    }
+    await seed();
+    const database = new Database(databasePath);
+    try {
+      database.exec("UPDATE device_profiles SET label='Custom profile' WHERE profile_id='browser-hd-1920x1080'");
+      database.exec("UPDATE delivery_policies SET definition='{}' WHERE policy_id='reference-connected-browser'");
+      database.exec("UPDATE widget_templates SET label='Custom template' WHERE name='daysuntil'");
+    } finally { database.close(); }
+    await seed();
+    const result = inspect(databasePath);
+    try {
+      expect(result.query("SELECT label FROM device_profiles WHERE profile_id='browser-hd-1920x1080'").get()).toEqual({ label: 'Custom profile' });
+      expect(result.query("SELECT definition FROM delivery_policies WHERE policy_id='reference-connected-browser'").get()).toEqual({ definition: '{}' });
+      expect(result.query("SELECT label FROM widget_templates WHERE name='daysuntil'").get()).toEqual({ label: 'Custom template' });
+    } finally { result.close(); }
+  }, 30_000);
+
   test('WP-19 preserves assigned state and adds empty immutable render storage', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp19-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');

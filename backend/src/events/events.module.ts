@@ -1,14 +1,10 @@
-import { Module, Global } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { EventsController } from './events.controller';
-import { EventsService } from './events.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { OutboxStore } from './outbox.store';
+import { EventsCoreModule } from './events-core.module';
 
-@Global()
 @Module({
-  imports: [PrismaModule],
+  imports: [EventsCoreModule],
   controllers: [EventsController],
-  providers: [EventsService, OutboxStore],
-  exports: [EventsService, OutboxStore],
+  exports: [EventsCoreModule],
 })
 export class EventsModule {}

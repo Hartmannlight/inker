@@ -8,6 +8,8 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 const { PrismaClient } = require('@prisma/client');
 const { Test } = require('@nestjs/testing');
 const { OutboxModule } = require('../../src/events/outbox.module');
+const { ApiDeliveryModule, ApiDeliveryLifecycle } = require('../../src/device-platform/api-delivery.module');
+const { PublicationsModule } = require('../../src/publications/publications.module');
 const { PrismaService } = require('../../src/prisma/prisma.service');
 const { OutboxDispatcher } = require('../../src/events/outbox-dispatcher.service');
 const { OutboxRedisService } = require('../../src/events/outbox-redis.service');
@@ -22,7 +24,9 @@ const DESIRED_EVENT = 'device.publication.desired-revision.changed';
 
 async function main() {
   const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
-  const module = await Test.createTestingModule({ imports: [OutboxModule] }).overrideProvider(PrismaService).useValue(p).compile();
+  // This adapter fault harness intentionally composes both roles; separate
+  // production bootstraps are exercised by the worker/container integration.
+  const module = await Test.createTestingModule({ imports: [OutboxModule, ApiDeliveryModule, PublicationsModule] }).overrideProvider(PrismaService).useValue(p).compile();
   const app = module.createNestApplication();
   await app.listen(0, '127.0.0.1');
   process.send({ ready: true, url: `ws://127.0.0.1:${app.getHttpServer().address().port}/api/device-connect` });
@@ -30,6 +34,13 @@ async function main() {
     try {
       if (command === 'notify') await app.get(EventsService).notifyDevicesRefresh([deviceId]);
       if (command === 'reconcile') await app.get(RenderCacheService).reconcile();
+      if (command === 'worker-status') {
+        const transport = app.get(OutboxRedisService);
+        process.send({ id, workerReady: transport.workerReady(), ...transport.metrics(), background: await transport.backgroundStatus() });
+        return;
+      }
+      if (command === 'worker-connection-off') (await app.get(OutboxRedisService).workers.get('render').client).disconnect();
+      if (command === 'worker-connection-on') await (await app.get(OutboxRedisService).workers.get('render').client).connect();
       if (command === 'playback-start') {
         const playback = app.get(PlaybackService);
         const revisions = await p.publicationRevision.findMany({ orderBy: { revision: 'asc' }, take: 2 });
@@ -51,7 +62,7 @@ async function main() {
       if (command === 'subscriber-on') await app.get(OutboxRedisService).subscriber.connect();
       if (command === 'pause') {
         const dispatcher = app.get(OutboxDispatcher); dispatcher.stopped = true;
-        await app.get(OutboxRedisService).worker.pause();
+        await app.get(OutboxRedisService).pauseWorkers();
       }
       if (command === 'fail-once') {
         const adapter = app.get(WebSocketTransportAdapter), original = adapter.dispatchRefresh.bind(adapter);
@@ -81,6 +92,9 @@ async function main() {
         };
       }
       if (command === 'stop') {
+        await app.get(OutboxDispatcher).stop();
+        await app.get(ApiDeliveryLifecycle).stop();
+        await app.get(OutboxRedisService).close();
         await app.close(); await p.$disconnect(); process.send({ id }); process.exit(0);
       }
       process.send({ id, consumerId: app.get(DeviceUpdateCoordinator).consumerId });

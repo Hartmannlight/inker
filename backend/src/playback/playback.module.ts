@@ -1,13 +1,10 @@
 import { Module } from "@nestjs/common";
-import { PrismaModule } from "../prisma/prisma.module";
-import { PublicationsModule } from "../publications/publications.module";
-import { PlaybackClock, PlaybackService } from "./playback.service";
+import { PlaybackCoreModule } from './playback-core.module';
 import { PlaybackController } from "./playback.controller";
 
 @Module({
-  imports: [PrismaModule, PublicationsModule],
+  imports: [PlaybackCoreModule],
   controllers: [PlaybackController],
-  providers: [PlaybackClock, PlaybackService],
-  exports: [PlaybackService],
+  exports: [PlaybackCoreModule],
 })
 export class PlaybackModule {}
