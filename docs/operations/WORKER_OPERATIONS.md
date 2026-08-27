@@ -13,7 +13,7 @@ in `docs/architecture/WORK_PACKAGES.md`.
 | Process | Command | Responsibilities |
 |---|---|---|
 | API | `bun run start:prod` | HTTP, auth, commands, manifests, authenticated files, sockets and their delivery acknowledgements |
-| Worker | `bun run start:worker:prod` | Durable outbox dispatch, rendering, playlist transitions and maintenance |
+| Worker | `bun run start:worker:prod` | Durable outbox dispatch, source refresh, rendering, playlist transitions and maintenance |
 
 Development can start the worker with `bun run start:worker`. Both processes use
 the same validated environment, instance key file, `DATABASE_URL`, private render
@@ -59,8 +59,12 @@ only the event ID and claim token; the authoritative input lives in SQLite.
 | timer | 8 s | 2 / 2 | 16 |
 | maintenance | 20 s | 1 / 1 | 2 |
 
-The source queue is reserved; WP-20 does not install a provider or activate the
-old model poller. Provider limits and circuit breakers follow WP-21.
+WP-21 activates source refresh for the built-in fixture, slow and failure
+connectors only. The global limit is four, with two per provider group, two per
+connector type and one per source. These limits are claimed atomically in SQLite.
+Provider credentials stay outside snapshots and rendering. See
+`SOURCE_OPERATIONS.md` for scheduling, timeouts, retries and circuit breakers;
+the old model poller and direct provider refresh paths remain disabled.
 
 Durable attempts are bounded at five, with exponential 1–60 second backoff plus
 0–20% additive jitter. Each fenced Redis job has only one transport attempt, so
@@ -102,11 +106,11 @@ telemetry can still write SQLite. Follow `DATABASE_BACKUP.md` and
 
 ## Repeat the process checks
 
-After building a local `inker:wp20-test` image, run from `backend/`:
+After building a local `inker:wp21-test` image, run from `backend/`:
 
 ```text
 node test/websocket-container-smoke.cjs
-node test/worker-startup-container.cjs
+INKER_SMOKE_IMAGE=inker:wp21-test node test/worker-startup-container.cjs
 bun test ./test/outbox-redis.integration.ts
 ```
 

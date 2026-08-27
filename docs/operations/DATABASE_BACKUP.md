@@ -18,6 +18,12 @@ retention, corruption handling and the distinction between temporary files and
 successfully published artifacts. The separate database/secret trust boundary
 below is unchanged; the two original snapshots alone no longer include all pixels.
 
+WP-21 adds source definitions, separately encrypted secrets, immutable snapshots
+and durable refresh metadata to the same SQLite file. Preserve these with outbox,
+publication and render state; no additional volume is needed. Restore checks
+must also compare snapshot identities/hashes and verify a controlled refresh
+with the matching instance key. See [source operations](SOURCE_OPERATIONS.md).
+
 1. Stop the entire Inker container, including both API and worker, so no database
    or upload is changing. Stopping only the worker does not stop API writes.
 2. Snapshot or archive the complete `/app/uploads` volume, not only `inker.db`.

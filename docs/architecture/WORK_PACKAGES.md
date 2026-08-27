@@ -76,7 +76,7 @@ müssen.
 | [x] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
 | [x] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
 | [x] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
-| [ ] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
+| [x] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
 | [ ] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
 | [ ] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
 | [ ] | WP-24 | Persistente Timer-Domäne | WP-23 |
@@ -2608,7 +2608,7 @@ oder neu gestartet wird; Jobs werden danach kontrolliert fortgesetzt.
 
 ### Abschluss WP-20 – 2026-08-28
 
-- Status: abgeschlossen und abgenommen; lokaler Paketcommit folgt unmittelbar.
+- Status: abgeschlossen und abgenommen; lokaler Paketcommit `a3e7162`.
 - Ergebnis: API und Worker besitzen getrennte Nest-Bootstraps und Bundles.
   Controllerfreie Core-Module vermeiden HTTP-/Socket-Listener im Worker;
   API-Delivery und WebSockets bleiben im API-Prozess. Ein s6-Initializer führt
@@ -2673,15 +2673,15 @@ Freshness und drei Testconnectoren.
 
 **Aufgaben:**
 
-- [ ] Implementiere persistente SourceDefinition und SourceSnapshot entsprechend
+- [x] Implementiere persistente SourceDefinition und SourceSnapshot entsprechend
   WP-04.
-- [ ] Lege Secretwerte getrennt und write-only in API-Antworten ab.
-- [ ] Plane Refresh-Jobs mit globaler/providerbezogener Concurrency.
-- [ ] Implementiere Fixture-, absichtlich langsamen und absichtlich fehlerhaften
+- [x] Lege Secretwerte getrennt und write-only in API-Antworten ab.
+- [x] Plane Refresh-Jobs mit globaler/providerbezogener Concurrency.
+- [x] Implementiere Fixture-, absichtlich langsamen und absichtlich fehlerhaften
   Connector.
-- [ ] Standardisiere Timeout, Abort, Retry, Circuit Breaker und Freshness.
-- [ ] Bewahre letzten gültigen Snapshot mit `stale`-Status.
-- [ ] Beweise per Test, dass Renderer/API nur persistierte Snapshots lesen.
+- [x] Standardisiere Timeout, Abort, Retry, Circuit Breaker und Freshness.
+- [x] Bewahre letzten gültigen Snapshot mit `stale`-Status.
+- [x] Beweise per Test, dass Renderer/API nur persistierte Snapshots lesen.
 
 **Abnahme:** Ein hängender Connector blockiert weder Login noch Manifest; ein
 Fehler löscht den letzten gültigen Snapshot nicht.
@@ -2689,6 +2689,63 @@ Fehler löscht den letzten gültigen Snapshot nicht.
 **Validierung:** Queue-, Timeout-, Circuit-Breaker-, Stale- und Isolationstests.
 
 **Handoff:** Connectorinterface und Anforderungen realer Provider notieren.
+
+### Handoff 2026-08-28 – abgenommen
+
+- Migration `20260831000000_sources` ergänzt Definitionen, getrennte verschlüsselte
+  Secrets, unveränderliche versionierte Snapshots und Refresh-Metadaten. Bestehende
+  Geräte, Veröffentlichungen, Desired-Zustände und Outbox bleiben unverändert.
+  API-Commands sind Admin-/CSRF-geschützt; GETs lesen ausschließlich persistierte
+  Daten. Nur der Worker entschlüsselt für die Connectorausführung. Kopien des
+  eingereichten Secrets in öffentlichen Feldern werden vor SQL-Writes abgewiesen.
+- Connectorvertrag: `runConnector(type, configuration, { signal, attempt, secret? })`
+  liefert begrenzte normalisierte JSON-Daten, Connectorversion und optionale
+  Quellzeit. Nur `fixture`, `slow`, `failure`; keine Produktprovider. Global4,
+  Providergruppe2, Connectortyp2 und Source1 werden atomar mit dem Outboxclaim
+  reserviert. Source-Timeout50–7500ms, Queuebudget8s, maximal5Versuche; ab3Fehlern
+  30sCircuit. Fehler erzeugen neue stale-Versionen mit letzter gültiger Datenbasis.
+  Erfolgreiche Snapshots sind immutable; GET-Alterung ist eine schreibfreie Projektion.
+- Scheduler und Commands speichern Absicht/Metadaten gemeinsam. Begrenzte
+  SQLite-Writerqueue und Busy-Retry verhindern nachgewiesene Burststarvation.
+  Finale Lease-/Abort-/Definitionsfences verhindern verspätete Ergebniscommits.
+  Auch reine Transportdeadletters blockieren die nächste Periode nicht dauerhaft.
+- Ein expliziter Publish kann eine konkrete Snapshot-ID im vorhandenen
+  Fixture-Artefaktschema fixieren. Identität, Revision, Hash und Connectorversion
+  gehen in Publication und Render-Key ein. Neue Source-Ergebnisse ändern keine
+  veröffentlichte Darstellung. Echte Sharp-Pixelprüfungen belegen Weiß→Schwarz
+  erst nach erneutem Publish, einschließlich kompatibler Last-good-Fallbacks.
+- Legacy-Livepfade sind bewusst geschlossen und Daten bleiben erhalten:
+  direkte anonyme Design-/Devicebildrouten410 `PUBLICATION_REQUIRED`, fehlende
+  Snapshot-/Remote-Renderinputs503, alte Provider-/Refreshpfade503. Kein implizites
+  Netzwerk und kein erfolgreich behauptetes Ersatzbild. Lokale Raster, Text,
+  statische Plugins und persistierte Custom-Daten bleiben renderbar. Browser-JS
+  und externe Bild/CSS/Font/Frame-Ressourcen sind gesperrt. Unknown-Code-Isolation
+  für verbleibende Script-/Liquid-Ausführung ist ausdrücklich das nächste Gate WP22.
+- Hauptagent verifiziert:660Backendtests,37Vertragstests,80Frontendtests,
+  18Sourceintegrationen/339Assertions,53Cache/Playback/Outbox/Maintenancefälle,
+  9Migrationstests/60Assertions und35Auth/Enrollment/Publication/Secret/WS-Fälle.
+  Typechecks und gezieltes ESLint aller Änderungen grün (0Errors,14Warnings);
+  bestehendes repositoryweites Lint ist nicht als grün ausgewiesen.
+  Ein Migrationstest überschritt unter parallelem Imagebuild sein5sTestbudget;
+  unveränderte vollständige Suite separat9/9grün. Kein Skip/Platzhalternachweis.
+- Reale Redis-/BullMQ-Regressionsprüfung118,85sgrün: Crash-Recovery61,844s,
+  Delivery2/Render3Versuche,100Events/6,545s=15,3/s, keine Deadletters/Secretlecks.
+  Hauptagent prüfte Report und Ergebnisse. Das finale Produktionsimage
+  `inker:wp21-test` besteht die vollständige WP15/17/18/19/20-Strecke und neue
+  Sourceprüfung: echter5sSlowTimeout,3Fehler, echte30sCircuitpause, vierterVersuch
+  erfolgreich, unverändertes Manifest bisPublish, tatsächliche Bildhashes/Pixels,
+  Login126,3ms,20paralleleReads p95127,9ms. Neustart erhält Snapshot/Artefakt,
+  abschließender Secret-Audit erfolgreich. Erster Durchlauf hatte einen
+  Variablennamenfehler im neuen Testhelper; korrigiert und vollständig wiederholt.
+- In-App-Browser auf eigener Instanz: Admin/Dashboard, Screen-Editor,
+  Displaypaarung und weißer→schwarzer1920×1080Live-Render ohne Reload geprüft;
+  DOM-Auflösung und Screenshot bestätigt. Eigene Container/Volumes bereinigt.
+  Source-Betrieb, Legacyänderungen und Provideranforderungen stehen in
+  `docs/operations/SOURCE_OPERATIONS.md`; Worker-/Render-/Backup-Runbooks verlinkt.
+- Keine produktiven Connectoren, zusätzlichen Widgets, Firmware oder Deployments.
+  Hardwareprüfungen bleiben offen. Nächster Schritt WP22: vorhandenes `node:vm`
+  und Liquid aus dem API-Prozess entfernen; echte beendbare Ausführungsgrenze mit
+  CPU-/Speicher-/Netzwerk-/Secretpolicy und adversarialen Tests festlegen.
 
 ## WP-22 – Isolationsgrenze für Plugin-/Blockiercode
 

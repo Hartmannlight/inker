@@ -8,6 +8,7 @@ import {
   parseDeviceProfile,
   parseInteractionEvent,
   parsePresentationManifest,
+  parseSourceDefinition,
   parseSourceSnapshot,
   validateDeviceConfiguration,
   type ParseResult,
@@ -144,5 +145,110 @@ describe('protocol compatibility', () => {
 
   it('rejects malformed protocol versions', () => {
     expect(assessProtocolVersion('v1').status).toBe('malformed');
+  });
+});
+
+describe('SourceDefinition contract', () => {
+  async function definition(): Promise<Record<string, unknown>> {
+    return await loadFixture('source-definition.json') as Record<string, unknown>;
+  }
+
+  it('validates the fixture and retains a generic connector type and opaque references', async () => {
+    const fixture = await definition();
+    expect(isJsonValue(fixture)).toBe(true);
+    fixture.connectorType = 'future-provider.connector/v2';
+    fixture.secretReferences = { accessToken: 'secret-1', refreshToken: '2cf1fbe4-d8fb-4f0a-a2b2-275a196632e6' };
+    const parsed = unwrap(parseSourceDefinition(fixture));
+    expect(parsed.connectorType).toBe('future-provider.connector/v2');
+    expect(parsed.definitionVersion).toBe(1);
+    expect(parsed.secretReferences.accessToken).toBe('secret-1');
+    expect(fixture.configuration).toEqual(parsed.configuration);
+  });
+
+  it('requires every definition field and rejects wrong types', async () => {
+    const fixture = await definition();
+    for (const field of Object.keys(fixture)) {
+      const missing = { ...fixture };
+      delete missing[field];
+      const result = parseSourceDefinition(missing);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.errors.some((issue) => issue.path === `$.${field}`)).toBe(true);
+      expect(parseSourceDefinition({ ...fixture, [field]: [] }).success).toBe(false);
+      expect(parseSourceDefinition({ ...fixture, [field]: null }).success).toBe(false);
+    }
+    expect(parseSourceDefinition(null).success).toBe(false);
+    expect(parseSourceDefinition([]).success).toBe(false);
+  });
+
+  it('enforces integer scheduling bounds and safe positive revisions', async () => {
+    const fixture = await definition();
+    const limits: Record<string, readonly [number, number]> = {
+      refreshIntervalSeconds: [1, 86400],
+      timeoutMs: [50, 7500],
+      definitionVersion: [1, Number.MAX_SAFE_INTEGER],
+    };
+    for (const [field, [minimum, maximum]] of Object.entries(limits)) {
+      for (const valid of [minimum, maximum]) {
+        expect(parseSourceDefinition({ ...fixture, [field]: valid }).success).toBe(true);
+      }
+      for (const invalid of [minimum - 1, maximum + 1, 1.5, Number.NaN, Infinity, '50']) {
+        expect(parseSourceDefinition({ ...fixture, [field]: invalid }).success).toBe(false);
+      }
+    }
+  });
+
+  it('rejects non-JSON configuration while accepting nested normalized values', async () => {
+    const fixture = await definition();
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const configuration of [undefined, null, [], 'text', 2, new Date(), { value: undefined }, { value: NaN }, cyclic]) {
+      const result = parseSourceDefinition({ ...fixture, configuration });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.errors.some((issue) => issue.code === 'invalid_json_object')).toBe(true);
+    }
+    expect(parseSourceDefinition({ ...fixture, configuration: { nested: [null, true, 1, 'text', {}] } }).success).toBe(true);
+  });
+
+  it('bounds opaque IDs and concurrency identifiers without accepting paths or whitespace', async () => {
+    const fixture = await definition();
+    for (const field of ['sourceDefinitionId', 'concurrencyGroup']) {
+      for (const valid of ['a', 'provider:group_1.v2-3', 'a'.repeat(128)]) {
+        expect(parseSourceDefinition({ ...fixture, [field]: valid }).success).toBe(true);
+      }
+      for (const invalid of ['', ' ', 'a'.repeat(129), '../secrets', 'https://provider', 'two groups', '\nvalue', '_private']) {
+        expect(parseSourceDefinition({ ...fixture, [field]: invalid }).success).toBe(false);
+      }
+    }
+  });
+
+  it('accepts only an object of named opaque references and does not echo submitted secrets', async () => {
+    const fixture = await definition();
+    for (const secretReferences of [[], null, new Date(), { key: 42 }, { key: {} }, { key: ['secret-id'] }, { key: '' }, { key: 'x'.repeat(129) }, { '': 'secret-id' }, { 'Bearer test-secret': 'test secret value' }]) {
+      const result = parseSourceDefinition({ ...fixture, secretReferences });
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result)).not.toContain('Bearer test-secret');
+      expect(JSON.stringify(result)).not.toContain('test secret value');
+    }
+    expect(parseSourceDefinition({ ...fixture, secretReferences: {} }).success).toBe(true);
+    expect(parseSourceDefinition({ ...fixture, secretReferences: { token: 'a'.repeat(128) } }).success).toBe(true);
+  });
+
+  it('uses the shared protocol compatibility policy', async () => {
+    const fixture = await definition();
+    const minor = parseSourceDefinition({ ...fixture, protocolVersion: '1.1' });
+    expect(minor.success).toBe(true);
+    expect(minor.warnings.some((issue) => issue.code === 'protocol_unknown_minor')).toBe(true);
+    expect(parseSourceDefinition({ ...fixture, protocolVersion: '2.0' }).success).toBe(false);
+    expect(parseSourceDefinition({ ...fixture, protocolVersion: 'v1' }).success).toBe(false);
+  });
+
+  it('keeps the existing SourceSnapshot shape compatible independently of definition metadata', async () => {
+    const fixture = await loadFixture('source-snapshot.json') as Record<string, unknown>;
+    expect(fixture.definitionVersion).toBeUndefined();
+    expect(parseSourceSnapshot(fixture).success).toBe(true);
+    const stale = { ...fixture, freshness: { state: 'stale' }, error: { code: 'connector_timeout', message: 'Source refresh timed out.', retryable: true } };
+    const parsed = unwrap(parseSourceSnapshot(stale));
+    expect(fixture.data).toEqual(parsed.data);
+    expect(parsed.freshness.state).toBe('stale');
   });
 });

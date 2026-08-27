@@ -1,6 +1,7 @@
 import {
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   Logger,
   OnModuleDestroy,
   OnModuleInit,
@@ -15,11 +16,9 @@ import * as sharpModule from 'sharp';
 import type { Sharp, FitEnum } from 'sharp';
 // Handle both ESM and CJS imports for Bun compatibility
 const sharp = (sharpModule as any).default || sharpModule;
-import puppeteer, { Browser } from 'puppeteer';
+import puppeteer, { Browser, Page } from 'puppeteer';
 import QRCode from 'qrcode';
-import { validateUrlSafety, UrlSafetyOptions } from '../../common/utils/url-safety';
 import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
-import { SETTING_KEYS } from '../../settings/settings.service';
 import type { ScreenDesign, ScreenWidget, WidgetTemplate } from '@prisma/client';
 import { calculateDaysUntil } from './days-until.util';
 
@@ -110,27 +109,12 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private fontsBase64: Record<string, string> = {};
   private fontStyleTag: string = '';
 
-  // GitHub API cache to reduce rate limit usage (5 minute TTL)
-  private githubCache: Map<string, { data: { stars: number; name: string }; timestamp: number }> = new Map();
-  private readonly GITHUB_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-  private readonly GITHUB_CACHE_MAX_SIZE = 100;
-
-  // Weather API cache to reduce redundant Open-Meteo calls (10 minute TTL)
-  private weatherCache: Map<string, { data: { temperature: number; weatherCode: number; humidity: number; windSpeed: number; dayName: string }; timestamp: number }> = new Map();
-  private readonly WEATHER_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
-  private readonly WEATHER_CACHE_MAX_SIZE = 50;
-
   constructor(
     private prisma: PrismaService,
     private customWidgetsService: CustomWidgetsService,
     private configService: ConfigService,
     private settingsService: SettingsService,
   ) {}
-
-  private async getUrlSafetyOptions(): Promise<UrlSafetyOptions> {
-    const value = await this.settingsService.get(SETTING_KEYS.ALLOW_LOCAL_NETWORK);
-    return { allowLocalNetwork: value === 'true' };
-  }
 
   /**
    * Resolve an /uploads/ path safely, preventing path traversal via ../
@@ -142,6 +126,65 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       throw new Error('Path traversal detected');
     }
     return resolved;
+  }
+
+  /** Only already stored raster assets can become image inputs. Never resolve a remote URL. */
+  private async readLocalRaster(url: string): Promise<Buffer> {
+    const maxBytes = 16 * 1024 * 1024;
+    try {
+      let input: Buffer;
+      if (typeof url !== 'string') throw new Error();
+      if (url.startsWith('/uploads/')) {
+        const root = await fs.promises.realpath(path.resolve(process.cwd(), 'uploads'));
+        const file = await fs.promises.realpath(this.resolveUploadPath(url));
+        const relative = path.relative(root, file);
+        if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error();
+        if ((await fs.promises.stat(file)).size > maxBytes) throw new Error();
+        input = await fs.promises.readFile(file);
+      } else {
+        if (url.length > Math.ceil(maxBytes / 3) * 4 + 64) throw new Error();
+        const inline = /^data:image\/(?:png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/.exec(url);
+        if (!inline) throw new Error();
+        input = Buffer.from(inline[1], 'base64');
+      }
+      if (!input.length || input.length > maxBytes) throw new Error();
+      // Do not pass SVG/documents to a decoder that could resolve linked resources.
+      const raster = input.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+        || input.subarray(0, 3).equals(Buffer.from([255, 216, 255]))
+        || ['GIF87a', 'GIF89a'].includes(input.subarray(0, 6).toString('ascii'))
+        || (input.subarray(0, 4).toString('ascii') === 'RIFF' && input.subarray(8, 12).toString('ascii') === 'WEBP');
+      if (!raster) throw new Error();
+      const normalized: Buffer = await sharp(input, { limitInputPixels: 16 * 1024 * 1024 })
+        .png().toBuffer();
+      if (normalized.length > maxBytes) throw new Error();
+      return normalized;
+    } catch {
+      // Neither the source location nor decoder details belong in render errors.
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+    }
+  }
+
+  /** Browser rendering is offline, including scripts, frames, styles and images. */
+  private async prepareSnapshotPage(page: Page): Promise<() => Promise<void>> {
+    let unavailable = false;
+    await page.setJavaScriptEnabled(false);
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.startsWith('data:') || url === 'about:blank') {
+        void request.continue().catch(() => { unavailable = true; });
+      } else {
+        unavailable = true;
+        void request.abort('blockedbyclient').catch(() => {});
+      }
+    });
+    return async () => {
+      const complete = await page.evaluate(() =>
+        globalThis.document.fonts.status === 'loaded'
+        && Array.from(globalThis.document.images).every(image => image.complete && image.naturalWidth > 0),
+      );
+      if (unavailable || !complete) throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+    };
   }
 
   /**
@@ -890,13 +933,13 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   }
 
   /**
-   * Fetch weather data from Open-Meteo API
+   * Reject legacy weather reads without a persisted snapshot binding
    */
   private async fetchWeatherData(
-    latitude: number,
-    longitude: number,
-    forecastDay: number,
-    forecastTime: string,
+    _latitude: number,
+    _longitude: number,
+    _forecastDay: number,
+    _forecastTime: string,
   ): Promise<{
     temperature: number;
     weatherCode: number;
@@ -904,135 +947,12 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     windSpeed: number;
     dayName: string;
   } | null> {
-    // Check cache first
-    const cacheKey = `${latitude},${longitude},${forecastDay},${forecastTime}`;
-    const cached = this.weatherCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.WEATHER_CACHE_TTL) {
-      this.logger.debug(`Weather data for ${cacheKey} served from cache`);
-      return cached.data;
-    }
-
-    try {
-      // Build API URL with required parameters
-      const url = new URL('https://api.open-meteo.com/v1/forecast');
-      url.searchParams.set('latitude', latitude.toString());
-      url.searchParams.set('longitude', longitude.toString());
-      url.searchParams.set('current', 'temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m');
-      url.searchParams.set('hourly', 'temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m');
-      url.searchParams.set('forecast_days', Math.max(forecastDay + 1, 1).toString());
-      url.searchParams.set('timezone', 'auto');
-
-      this.logger.debug(`Fetching weather from: ${url.toString()}`);
-
-      // Add timeout to prevent hanging on slow weather API
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-      const response = await fetch(url.toString(), { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Weather API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      // Determine which data to use based on forecastDay and forecastTime
-      const now = new Date();
-      let targetDate = new Date(now);
-      targetDate.setDate(targetDate.getDate() + forecastDay);
-
-      // Get day name
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      let dayName = dayNames[targetDate.getDay()];
-      if (forecastDay === 0) dayName = 'Today';
-      else if (forecastDay === 1) dayName = 'Tomorrow';
-
-      let result: { temperature: number; weatherCode: number; humidity: number; windSpeed: number; dayName: string };
-
-      // If current weather (day 0, time current), use current data
-      if (forecastDay === 0 && forecastTime === 'current') {
-        result = {
-          temperature: Math.round(data.current.temperature_2m),
-          weatherCode: data.current.weather_code,
-          humidity: data.current.relative_humidity_2m,
-          windSpeed: Math.round(data.current.wind_speed_10m),
-          dayName,
-        };
-      } else {
-        // Otherwise, find the appropriate hourly data
-        const hourMap: Record<string, number> = {
-          'current': now.getHours(),
-          'morning': 8,
-          'noon': 12,
-          'afternoon': 15,
-          'evening': 19,
-          'night': 22,
-        };
-
-        const targetHour = hourMap[forecastTime] ?? 12;
-
-        // Build target datetime string (YYYY-MM-DDTHH:00)
-        const year = targetDate.getFullYear();
-        const month = String(targetDate.getMonth() + 1).padStart(2, '0');
-        const day = String(targetDate.getDate()).padStart(2, '0');
-        const hour = String(targetHour).padStart(2, '0');
-        const targetTimeStr = `${year}-${month}-${day}T${hour}:00`;
-
-        // Find the index in hourly data
-        const hourlyTimes = data.hourly?.time || [];
-        const index = hourlyTimes.findIndex((t: string) => t === targetTimeStr);
-
-        if (index >= 0 && data.hourly) {
-          result = {
-            temperature: Math.round(data.hourly.temperature_2m[index]),
-            weatherCode: data.hourly.weather_code[index],
-            humidity: data.hourly.relative_humidity_2m[index],
-            windSpeed: Math.round(data.hourly.wind_speed_10m[index]),
-            dayName,
-          };
-        } else {
-          // Fallback to current if hourly not found
-          result = {
-            temperature: Math.round(data.current.temperature_2m),
-            weatherCode: data.current.weather_code,
-            humidity: data.current.relative_humidity_2m,
-            windSpeed: Math.round(data.current.wind_speed_10m),
-            dayName,
-          };
-        }
-      }
-
-      // Store in cache and evict expired entries
-      const now2 = Date.now();
-      this.weatherCache.set(cacheKey, { data: result, timestamp: now2 });
-      for (const [key, entry] of this.weatherCache.entries()) {
-        if (now2 - entry.timestamp > this.WEATHER_CACHE_TTL * 2) {
-          this.weatherCache.delete(key);
-        }
-      }
-      if (this.weatherCache.size > this.WEATHER_CACHE_MAX_SIZE) {
-        const sorted = [...this.weatherCache.entries()].sort(([, a], [, b]) => a.timestamp - b.timestamp);
-        for (const [key] of sorted.slice(0, this.weatherCache.size - this.WEATHER_CACHE_MAX_SIZE)) {
-          this.weatherCache.delete(key);
-        }
-      }
-      this.logger.debug(`Weather data for ${cacheKey} fetched and cached`);
-
-      return result;
-    } catch (error) {
-      this.logger.warn(`Failed to fetch weather: ${error instanceof Error ? error.message : String(error)}`);
-      // Return stale cache if available
-      if (cached) {
-        this.logger.debug(`Returning stale weather cache for ${cacheKey}`);
-        return cached.data;
-      }
-      return null;
-    }
+    // Legacy provider widgets have no persisted SourceSnapshot binding.
+    throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
   }
 
   /**
-   * Render weather widget with real data from Open-Meteo API
+   * Render a weather widget from its source data
    */
   private async renderWeatherWidget(
     width: number,
@@ -1659,102 +1579,14 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   }
 
   /**
-   * Fetch GitHub repository stars with caching
+   * Reject legacy GitHub reads without a persisted snapshot binding
    */
   private async fetchGitHubStars(
-    owner: string,
-    repo: string,
+    _owner: string,
+    _repo: string,
   ): Promise<{ stars: number; name: string } | null> {
-    const cacheKey = `${owner}/${repo}`.toLowerCase();
-
-    // Check cache first
-    const cached = this.githubCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.GITHUB_CACHE_TTL) {
-      this.logger.debug(`GitHub stars for ${owner}/${repo} served from cache`);
-      return cached.data;
-    }
-
-    try {
-      const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-
-      // Get GitHub token from database settings first, fallback to environment variable
-      let githubToken = await this.settingsService.getGitHubToken();
-      if (!githubToken) {
-        githubToken = this.configService.get<string>('github.token') ?? null;
-      }
-
-      // Add timeout to prevent hanging
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-      const headers: Record<string, string> = {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'Inker-E-Ink-Display',
-      };
-
-      if (githubToken) {
-        headers['Authorization'] = `Bearer ${githubToken}`;
-        this.logger.debug(`Fetching GitHub stars for ${owner}/${repo} with token`);
-      } else {
-        this.logger.debug(`Fetching GitHub stars for ${owner}/${repo} without token (rate limit: 60/hr)`);
-      }
-
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers,
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const rateLimit = response.headers.get('x-ratelimit-remaining');
-        const resetTime = response.headers.get('x-ratelimit-reset');
-        this.logger.warn(`GitHub API error ${response.status} for ${owner}/${repo}. Rate limit remaining: ${rateLimit}, resets at: ${resetTime ? new Date(parseInt(resetTime) * 1000).toISOString() : 'unknown'}`);
-
-        // If rate limited, return cached data even if expired
-        if (response.status === 403 && cached) {
-          this.logger.debug(`Returning expired cache for ${owner}/${repo} due to rate limit`);
-          return cached.data;
-        }
-
-        throw new Error(`GitHub API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      const result = {
-        stars: data.stargazers_count || 0,
-        name: data.full_name || `${owner}/${repo}`,
-      };
-
-      // Store in cache and evict expired entries
-      const now = Date.now();
-      this.githubCache.set(cacheKey, { data: result, timestamp: now });
-      for (const [key, entry] of this.githubCache.entries()) {
-        if (now - entry.timestamp > this.GITHUB_CACHE_TTL * 2) {
-          this.githubCache.delete(key);
-        }
-      }
-      // Cap cache size by evicting oldest entries
-      if (this.githubCache.size > this.GITHUB_CACHE_MAX_SIZE) {
-        const sorted = [...this.githubCache.entries()].sort(([, a], [, b]) => a.timestamp - b.timestamp);
-        for (const [key] of sorted.slice(0, this.githubCache.size - this.GITHUB_CACHE_MAX_SIZE)) {
-          this.githubCache.delete(key);
-        }
-      }
-      this.logger.debug(`GitHub stars for ${owner}/${repo}: ${result.stars} (cached)`);
-
-      return result;
-    } catch (error) {
-      this.logger.warn(`Failed to fetch GitHub stars: ${error instanceof Error ? error.message : String(error)}`);
-
-      // Return expired cache if available
-      if (cached) {
-        this.logger.debug(`Returning expired cache for ${owner}/${repo} due to error`);
-        return cached.data;
-      }
-
-      return null;
-    }
+    // Provider credentials and refreshes belong exclusively to connector workers.
+    throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
   }
 
   /**
@@ -1892,31 +1724,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     try {
-      let imageBuffer: Buffer;
-
-      // Check if it's a local file path (starts with /uploads/)
-      if (url.startsWith('/uploads/')) {
-        // Read directly from filesystem (with path traversal protection)
-        const fs = await import('fs/promises');
-        const filePath = this.resolveUploadPath(url);
-        imageBuffer = await fs.readFile(filePath);
-      } else {
-        // Validate URL for SSRF before fetching (blocks private IPs, file://, etc.)
-        await validateUrlSafety(url, await this.getUrlSafetyOptions());
-
-        // Fetch remote image with timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.status}`);
-        }
-
-        imageBuffer = Buffer.from(await response.arrayBuffer());
-      }
+      const imageBuffer = await this.readLocalRaster(url);
 
       // Process for e-ink: flatten transparent to white, grayscale, high contrast, resize
       // IMPORTANT: flatten() must come BEFORE grayscale() to convert transparent pixels to white
@@ -1930,9 +1738,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         })
         .png()
         .toBuffer();
-    } catch (error) {
-      this.logger.warn(`Failed to load image from ${url}: ${error instanceof Error ? error.message : String(error)}`);
-      return this.renderPlaceholderWidget(width, height, 'Image Error');
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -1965,8 +1772,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     try {
-      // Fetch the custom widget, refreshing stale data sources if needed
-      const preview = await this.customWidgetsService.getWithData(customWidgetId);
+      // Read persisted custom-widget data; rendering must never refresh a source.
+      const preview = await this.customWidgetsService.getWithData(customWidgetId, true);
       const { widget, renderedContent } = preview;
       const widgetConfig = widget.config as Record<string, any>;
       const fieldType = widgetConfig.fieldType as string | undefined;
@@ -1986,9 +1793,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
       // Render HTML to PNG using Puppeteer
       return await this.renderHtmlToPng(html, width, height);
-    } catch (error) {
-      this.logger.error(`Failed to render custom widget ${customWidgetId}:`, error);
-      return this.renderPlaceholderWidget(width, height, 'Error');
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -2007,14 +1813,18 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     try {
-      const pluginRenderer = this.getPluginRenderer();
+      const pluginRenderer = await this.getPluginRenderer();
       if (!pluginRenderer) {
-        return this.renderPlaceholderWidget(width, height, 'Plugin system unavailable');
+        throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
       }
 
-      const plugin = await this.prisma.plugin.findUnique({ where: { id: pluginId } });
-      if (!plugin) {
-        return this.renderPlaceholderWidget(width, height, 'Plugin not found');
+      const plugin = await this.prisma.plugin.findUnique({
+        where: { id: pluginId },
+        select: { name: true, dataStrategy: true, markupFull: true, markupHalfHorizontal: true, markupHalfVertical: true, markupQuadrant: true },
+      });
+      // This legacy widget stores no PluginInstance/SourceSnapshot binding.
+      if (!plugin || plugin.dataStrategy !== 'static') {
+        throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
       }
 
       const layout = this.inferPluginLayout(width, height, config.layout);
@@ -2025,10 +1835,9 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
       // Settings come from the widget config itself
       const settings = config as Record<string, any>;
-      return pluginRenderer.renderToPng(markup, {}, settings, width, height, 'preview');
-    } catch (error) {
-      this.logger.error(`Failed to render plugin widget ${pluginId}:`, error);
-      return this.renderPlaceholderWidget(width, height, 'Plugin Error');
+      return await pluginRenderer.renderToPng(markup, {}, settings, width, height, 'preview');
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -2046,14 +1855,17 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     try {
-      const plugin = await this.prisma.plugin.findUnique({ where: { id: pluginId } });
-      if (!plugin) {
-        return '<div style="color:#999;font-size:12px">Plugin not found</div>';
+      const plugin = await this.prisma.plugin.findUnique({
+        where: { id: pluginId },
+        select: { name: true, dataStrategy: true, markupFull: true, markupHalfHorizontal: true, markupHalfVertical: true, markupQuadrant: true },
+      });
+      if (!plugin || plugin.dataStrategy !== 'static') {
+        throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
       }
 
-      const pluginRenderer = this.getPluginRenderer();
+      const pluginRenderer = await this.getPluginRenderer();
       if (!pluginRenderer) {
-        return `<div style="font-size:12px;padding:8px"><strong>${plugin.name}</strong></div>`;
+        throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
       }
 
       const layout = this.inferPluginLayout(width, height, config.layout);
@@ -2065,8 +1877,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       const settings = config as Record<string, any>;
       const html = await pluginRenderer.renderToHtml(markup, {}, settings);
       return html;
-    } catch (error) {
-      return '<div style="color:#999;font-size:12px">Render error</div>';
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -2091,10 +1903,10 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   /**
    * Get the PluginRendererService (lazy to avoid circular dependency)
    */
-  private getPluginRenderer(): any {
+  private async getPluginRenderer(): Promise<any> {
     try {
       // Dynamic import to avoid circular module dependency
-      const { PluginRendererService } = require('../../plugins/plugin-renderer.service');
+      const { PluginRendererService } = await import('../../plugins/plugin-renderer.service');
       // Get from NestJS module context via prisma's connection
       // Since we can't inject it, instantiate with this service
       if (!this._pluginRenderer) {
@@ -2337,18 +2149,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const page = await browser.newPage();
 
     try {
-      // Block all outbound network requests — all content should be inline/data URLs
-      await page.setRequestInterception(true);
-      page.on('request', (request) => {
-        const reqUrl = request.url();
-        if (reqUrl.startsWith('data:') || reqUrl === 'about:blank') {
-          request.continue();
-        } else {
-          request.abort('blockedbyclient');
-        }
-      });
+      const assertSnapshotComplete = await this.prepareSnapshotPage(page);
 
-      // Set viewport to exact widget size
       await page.setViewport({ width, height, deviceScaleFactor: 1 });
 
       // Load HTML content
@@ -2363,11 +2165,13 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       ]);
 
       // Take screenshot with transparent background
+      await assertSnapshotComplete();
       const screenshot = await page.screenshot({
         type: 'png',
         omitBackground: true,
       });
 
+      await assertSnapshotComplete();
       return Buffer.from(screenshot);
     } finally {
       await page.close();
@@ -2377,19 +2181,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   /**
    * Render a URL to PNG using Puppeteer
    */
-  async renderUrlToPng(url: string, width: number, height: number): Promise<Buffer> {
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
-
-    try {
-      await page.setViewport({ width, height, deviceScaleFactor: 1 });
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-
-      const screenshot = await page.screenshot({ type: 'png', fullPage: false });
-      return Buffer.from(screenshot);
-    } finally {
-      await page.close();
-    }
+  async renderUrlToPng(_url: string, _width: number, _height: number): Promise<Buffer> {
+    throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
   }
 
   /**
@@ -2417,31 +2210,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     try {
-      let imageBuffer: Buffer;
-
-      // Check if it's a local file path (starts with /uploads/)
-      if (url.startsWith('/uploads/')) {
-        // Read directly from filesystem (with path traversal protection)
-        const fs = await import('fs/promises');
-        const filePath = this.resolveUploadPath(url);
-        imageBuffer = await fs.readFile(filePath);
-      } else {
-        // Validate URL for SSRF before fetching (blocks private IPs, file://, etc.)
-        await validateUrlSafety(url, await this.getUrlSafetyOptions());
-
-        // Add timeout to prevent hanging on slow/unresponsive image servers
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.status}`);
-        }
-
-        imageBuffer = Buffer.from(await response.arrayBuffer());
-      }
+      const imageBuffer = await this.readLocalRaster(url);
 
       // Resize and fit the image with transparent background
       return sharp(imageBuffer)
@@ -2451,9 +2220,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         })
         .png()
         .toBuffer();
-    } catch (error) {
-      this.logger.warn(`Failed to load image from ${url}: ${error instanceof Error ? error.message : String(error)}`);
-      return this.renderPlaceholderWidget(width, height, 'Image Error');
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -2467,28 +2235,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     try {
-      let imageBuffer: Buffer;
-
-      // Check if it's a local file path (starts with /uploads/)
-      if (url.startsWith('/uploads/')) {
-        // Read directly from filesystem (with path traversal protection)
-        const fs = await import('fs/promises');
-        const filePath = this.resolveUploadPath(url);
-        imageBuffer = await fs.readFile(filePath);
-      } else {
-        // Add timeout to prevent hanging on slow/unresponsive image servers
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.status}`);
-        }
-
-        imageBuffer = Buffer.from(await response.arrayBuffer());
-      }
+      const imageBuffer = await this.readLocalRaster(url);
 
       // Process image for e-ink: grayscale with high contrast
       // IMPORTANT: flatten() converts transparent backgrounds to white
@@ -2503,9 +2250,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       // Convert to base64 data URL
       const base64 = processedBuffer.toString('base64');
       return `data:image/png;base64,${base64}`;
-    } catch (error) {
-      this.logger.warn(`Failed to process image for e-ink from ${url}: ${error instanceof Error ? error.message : String(error)}`);
-      return ScreenRendererService.FALLBACK_PIXEL;
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -2731,24 +2477,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       this.logger.debug(`  Widget ${i}: ${w.template.name} at (${w.x}, ${w.y}) size ${w.width}x${w.height}${crossesEdge ? ' [CROSSES EDGE]' : ''}`);
     });
 
-    // Pre-fetch data for custom widgets to avoid duplicate API calls
-    // When multiple custom widgets share a data source, this ensures only one external fetch
-    const seenDataSources = new Set<number>();
-    for (const widget of widgets) {
-      if (widget.template.name === 'custom-widget-base') {
-        const cwId = (widget.config as any)?.customWidgetId as number | undefined;
-        if (cwId) {
-          const cw = await this.customWidgetsService.findOne(cwId).catch(() => null);
-          if (cw?.dataSourceId && !seenDataSources.has(cw.dataSourceId)) {
-            seenDataSources.add(cw.dataSourceId);
-            // getWithData warms the data source cache in DB
-            await this.customWidgetsService.getWithData(cwId).catch(() => null);
-          }
-        }
-      }
-    }
-
-    // Generate HTML for all widgets (custom widget data is already cached)
+    // Widget data is read from persisted snapshots only.
     const widgetsHtml = await Promise.all(
       widgets.map(widget => this.generateWidgetHtml(widget, deviceContext))
     );
@@ -2793,16 +2522,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const page = await browser.newPage();
 
     try {
-      // Block all outbound network requests — all content is pre-fetched and inline
-      await page.setRequestInterception(true);
-      page.on('request', (request) => {
-        const reqUrl = request.url();
-        if (reqUrl.startsWith('data:') || reqUrl === 'about:blank') {
-          request.continue();
-        } else {
-          request.abort('blockedbyclient');
-        }
-      });
+      const assertSnapshotComplete = await this.prepareSnapshotPage(page);
 
       await page.setViewport({ width, height, deviceScaleFactor: 1 });
       await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
@@ -2812,7 +2532,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         Promise.all([
           page.evaluateHandle('document.fonts.ready'),
           page.evaluate(() => {
-            const images = Array.from(document.querySelectorAll('img'));
+            const images = Array.from(globalThis.document.querySelectorAll('img'));
             return Promise.all(
               images.map(img =>
                 img.complete
@@ -2828,6 +2548,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         new Promise(resolve => setTimeout(resolve, 5000)),
       ]);
 
+      await assertSnapshotComplete();
       const screenshot = await page.screenshot({
         type: 'png',
         clip: { x: 0, y: 0, width, height },
@@ -2835,6 +2556,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       const screenshotTime = Date.now();
       this.logger.debug(`  Puppeteer screenshot took ${screenshotTime - htmlGenTime}ms (total: ${screenshotTime - startTime}ms)`);
 
+      await assertSnapshotComplete();
       return Buffer.from(screenshot);
     } finally {
       await page.close();
@@ -3258,7 +2980,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       html += '</div>';
       return html;
     } catch {
-      return `<div style="color: #666;">${this.escapeHtml(location)}<br>Weather unavailable</div>`;
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -3372,36 +3094,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       return '<div style="color: #999; font-size: 12px;">No image URL</div>';
     }
 
-    // Convert ALL images to base64 data URLs so Puppeteer never makes outbound requests
-    let imageUrl: string;
-    if (url.startsWith('/uploads/')) {
-      try {
-        const fs = await import('fs/promises');
-        const filePath = this.resolveUploadPath(url);
-        const imageBuffer = await fs.readFile(filePath);
-        const base64 = imageBuffer.toString('base64');
-        const ext = path.extname(url).slice(1) || 'png';
-        imageUrl = `data:image/${ext};base64,${base64}`;
-      } catch {
-        return '<div style="color: #999; font-size: 12px;">Image not found</div>';
-      }
-    } else {
-      // Pre-fetch remote images server-side with SSRF validation
-      try {
-        await validateUrlSafety(url, await this.getUrlSafetyOptions());
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const buffer = Buffer.from(await response.arrayBuffer());
-        const base64 = buffer.toString('base64');
-        const contentType = response.headers.get('content-type') || 'image/png';
-        imageUrl = `data:${contentType};base64,${base64}`;
-      } catch {
-        return '<div style="color: #999; font-size: 12px;">Image unavailable</div>';
-      }
-    }
+    const imageBuffer = await this.readLocalRaster(url);
+    const imageUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
 
     return `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: white;">
       <img src="${imageUrl}" alt="Image" style="max-width: 100%; max-height: 100%; object-fit: ${fit}; filter: grayscale(100%) contrast(1.2);" />
@@ -3474,7 +3168,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     if (!customWidgetId) return '<div style="color: #999;">No widget ID</div>';
 
     try {
-      const result = await this.customWidgetsService.getWithData(customWidgetId);
+      const result = await this.customWidgetsService.getWithData(customWidgetId, true);
       const renderedContent = result.renderedContent;
       const widgetConfig = (result.widget?.config as Record<string, any>) || {};
 
@@ -3531,8 +3225,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       }
 
       return '<div style="color: #999;">Invalid content</div>';
-    } catch (error) {
-      return `<div style="color: #f00; font-size: 12px;">Error: ${this.escapeHtml(String(error))}</div>`;
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 
@@ -3574,28 +3268,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     return `<div style="display: grid; grid-template-columns: repeat(${gridCols}, 1fr); grid-template-rows: repeat(${gridRows}, 1fr); gap: ${gridGap}px; width: 100%; height: 100%;">${cellsHtml.join('')}</div>`;
   }
 
-  // 1x1 transparent pixel fallback — prevents Puppeteer from fetching unreachable URLs
-  private static readonly FALLBACK_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
-
   private async processImageForEinkHtml(url: string): Promise<string> {
     if (!url) return '';
     try {
-      let imageBuffer: Buffer;
-      if (url.startsWith('/uploads/')) {
-        const fs = await import('fs/promises');
-        imageBuffer = await fs.readFile(this.resolveUploadPath(url));
-      } else if (url.startsWith('data:')) {
-        return url; // Already a data URL
-      } else {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.status}`);
-        }
-        imageBuffer = Buffer.from(await response.arrayBuffer());
-      }
+      const imageBuffer = await this.readLocalRaster(url);
+
       // Flatten transparent backgrounds to white before processing
       const processedBuffer = await sharp(imageBuffer)
         .flatten({ background: { r: 255, g: 255, b: 255 } })
@@ -3604,9 +3281,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         .png()
         .toBuffer();
       return `data:image/png;base64,${processedBuffer.toString('base64')}`;
-    } catch (error) {
-      this.logger.warn(`Failed to process image for e-ink HTML from ${url}: ${error instanceof Error ? error.message : String(error)}`);
-      return ScreenRendererService.FALLBACK_PIXEL;
+    } catch {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
   }
 }

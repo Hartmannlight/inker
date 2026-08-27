@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PublicationPersistenceService } from './publication-persistence.service';
 import { canonicalJson, fixtureIds, publicationArtifacts, sha256, type PublicationContent } from './publication-content';
 
-type Draft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string };
+type Draft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string } | { sourceSnapshotId: string };
 type PublishInput = { idempotencyKey: string; expectedRevision: number; draft: Draft; deviceIds: number[] };
 
 function object(value: unknown): Record<string, unknown> {
@@ -108,6 +108,10 @@ export class PublishService {
       const ids = fixtureIds(draft.fixtureArtifacts);
       if (!ids) throw new BadRequestException('Invalid fixture draft');
       parsed = { fixtureArtifacts: ids };
+    } else if ('sourceSnapshotId' in draft) {
+      keys(draft, ['sourceSnapshotId']);
+      if (typeof draft.sourceSnapshotId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(draft.sourceSnapshotId)) throw new BadRequestException('Invalid source snapshot reference');
+      parsed = { sourceSnapshotId: draft.sourceSnapshotId };
     } else {
       keys(draft, ['screenId', 'expectedUpdatedAt']);
       if (!positive(draft.screenId) || typeof draft.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(draft.expectedUpdatedAt) || !Number.isFinite(Date.parse(draft.expectedUpdatedAt))) throw new BadRequestException('Only fixture or uploaded screen drafts are publishable');
@@ -118,6 +122,21 @@ export class PublishService {
 
   private async snapshot(draft: Draft): Promise<{ content: PublicationContent; imageUrl?: string }> {
     if ('fixtureArtifacts' in draft) return { content: { schemaVersion: 1, fixtureArtifacts: draft.fixtureArtifacts } };
+    if ('sourceSnapshotId' in draft) {
+      const row = await this.prisma.sourceSnapshot.findUnique({ where: { snapshotId: draft.sourceSnapshotId } });
+      if (!row || !row.validDataCreatedAt || !['fresh', 'stale'].includes(row.freshnessState)
+        || row.schemaVersion !== '1' || sha256(canonicalJson(row.data)) !== row.contentHash) throw new BadRequestException('Source snapshot unavailable');
+      // Foundation proof uses the existing fixture pixels, not a new widget or
+      // live source lookup. Every byte-producing input comes from this SQL row.
+      const data = row.data;
+      const ids = data && typeof data === 'object' && !Array.isArray(data)
+        && Object.keys(data).length === 1 ? fixtureIds(data.fixtureArtifacts) : null;
+      if (!ids) throw new BadRequestException('Source snapshot has no supported fixture artifact schema');
+      return { content: { schemaVersion: 1, fixtureArtifacts: ids, sourceSnapshot: {
+        sourceId: row.sourceDefinitionId, snapshotId: row.snapshotId, revision: row.revision,
+        contentHash: row.contentHash, connectorVersion: row.connectorVersion,
+      } } };
+    }
     const screen = await this.prisma.screen.findUnique({ where: { id: draft.screenId } });
     if (!screen) throw new NotFoundException('Draft screen not found');
     if (screen.updatedAt.toISOString() !== draft.expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');

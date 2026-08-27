@@ -101,6 +101,32 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-21 adds empty source storage without changing publications, renders or outbox', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp21-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations'), latest = '20260831000000_sources';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath);
+    try {
+      database.exec(`INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,updated_at)
+        VALUES(10,'source-upgrade','source-upgrade','browser-hd-1920x1080','reference-connected-browser',42,CURRENT_TIMESTAMP);
+        INSERT INTO publications(publication_id,publication_key) VALUES('publication','source-upgrade');
+        INSERT INTO publication_revisions(publication_revision_id,publication_id,revision,protocol_version,content,content_hash)
+          VALUES('revision','publication',1,'1.0','{}','legacy-hash');
+        INSERT INTO device_publication_states(device_id,desired_publication_revision_id,desired_sequence,updated_at)
+          VALUES(10,'revision',42,CURRENT_TIMESTAMP);
+        INSERT INTO render_requests(key,publication_revision_id,target,renderer_version) VALUES('${'a'.repeat(64)}','revision','{}','test');
+        INSERT INTO outbox_events(event_id,event_type,aggregate_type,aggregate_id,payload)
+          VALUES('source-upgrade-event','render.requested','RenderRequest','${'a'.repeat(64)}','{}');`);
+      const tables = ['devices', 'publications', 'publication_revisions', 'device_publication_states', 'render_requests', 'outbox_events'];
+      const before = tables.map(table => database.query(`SELECT * FROM ${table}`).all());
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(tables.map(table => database.query(`SELECT * FROM ${table}`).all())).toEqual(before);
+      for (const table of ['source_definitions', 'source_secrets', 'source_snapshots', 'source_refresh_jobs']) expect(database.query(`SELECT * FROM ${table}`).all()).toEqual([]);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
   test('WP-20 startup seed is repeatable and preserves existing configuration', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp20-seed.db');
     expect((await deploy(databasePath)).exitCode).toBe(0);
@@ -153,6 +179,9 @@ describe("Prisma migration baseline", () => {
       expect(() => database.exec(`UPDATE render_requests SET artifact_hash = '${'b'.repeat(64)}'`)).toThrow();
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
+    // Preserve the historical assertions, then complete later DDL before the
+    // comparison against today's datamodel rather than the WP-19 datamodel.
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -251,6 +280,7 @@ describe("Prisma migration baseline", () => {
         "20260828000000_explicit_publications",
         "20260829000000_playlist_playback",
         "20260830000000_render_cache",
+        "20260831000000_sources",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

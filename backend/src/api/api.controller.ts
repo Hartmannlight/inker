@@ -11,6 +11,7 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  GoneException,
   UnprocessableEntityException,
   Logger,
   StreamableFile,
@@ -556,147 +557,23 @@ export class ApiController {
     return this.getSetup(headers);
   }
 
-  /**
-   * Device Current Screen Preview Endpoint - GET /api/device-images/device/:id
-   * Returns the PNG image that a device is currently displaying (preview mode)
-   * Used by admin UI to preview what a device should be showing
-   */
+  /** Anonymous device-image lookups cannot bypass publication authorization. */
   @Get('device-images/device/:id')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Render current screen for a device (preview for admin)' })
-  @ApiResponse({
-    status: 200,
-    description: 'PNG image of the current screen',
-    content: { 'image/png': {} },
-  })
-  @ApiResponse({ status: 404, description: 'Device not found' })
-  async renderDeviceCurrentScreen(
-    @Param('id', ParseIntPipe) id: number,
-    @Res() res: Response,
-  ) {
-    try {
-      const imageBuffer = await this.displayService.getCurrentScreenImage(id);
-
-      res.set({
-        'Content-Type': 'image/png',
-        'Content-Length': imageBuffer.length,
-        'Cache-Control': 'no-store, no-cache, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-      });
-
-      res.send(imageBuffer);
-    } catch (error) {
-      this.logger.error(`Failed to render current screen for device ${id}: ${error.message}`);
-      throw new NotFoundException('Device or screen not found');
-    }
+  @HttpCode(HttpStatus.GONE)
+  @ApiOperation({ summary: 'Legacy device-image rendering requires a publication' })
+  @ApiResponse({ status: 410, description: 'PUBLICATION_REQUIRED' })
+  renderDeviceCurrentScreen(): never {
+    throw new GoneException('PUBLICATION_REQUIRED');
   }
 
-  /**
-   * Screen Design Render Endpoint - GET /api/device-images/design/:id
-   * Returns rendered PNG image for designed screens (public, no auth required)
-   * Used by devices to fetch designed screen images
-   *
-   * Query parameters:
-   * - t: Cache buster timestamp
-   * - battery: Device battery percentage (0-100)
-   * - wifi: Device WiFi RSSI in dBm
-   * - deviceName: Device name
-   * - firmwareVersion: Device firmware version
-   * - macAddress: Device MAC address
-   * - mode: Render mode ('device' | 'preview' | 'einkPreview')
-   *   - device: Full e-ink processing with inversion (default, for actual device)
-   *   - preview: No e-ink processing (RGB preview for admin UI)
-   *   - einkPreview: Full e-ink processing without inversion (pixel-perfect preview on RGB display)
-   * - preview: Legacy boolean parameter (deprecated, use mode instead)
-   */
+  /** Legacy anonymous rendering is replaced by authorized publication delivery. */
   @Get('device-images/design/:id')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Render a screen design to PNG (public, for devices)' })
-  @ApiResponse({
-    status: 200,
-    description: 'PNG image of the rendered screen design',
-    content: { 'image/png': {} },
-  })
-  @ApiResponse({ status: 404, description: 'Screen design not found' })
-  async renderScreenDesignPublic(
-    @Param('id', ParseIntPipe) id: number,
-    @Query('battery') battery: string,
-    @Query('wifi') wifi: string,
-    @Query('deviceName') deviceName: string,
-    @Query('firmwareVersion') firmwareVersion: string,
-    @Query('macAddress') macAddress: string,
-    @Query('mode') mode: string,
-    @Query('preview') preview: string,
-    @Query('format') format: string,
-    @Query('bitDepth') bitDepthRaw: string,
-    @Res() res: Response,
-  ) {
-    // Container: 'bmp' for TRMNL OG / DIY-kit firmware that rejects PNG (issue #31), otherwise PNG.
-    // bitDepth 4 → 16-level grayscale (TRMNL X), delivered as a compressed grayscale PNG by default.
-    const bitDepth = bitDepthRaw === '4' ? 4 : 1;
-    const imageFormat: 'png' | 'bmp' = format === 'bmp' ? 'bmp' : 'png';
-    const contentType = imageFormat === 'bmp' ? 'image/bmp' : 'image/png';
-    try {
-      // Determine render mode:
-      // 1. Use explicit mode parameter if provided
-      // 2. Fall back to legacy preview parameter for backwards compatibility
-      // 3. Default to 'device' mode
-      let renderMode: 'device' | 'preview' | 'einkPreview' = 'device';
-      if (mode === 'preview' || mode === 'einkPreview' || mode === 'device') {
-        renderMode = mode;
-      } else if (preview === 'true' || preview === '1') {
-        renderMode = 'preview';
-      }
-
-      // NOTE: Capture serving is handled by display.service.ts which returns capture URLs
-      // for static screens and render URLs for dynamic screens (clock, countdown, weather).
-      // This endpoint should ALWAYS render fresh to support dynamic widgets.
-
-      // Build device context from query params
-      const deviceContext = {
-        battery: battery ? parseFloat(battery) : undefined,
-        wifi: wifi ? parseInt(wifi, 10) : undefined,
-        deviceName: deviceName || undefined,
-        firmwareVersion: firmwareVersion || undefined,
-        macAddress: macAddress || undefined,
-      };
-
-      // Fall back to re-rendering if no capture exists
-      const imageBuffer = await this.screenRendererService.renderScreenDesign(id, deviceContext, renderMode, imageFormat, bitDepth);
-
-      // Disable caching for all render modes - admin UI needs fresh previews
-      const cacheHeaders = {
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-      };
-
-      res.set({
-        'Content-Type': contentType,
-        'Content-Length': imageBuffer.length,
-        ...cacheHeaders,
-      });
-
-      res.send(imageBuffer);
-    } catch (error) {
-      this.logger.error(`Failed to render screen design ${id}: ${error.message}`);
-      // Return default screen instead of 404 to prevent device loading loop.
-      // Honor the requested format so BMP-only firmware still gets a usable image.
-      try {
-        const fallbackBuffer = imageFormat === 'bmp'
-          ? await this.defaultScreenService.getDefaultScreenBmpBuffer()
-          : await this.defaultScreenService.getDefaultScreenBuffer();
-        res.set({
-          'Content-Type': contentType,
-          'Content-Length': fallbackBuffer.length,
-          'Cache-Control': 'no-store',
-        });
-        res.send(fallbackBuffer);
-      } catch {
-        throw new NotFoundException('Screen design not found');
-      }
-    }
+  @HttpCode(HttpStatus.GONE)
+  @ApiOperation({ summary: 'Legacy design rendering requires a publication' })
+  @ApiResponse({ status: 410, description: 'PUBLICATION_REQUIRED' })
+  renderScreenDesignPublic(): never {
+    // Do not look up the identifier: the response must not reveal design existence.
+    throw new GoneException('PUBLICATION_REQUIRED');
   }
 
   /**

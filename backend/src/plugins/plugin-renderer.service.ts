@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { Liquid } from 'liquidjs';
-import * as sharp from 'sharp';
+import { isJsonValue } from '@inker/contracts';
+import { redactLogValue } from '../config/secret-redaction';
 import { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
 import { TRMNL_CSS } from './sync/trmnl-css';
 
@@ -13,7 +14,6 @@ export type PluginLayout = 'full' | 'half_horizontal' | 'half_vertical' | 'quadr
  */
 @Injectable()
 export class PluginRendererService {
-  private readonly logger = new Logger(PluginRendererService.name);
   private readonly liquid: Liquid;
 
   constructor(
@@ -22,6 +22,7 @@ export class PluginRendererService {
     this.liquid = new Liquid({
       strictVariables: false,
       strictFilters: false,
+      ownPropertyOnly: true,
     });
     this.registerTrmnlFilters();
   }
@@ -50,7 +51,7 @@ export class PluginRendererService {
     });
 
     // days_ago: {{ 3 | days_ago }} → "2026-03-23"
-    this.liquid.registerFilter('days_ago', (value: any, timezone = 'UTC') => {
+    this.liquid.registerFilter('days_ago', (value: any, _timezone = 'UTC') => {
       const days = Number(value) || 0;
       const d = new Date();
       d.setDate(d.getDate() - days);
@@ -158,22 +159,8 @@ export class PluginRendererService {
     });
 
     // where_exp: {{ items | where_exp: "item", "item.active == true" }}
-    this.liquid.registerFilter('where_exp', (collection: any, variable: string, expression: string) => {
-      if (!Array.isArray(collection)) return [];
-      return collection.filter(item => {
-        try {
-          // Simple expression evaluator for common patterns
-          const expr = expression
-            .replace(new RegExp(`${variable}\\.`, 'g'), 'item.')
-            .replace(/\bnil\b/g, 'null')
-            .replace(/\band\b/g, '&&')
-            .replace(/\bor\b/g, '||')
-            .replace(/\bnot\b/g, '!')
-            .replace(/(?<!=)=(?!=)/g, '==');
-          const fn = new Function('item', `try { return !!(${expr}); } catch { return false; }`);
-          return fn(item);
-        } catch { return false; }
-      });
+    this.liquid.registerFilter('where_exp', () => {
+      throw new ServiceUnavailableException('PLUGIN_ISOLATION_REQUIRED');
     });
   }
 
@@ -183,16 +170,22 @@ export class PluginRendererService {
   async renderToHtml(
     markup: string,
     locals: Record<string, any>,
-    settings: Record<string, any> = {},
+    _settings: Record<string, any> = {},
   ): Promise<string> {
+    if (!isJsonValue(locals) || !locals || typeof locals !== 'object' || Array.isArray(locals)) {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_INVALID');
+    }
+    if (/\|\s*where_exp\b/.test(markup) || /\{%-?\s*(?:include|render|layout)\b/.test(markup)) {
+      throw new ServiceUnavailableException('PLUGIN_ISOLATION_REQUIRED');
+    }
     try {
-      const context = { ...locals, settings };
-      const html = await this.liquid.parseAndRender(markup, context);
-      return html;
-    } catch (error) {
-      this.logger.warn(`Liquid render failed: ${error.message}`);
-      // Return a fallback HTML instead of throwing
-      return `<div style="padding:16px;font-family:sans-serif"><p style="font-size:14px;font-weight:bold;margin-bottom:8px">Template Error</p><p style="font-size:11px;color:#666">${error.message?.split('\n')[0] || 'Unknown error'}</p></div>`;
+      // Settings are configuration and may contain credentials. Templates see
+      // only normalized persisted data, never a settings or OAuth object.
+      const context = { ...(redactLogValue(locals) as Record<string, unknown>), settings: {} };
+      return await this.liquid.parseAndRender(markup, context);
+    } catch {
+      // Liquid error text may contain supplied data; do not return or log it.
+      throw new ServiceUnavailableException('PLUGIN_TEMPLATE_UNAVAILABLE');
     }
   }
 
@@ -246,36 +239,14 @@ ${innerHtml}
    * Screenshot an external URL with custom headers (e.g. Grafana panel with auth)
    */
   async renderUrlToPng(
-    url: string,
-    headers: Record<string, string>,
-    width: number = 800,
-    height: number = 480,
-    mode: 'device' | 'preview' | 'einkPreview' = 'device',
-    evaluateScript?: string,
+    _url: string,
+    _headers: Record<string, string>,
+    _width: number = 800,
+    _height: number = 480,
+    _mode: 'device' | 'preview' | 'einkPreview' = 'device',
+    _evaluateScript?: string,
   ): Promise<Buffer> {
-    const browser = await this.screenRenderer.getBrowser();
-    const page = await browser.newPage();
-
-    try {
-      await page.setViewport({ width, height, deviceScaleFactor: 1 });
-      await page.setExtraHTTPHeaders(headers);
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-
-      if (evaluateScript) {
-        await page.evaluate(evaluateScript);
-        // Wait for layout to settle after DOM changes
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-
-      const rawPng = Buffer.from(await page.screenshot({ type: 'png', fullPage: false }));
-
-      if (mode === 'preview') return rawPng;
-
-      const shouldNegate = mode === 'device';
-      return this.screenRenderer.applyEinkProcessing(rawPng, width, height, shouldNegate);
-    } finally {
-      await page.close();
-    }
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   /**

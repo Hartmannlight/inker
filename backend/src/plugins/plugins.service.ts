@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import * as sharp from 'sharp';
+import { Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { type Plugin, type PluginInstance } from '@prisma/client';
+import { isJsonValue, type JsonObject } from '@inker/contracts';
+import { redactLogValue, redactSecretText } from '../config/secret-redaction';
 import { PrismaService } from '../prisma/prisma.service';
 import { PluginRendererService, PluginLayout } from './plugin-renderer.service';
 import { EncryptionService } from '../common/services/encryption.service';
@@ -13,13 +14,12 @@ import {
 } from './dto/create-plugin.dto';
 
 const SETTINGS_MASK = '••••••••';
-const MAX_FETCHES_PER_MINUTE = 30;
+type StoredPlugin = Plugin & { instances?: StoredInstance[]; _count?: { instances: number } };
+type StoredInstance = PluginInstance & { plugin?: Plugin };
 
 @Injectable()
 export class PluginsService {
   private readonly logger = new Logger(PluginsService.name);
-  private fetchCounter = 0;
-  private fetchCounterResetAt = Date.now() + 60000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -33,13 +33,14 @@ export class PluginsService {
   // ========================
 
   async findAllPlugins() {
-    return this.prisma.plugin.findMany({
+    const plugins = await this.prisma.plugin.findMany({
       orderBy: [{ category: 'asc' }, { name: 'asc' }],
       include: {
         _count: { select: { instances: true } },
-        instances: { select: { id: true, settings: true }, orderBy: { id: 'asc' } },
+        instances: { orderBy: { id: 'asc' } },
       },
     });
+    return plugins.map((plugin) => this.publicPlugin(plugin));
   }
 
   async findPluginById(id: number) {
@@ -48,10 +49,7 @@ export class PluginsService {
       include: { instances: true },
     });
     if (!plugin) throw new NotFoundException(`Plugin ${id} not found`);
-    return {
-      ...plugin,
-      instances: plugin.instances.map((i) => this.maskEncryptedSettings(i)),
-    };
+    return this.publicPlugin(plugin);
   }
 
   async findPluginBySlug(slug: string) {
@@ -59,11 +57,11 @@ export class PluginsService {
   }
 
   async createPlugin(dto: CreatePluginDto) {
-    return this.prisma.plugin.create({ data: dto });
+    return this.publicPlugin(await this.prisma.plugin.create({ data: dto }));
   }
 
   async updatePlugin(id: number, dto: UpdatePluginDto) {
-    return this.prisma.plugin.update({ where: { id }, data: dto });
+    return this.publicPlugin(await this.prisma.plugin.update({ where: { id }, data: dto }));
   }
 
   async deletePlugin(id: number) {
@@ -116,7 +114,7 @@ export class PluginsService {
       (plugin.settingsSchema as any[]) || [],
     );
 
-    return this.prisma.pluginInstance.create({
+    return this.maskEncryptedSettings(await this.prisma.pluginInstance.create({
       data: {
         pluginId: dto.pluginId,
         name: dto.name,
@@ -124,7 +122,7 @@ export class PluginsService {
         settingsEncrypted: encrypted,
       },
       include: { plugin: true },
-    });
+    }));
   }
 
   async updateInstance(id: number, dto: UpdatePluginInstanceDto) {
@@ -147,37 +145,27 @@ export class PluginsService {
 
       const { plain, encrypted } = this.separateEncryptedFields(dto.settings, schema);
 
-      return this.prisma.pluginInstance.update({
+      return this.maskEncryptedSettings(await this.prisma.pluginInstance.update({
         where: { id },
         data: {
           name: dto.name,
           settings: plain,
           settingsEncrypted: { ...existingEncrypted, ...encrypted },
-          lastData: Prisma.DbNull,
-          lastFetchedAt: null,
-          lastError: null,
         },
         include: { plugin: true },
-      });
+      }));
     }
 
-    return this.prisma.pluginInstance.update({
+    return this.maskEncryptedSettings(await this.prisma.pluginInstance.update({
       where: { id },
       data: { name: dto.name },
       include: { plugin: true },
-    });
+    }));
   }
 
   async findInstanceByIdMasked(id: number) {
     const instance = await this.findInstanceById(id);
     return this.maskEncryptedSettings(instance);
-  }
-
-  getDecryptedSettings(instance: any): Record<string, any> {
-    const plain = (instance.settings || {}) as Record<string, any>;
-    const encrypted = (instance.settingsEncrypted || {}) as Record<string, string>;
-    if (Object.keys(encrypted).length === 0) return plain;
-    return { ...plain, ...this.encryption.decryptObject(encrypted) };
   }
 
   private separateEncryptedFields(
@@ -203,174 +191,80 @@ export class PluginsService {
     return { plain, encrypted };
   }
 
-  private maskEncryptedSettings(instance: any): any {
+  private maskEncryptedSettings(instance: StoredInstance, schema = instance.plugin?.settingsSchema) {
     const encrypted = (instance.settingsEncrypted || {}) as Record<string, string>;
-    if (Object.keys(encrypted).length === 0) return instance;
-
-    const maskedSettings = { ...(instance.settings as Record<string, any>) };
+    const maskedSettings = { ...(redactLogValue(instance.settings) as JsonObject) };
+    if (Array.isArray(schema)) {
+      for (const field of schema) {
+        if (field && typeof field === 'object' && !Array.isArray(field) &&
+            field.encrypted === true && typeof field.key === 'string' && field.key in maskedSettings) {
+          maskedSettings[field.key] = SETTINGS_MASK;
+        }
+      }
+    }
     for (const key of Object.keys(encrypted)) {
       maskedSettings[key] = SETTINGS_MASK;
     }
 
-    return { ...instance, settings: maskedSettings, settingsEncrypted: undefined };
+    return {
+      id: instance.id,
+      pluginId: instance.pluginId,
+      name: instance.name,
+      settings: maskedSettings,
+      oauthConnected: Boolean(instance.oauthToken || instance.oauthRefreshToken),
+      oauthExpiresAt: instance.oauthExpiresAt,
+      lastData: redactLogValue(instance.lastData),
+      lastFetchedAt: instance.lastFetchedAt,
+      lastError: instance.lastError ? 'LEGACY_SOURCE_ERROR' : null,
+      createdAt: instance.createdAt,
+      updatedAt: instance.updatedAt,
+      ...(instance.plugin ? { plugin: this.publicPlugin(instance.plugin) } : {}),
+    };
+  }
+
+  private publicPlugin(plugin: StoredPlugin) {
+    return {
+      id: plugin.id, name: plugin.name, slug: plugin.slug,
+      description: plugin.description, icon: plugin.icon, category: plugin.category,
+      dataStrategy: plugin.dataStrategy, dataUrl: plugin.dataUrl ? redactSecretText(plugin.dataUrl) : null,
+      dataMethod: plugin.dataMethod, dataHeaders: redactLogValue(plugin.dataHeaders),
+      dataPath: plugin.dataPath, dataTransform: plugin.dataTransform,
+      refreshInterval: plugin.refreshInterval,
+      markupFull: plugin.markupFull, markupHalfHorizontal: plugin.markupHalfHorizontal,
+      markupHalfVertical: plugin.markupHalfVertical, markupQuadrant: plugin.markupQuadrant,
+      settingsSchema: plugin.settingsSchema, oauthProvider: plugin.oauthProvider,
+      oauthScopes: plugin.oauthScopes, isInstalled: plugin.isInstalled,
+      isBuiltin: plugin.isBuiltin, source: plugin.source, sourceUrl: plugin.sourceUrl,
+      sourceHash: plugin.sourceHash, version: plugin.version,
+      createdAt: plugin.createdAt, updatedAt: plugin.updatedAt,
+      ...(plugin._count ? { _count: plugin._count } : {}),
+      ...(plugin.instances ? { instances: plugin.instances.map((instance) => this.maskEncryptedSettings(instance, plugin.settingsSchema)) } : {}),
+    };
   }
 
   async deleteInstance(id: number) {
     return this.prisma.pluginInstance.delete({ where: { id } });
   }
 
-  private validateSettings(settings: Record<string, any>, schema: any[]): void {
-    for (const field of schema) {
-      const value = settings[field.key];
-      if (field.required && (value === undefined || value === null || value === '')) {
-        throw new Error(`Setting "${field.label || field.key}" is required`);
-      }
-      if (value === undefined || value === null || value === '') continue;
-      if (field.type === 'number' && typeof value !== 'number' && isNaN(Number(value))) {
-        throw new Error(`Setting "${field.label || field.key}" must be a number`);
-      }
-      if (field.type === 'select' && field.options?.length > 0) {
-        const validOptions = field.options.map((o: any) => typeof o === 'object' ? o.value : o);
-        if (!validOptions.includes(value)) {
-          throw new Error(`Setting "${field.label || field.key}" must be one of: ${validOptions.join(', ')}`);
-        }
-      }
-    }
-  }
-
-  // ========================
-  // Data Fetching
-  // ========================
-
-  async fetchData(instanceId: number): Promise<Record<string, any>> {
+  /** Read the last persisted result, including stale data, without provider I/O. */
+  async fetchData(instanceId: number): Promise<JsonObject> {
     const instance = await this.findInstanceById(instanceId);
-    const plugin = instance.plugin;
-    const settings = this.getDecryptedSettings(instance);
-
-    // Check cache
-    if (instance.lastFetchedAt && instance.lastData) {
-      const age = (Date.now() - instance.lastFetchedAt.getTime()) / 1000;
-      if (age < plugin.refreshInterval) {
-        return instance.lastData as Record<string, any>;
-      }
-    }
-
-    // Rate limiting
-    if (Date.now() > this.fetchCounterResetAt) {
-      this.fetchCounter = 0;
-      this.fetchCounterResetAt = Date.now() + 60000;
-    }
-    if (this.fetchCounter >= MAX_FETCHES_PER_MINUTE) {
-      this.logger.warn(`Rate limit reached (${MAX_FETCHES_PER_MINUTE}/min), returning cached data`);
-      return (instance.lastData as Record<string, any>) || {};
-    }
-    this.fetchCounter++;
-
-    // Pre-flight: check required/encrypted settings before making external requests
-    const schema = (plugin.settingsSchema as any[]) || [];
-    const missingFields = schema
-      .filter(f => (f.encrypted || f.required) && !settings[f.key])
-      .map(f => f.label || f.key);
-    if (missingFields.length > 0) {
-      const errorMsg = `[settings] Missing required: ${missingFields.join(', ')}`;
-      this.logger.warn(`Plugin ${plugin.slug}: ${errorMsg}`);
-      await this.prisma.pluginInstance.update({
-        where: { id: instanceId },
-        data: { lastError: errorMsg },
-      });
-      return (instance.lastData as Record<string, any>) || {};
-    }
-
-    try {
-      // Inject OAuth access token if available
-      if ((plugin as any).oauthProvider) {
-        const accessToken = await this.oauthService.getAccessToken(instanceId);
-        if (accessToken) {
-          settings.oauth_access_token = accessToken;
-        }
-      }
-
-      const data = await this.executePlugin(plugin, settings);
-
-      await this.prisma.pluginInstance.update({
-        where: { id: instanceId },
-        data: { lastData: data, lastFetchedAt: new Date(), lastError: null },
-      });
-
-      return data;
-    } catch (error) {
-      const msg = error.message || String(error);
-      const prefix = msg.includes('HTTP ') || msg.includes('timeout') ? '[network]' : '[plugin]';
-      const errorMsg = msg.startsWith('[') ? msg : `${prefix} ${msg}`;
-      this.logger.error(`Plugin ${plugin.slug} fetch failed: ${errorMsg}`);
-      await this.prisma.pluginInstance.update({
-        where: { id: instanceId },
-        data: { lastError: errorMsg },
-      });
-      return (instance.lastData as Record<string, any>) || {};
-    }
+    return this.persistedData(instance);
   }
 
-  async fetchDataForPlugin(pluginId: number, settings: Record<string, any> = {}): Promise<Record<string, any>> {
+  private persistedData(instance: { lastFetchedAt: Date | null; lastData: unknown }): JsonObject {
+    if (!instance.lastFetchedAt || !isJsonValue(instance.lastData) ||
+        !instance.lastData || typeof instance.lastData !== 'object' || Array.isArray(instance.lastData)) {
+      throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+    }
+    return redactLogValue(instance.lastData) as JsonObject;
+  }
+
+  /** Legacy definitions cannot trigger unregistered provider code in the API. */
+  async fetchDataForPlugin(pluginId: number, _settings: Record<string, unknown> = {}): Promise<JsonObject> {
     const plugin = await this.findPluginById(pluginId);
-    try {
-      return await this.executePlugin(plugin, settings);
-    } catch (error) {
-      this.logger.error(`Plugin ${plugin.slug} execute failed: ${error.message}`);
-      return {};
-    }
-  }
-
-  /**
-   * Execute a plugin's data pipeline.
-   * Priority: 1) JS adapter, 2) URL fetch
-   */
-  private async executePlugin(plugin: any, settings: Record<string, any>): Promise<Record<string, any>> {
-    // JS adapter (for user-created plugins with dataTransform)
-    if (plugin.dataTransform) {
-      return this.runAsyncTransform(plugin.dataTransform, settings, plugin.slug);
-    }
-
-    // URL fetch (for URL-based custom plugins)
-    if (plugin.dataUrl) {
-      const url = this.interpolate(plugin.dataUrl, settings);
-      const headers: Record<string, string> = { 'Accept': 'application/json' };
-      if (plugin.dataHeaders) {
-        for (const [key, value] of Object.entries(plugin.dataHeaders as Record<string, string>)) {
-          headers[key] = this.interpolate(value, settings);
-        }
-      }
-      const response = await fetch(url, {
-        method: plugin.dataMethod || 'GET',
-        headers,
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      let data = await response.json();
-      if (plugin.dataPath) data = this.extractByPath(data, plugin.dataPath);
-      return data;
-    }
-
-    return {};
-  }
-
-  private async runAsyncTransform(
-    script: string,
-    settings: Record<string, any>,
-    slug: string,
-  ): Promise<Record<string, any>> {
-    try {
-      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const fn = new AsyncFunction('settings', 'fetch', script);
-      const result = await Promise.race([
-        fn(settings, globalThis.fetch),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Plugin timeout (10s)')), 10000)),
-      ]);
-      return (result && typeof result === 'object') ? result : {};
-    } catch (error) {
-      this.logger.error(`Plugin ${slug} JS adapter failed: ${error.message}`);
-      throw error;
-    }
+    throw new ServiceUnavailableException(plugin.dataTransform
+      ? 'PLUGIN_ISOLATION_REQUIRED' : 'SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   // ========================
@@ -378,7 +272,7 @@ export class PluginsService {
   // ========================
 
   /**
-   * Preview a plugin with mock data or placeholder card.
+   * Preview a plugin using an existing persisted instance result.
    */
   async previewPlugin(
     plugin: any,
@@ -386,27 +280,19 @@ export class PluginsService {
   ): Promise<Buffer> {
     const { width, height } = this.getDimensionsForLayout(layout);
 
-    // For custom plugins with Liquid markup, render with mock data
+    const instance = (plugin.instances || []).find((candidate: StoredInstance) =>
+      candidate.lastFetchedAt && candidate.lastData && typeof candidate.lastData === 'object');
+    if (!instance) throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     const markup = this.pluginRenderer.selectMarkup(plugin, layout);
-    if (markup) {
-      try {
-        const mockData = this.generateMockData(markup);
-        return await this.pluginRenderer.renderToPng(markup, mockData, {}, width, height, 'preview');
-      } catch (e) {
-        this.logger.warn(`Plugin ${plugin.slug} Liquid preview failed: ${e.message}`);
-      }
-    }
-
-    // Fallback: placeholder card
-    return this.renderPluginPlaceholder(plugin, width, height);
+    if (!markup) throw new ServiceUnavailableException('PLUGIN_TEMPLATE_UNAVAILABLE');
+    return this.pluginRenderer.renderToPng(markup, this.persistedData(instance), {}, width, height, 'preview');
   }
 
   /**
-   * Preview raw Liquid markup with provided or auto-generated mock data (for plugin creator).
+   * Preview raw Liquid markup with explicitly provided data (no provider or mock fallback).
    */
   async previewMarkup(markup: string, data: Record<string, any> = {}): Promise<Buffer> {
-    const mockData = Object.keys(data).length > 0 ? data : this.generateMockData(markup);
-    return this.pluginRenderer.renderToPng(markup, mockData, {}, 800, 480, 'preview');
+    return this.pluginRenderer.renderToPng(markup, data, {}, 800, 480, 'preview');
   }
 
   /**
@@ -419,92 +305,8 @@ export class PluginsService {
   ): Promise<Buffer> {
     const instance = await this.findInstanceById(instanceId);
     const plugin = instance.plugin;
-    const settings = this.getDecryptedSettings(instance);
     const { width, height } = this.getDimensionsForLayout(layout);
-
-    // Grafana: screenshot the panel URL directly via Puppeteer
-    if (plugin.slug === 'grafana_panel' && settings.dashboard_uid && settings.panel_id) {
-      const conn = await this.getGrafanaConnection(instance);
-      if (conn.grafana_url && conn.api_key) {
-        const rw = Number(settings.screen_width) || width;
-        const rh = Number(settings.screen_height) || height;
-        const baseUrl = conn.grafana_url.replace(/\/+$/, '');
-        const from = settings.time_range || 'now-6h';
-        const panelId = String(settings.panel_id);
-        let panelUrl: string;
-        let evaluateScript: string | undefined;
-
-        // Script to strip all Grafana UI chrome
-        const stripChromeScript = `
-          // Hide dashboard controls (time picker, refresh, variables, links)
-          document.querySelectorAll('[data-testid*="dashboard controls"], [data-testid*="template variable"], [data-testid*="Dashboard link"], [data-testid="public-dashboard-footer"]').forEach(el => el.style.display = 'none');
-          // Hide all panel menu buttons (three-dot menus)
-          document.querySelectorAll('[data-testid*="Panel menu"]').forEach(el => el.style.display = 'none');
-          // Hide info icons in panel headers
-          document.querySelectorAll('[data-testid*="icon-info-circle"]').forEach(el => el.style.display = 'none');
-          document.body.style.overflow = 'hidden';
-        `;
-
-        if (panelId === 'full') {
-          panelUrl = `${baseUrl}/d/${settings.dashboard_uid}?orgId=1&from=${from}&to=now&theme=light&kiosk`;
-          evaluateScript = stripChromeScript;
-        } else if (panelId.startsWith('row-')) {
-          // Entire section: render each panel individually then compose into a grid
-          const rowIdNum = parseInt(panelId.replace('row-', ''), 10);
-          const dashResp = await fetch(`${baseUrl}/api/dashboards/uid/${settings.dashboard_uid}`, {
-            headers: { Authorization: `Bearer ${conn.api_key}`, Accept: 'application/json' },
-            signal: AbortSignal.timeout(10000),
-          });
-          if (!dashResp.ok) throw new Error(`Grafana returned ${dashResp.status}`);
-          const dashData = await dashResp.json();
-          const allPanels = dashData.dashboard?.panels || [];
-          const row = allPanels.find((p: any) => p.id === rowIdNum && p.type === 'row');
-          if (!row) throw new Error(`Row ${rowIdNum} not found`);
-
-          // Collect child panel IDs — they may be nested (collapsed row) or siblings (expanded row)
-          let childPanelIds: number[] = [];
-          if (row.panels?.length) {
-            // Collapsed row: panels are nested
-            childPanelIds = row.panels.map((p: any) => p.id);
-          } else {
-            // Expanded row: panels are siblings between this row and the next row
-            const rowIndex = allPanels.indexOf(row);
-            for (let i = rowIndex + 1; i < allPanels.length; i++) {
-              if (allPanels[i].type === 'row') break;
-              childPanelIds.push(allPanels[i].id);
-            }
-          }
-
-          if (childPanelIds.length === 0) throw new Error(`Row ${rowIdNum} has no panels`);
-          this.logger.log(`[GrafanaSectionGrid] Row "${row.title}" has ${childPanelIds.length} panels: [${childPanelIds.join(', ')}]`);
-          return this.renderGrafanaSectionGrid(baseUrl, settings.dashboard_uid, conn.api_key, childPanelIds, from, rw, rh, mode);
-        } else {
-          // Single panel
-          panelUrl = `${baseUrl}/d-solo/${settings.dashboard_uid}?orgId=1&panelId=${panelId}&from=${from}&to=now&width=${rw}&height=${rh}&theme=light`;
-          evaluateScript = `
-            document.querySelectorAll('span').forEach(span => {
-              if (/^Powered by$/i.test(span.textContent?.trim() || '')) {
-                const container = span.parentElement;
-                if (container) container.remove();
-              }
-            });
-            document.querySelectorAll('[data-testid*="icon-info-circle"]').forEach(el => el.style.display = 'none');
-          `;
-        }
-
-        return this.pluginRenderer.renderUrlToPng(
-          panelUrl,
-          { Authorization: `Bearer ${conn.api_key}` },
-          rw,
-          rh,
-          mode,
-          evaluateScript,
-        );
-      }
-    }
-
-    // Fetch fresh data
-    const locals = await this.fetchData(instanceId);
+    const locals = this.persistedData(instance);
 
     // Liquid rendering (for custom plugins with markup in DB)
     const markup = this.pluginRenderer.selectMarkup(plugin, layout);
@@ -512,231 +314,23 @@ export class PluginsService {
       throw new NotFoundException(`Plugin ${plugin.slug} has no template for layout ${layout}`);
     }
 
-    return this.pluginRenderer.renderToPng(markup, locals, settings, width, height, mode);
-  }
-
-  /**
-   * Render a Grafana section by screenshotting each panel individually
-   * via /d-solo/ and compositing them into a grid that fills the target resolution.
-   */
-  private async renderGrafanaSectionGrid(
-    baseUrl: string,
-    dashboardUid: string,
-    apiKey: string,
-    panelIds: number[],
-    timeRange: string,
-    targetWidth: number,
-    targetHeight: number,
-    mode: 'device' | 'preview' | 'einkPreview',
-  ): Promise<Buffer> {
-    const count = panelIds.length;
-    if (count === 0) throw new Error('No panels in section');
-
-    // Calculate optimal grid that fills the target resolution with minimal waste.
-    // Prefer grids where cells are close to square and there are few empty cells.
-    const targetAspect = targetWidth / targetHeight;
-    let bestCols = 1;
-    let bestScore = Infinity;
-    for (let cols = 1; cols <= count; cols++) {
-      const rows = Math.ceil(count / cols);
-      const emptyCells = (cols * rows) - count;
-      const cellW = targetWidth / cols;
-      const cellH = targetHeight / rows;
-      const cellAspect = cellW / cellH;
-      // Penalize: deviation from square cells + wasted cells
-      const aspectPenalty = Math.abs(Math.log(cellAspect)); // 0 when square
-      const wastePenalty = emptyCells / count; // fraction of wasted cells
-      const score = aspectPenalty + wastePenalty * 2;
-      if (score < bestScore) {
-        bestScore = score;
-        bestCols = cols;
-      }
-    }
-    const cols = bestCols;
-    const rows = Math.ceil(count / cols);
-    const cellWidth = Math.floor(targetWidth / cols);
-    const cellHeight = Math.floor(targetHeight / rows);
-
-    this.logger.log(`[GrafanaSectionGrid] ${count} panels → ${cols}x${rows} grid, cell ${cellWidth}x${cellHeight}, target ${targetWidth}x${targetHeight}`);
-
-    // Screenshot panels with limited concurrency (max 4 parallel pages)
-    const browser = await this.pluginRenderer.screenRenderer.getBrowser();
-    const MAX_CONCURRENT = 4;
-    const panelBuffers: Buffer[] = [];
-    for (let i = 0; i < panelIds.length; i += MAX_CONCURRENT) {
-      const batch = panelIds.slice(i, i + MAX_CONCURRENT);
-      const batchResults = await Promise.all(
-        batch.map(async (panelId) => {
-          const page = await browser.newPage();
-        try {
-          await page.setViewport({ width: cellWidth, height: cellHeight, deviceScaleFactor: 1 });
-          await page.setExtraHTTPHeaders({ Authorization: `Bearer ${apiKey}` });
-          const url = `${baseUrl}/d-solo/${dashboardUid}?orgId=1&panelId=${panelId}&from=${timeRange}&to=now&width=${cellWidth}&height=${cellHeight}&theme=light`;
-          await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-          // Strip "Powered by Grafana" overlay and other chrome
-          await page.evaluate(() => {
-            // The "Powered by" overlay is a div with a span containing "Powered by" + a Grafana logo img
-            // It's positioned absolute with top/right. Find and remove it.
-            document.querySelectorAll('span').forEach(span => {
-              if (/^Powered by$/i.test(span.textContent?.trim() || '')) {
-                const container = span.parentElement;
-                if (container) container.remove();
-              }
-            });
-            // Also hide info icons in panel headers
-            document.querySelectorAll('[data-testid*="icon-info-circle"]').forEach(el => (el as HTMLElement).style.display = 'none');
-          });
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          const png = Buffer.from(await page.screenshot({ type: 'png' }));
-          // Resize to exact cell size
-          return sharp(png).resize(cellWidth, cellHeight, { fit: 'fill' }).png().toBuffer();
-        } finally {
-          await page.close();
-        }
-      }),
-    );
-      panelBuffers.push(...batchResults);
-    }
-
-    // Composite all panels into the grid
-    const composites: sharp.OverlayOptions[] = panelBuffers.map((buf, i) => ({
-      input: buf,
-      left: (i % cols) * cellWidth,
-      top: Math.floor(i / cols) * cellHeight,
-    }));
-
-    const result = await sharp({
-      create: { width: targetWidth, height: targetHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
-    })
-      .composite(composites)
-      .png()
-      .toBuffer();
-
-    if (mode === 'preview') return result;
-
-    const shouldNegate = mode === 'device';
-    return this.pluginRenderer.screenRenderer.applyEinkProcessing(result, targetWidth, targetHeight, shouldNegate);
-  }
-
-  private async renderPluginPlaceholder(plugin: any, width: number, height: number): Promise<Buffer> {
-    const category = (plugin.category || 'custom').charAt(0).toUpperCase() + (plugin.category || 'custom').slice(1);
-    const source = (plugin.source || 'inker').toUpperCase();
-    const description = plugin.description || 'No description available';
-    const needsConfig = plugin.settingsSchema && (plugin.settingsSchema as any[]).some((f: any) => f.encrypted);
-
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { width: ${width}px; height: ${height}px; font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background: #fff; color: #000; }
-  .card { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; }
-  .main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; }
-  .name { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
-  .desc { font-size: 14px; color: #666; max-width: 500px; line-height: 1.4; margin-bottom: 16px; }
-  .badges { display: flex; gap: 8px; justify-content: center; }
-  .badge { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; border: 1px solid #ddd; }
-  .badge--cat { background: #f5f5f5; }
-  .badge--src { background: #e8f4fd; color: #1976d2; }
-  .config { font-size: 12px; color: #999; margin-top: 12px; }
-  .footer { padding: 12px 24px; border-top: 2px solid #000; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; }
-  .footer .instance { margin-left: auto; font-weight: 400; color: #999; }
-</style></head><body>
-<div class="card">
-  <div class="main">
-    <div class="name">${plugin.name}</div>
-    <div class="desc">${description.slice(0, 120)}</div>
-    <div class="badges">
-      <span class="badge badge--cat">${category}</span>
-      <span class="badge badge--src">${source}</span>
-    </div>
-    ${needsConfig ? '<div class="config">Requires API key to show live data</div>' : ''}
-  </div>
-  <div class="footer">
-    <span>${plugin.name}</span>
-    <span class="instance">Preview</span>
-  </div>
-</div>
-</body></html>`;
-
-    return this.pluginRenderer.screenRenderer.renderHtmlToPng(html, width, height);
-  }
-
-  private generateMockData(template: string): Record<string, any> {
-    const data: Record<string, any> = {};
-    const forMatches = template.matchAll(/\{%\s*for\s+(\w+)\s+in\s+(\w+)/g);
-    for (const match of forMatches) {
-      const itemVar = match[1];
-      const collectionVar = match[2];
-      if (!data[collectionVar]) {
-        data[collectionVar] = Array.from({ length: 3 }, (_, i) => ({
-          title: `Sample ${itemVar} ${i + 1}`,
-          name: `Sample ${i + 1}`,
-          value: (i + 1) * 100,
-          score: (i + 1) * 10,
-          label: `Label ${i + 1}`,
-          description: `Description for item ${i + 1}`,
-        }));
-      }
-    }
-    const varMatches = template.matchAll(/\{\{\s*(\w+)\s*[|}]/g);
-    for (const match of varMatches) {
-      const varName = match[1];
-      if (!data[varName] && !['for', 'if', 'unless', 'else', 'endif', 'endfor', 'forloop', 'settings'].includes(varName)) {
-        data[varName] = `${varName.replace(/_/g, ' ')}`;
-      }
-    }
-    data.instance_name = 'Preview';
-    return data;
+    return this.pluginRenderer.renderToPng(markup, locals, {}, width, height, mode);
   }
 
   // ========================
   // Webhooks
   // ========================
 
-  async handleWebhook(slug: string, data: Record<string, any>): Promise<{ updated: number }> {
+  async handleWebhook(slug: string, _data: Record<string, any>): Promise<{ updated: number }> {
     const plugin = await this.findPluginBySlug(slug);
     if (!plugin) throw new NotFoundException(`Plugin "${slug}" not found`);
 
-    const instances = await this.prisma.pluginInstance.findMany({
-      where: { pluginId: plugin.id },
-    });
-
-    let updated = 0;
-    for (const instance of instances) {
-      await this.prisma.pluginInstance.update({
-        where: { id: instance.id },
-        data: { lastData: data, lastFetchedAt: new Date(), lastError: null },
-      });
-      updated++;
-    }
-
-    this.logger.log(`Webhook for ${slug}: updated ${updated} instances`);
-    return { updated };
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   // ========================
   // Helpers
   // ========================
-
-  private interpolate(template: string, settings: Record<string, any>): string {
-    return template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
-      return settings[key] !== undefined ? String(settings[key]) : '';
-    });
-  }
-
-  private extractByPath(data: any, dataPath: string): any {
-    const parts = dataPath.split('.');
-    let result = data;
-    for (const part of parts) {
-      if (result == null) return null;
-      const arrayMatch = part.match(/^(\w+)\[(\d+)\]$/);
-      if (arrayMatch) {
-        result = result[arrayMatch[1]]?.[parseInt(arrayMatch[2])];
-      } else {
-        result = result[part];
-      }
-    }
-    return result;
-  }
 
   private getDimensionsForLayout(layout: PluginLayout): { width: number; height: number } {
     switch (layout) {
@@ -786,7 +380,7 @@ export class PluginsService {
       where: { isInstalled: true },
     });
 
-    return plugins.map((plugin, index) => ({
+    return plugins.map((plugin) => ({
       id: 20000 + plugin.id,
       name: plugin.name,
       description: plugin.description || '',
@@ -804,33 +398,9 @@ export class PluginsService {
   // Grafana helpers
   // ========================
 
-  /**
-   * Resolve Grafana connection settings for an instance.
-   * Child instances have parentInstanceId → fetch parent's credentials.
-   * Parent instances have credentials directly.
-   */
-  async getGrafanaConnection(instance: any): Promise<{ grafana_url: string; api_key: string }> {
-    const settings = this.getDecryptedSettings(instance);
-    // If this instance has its own connection (parent)
-    if (settings.grafana_url && settings.api_key) {
-      return { grafana_url: settings.grafana_url, api_key: settings.api_key };
-    }
-    // Child instance — resolve from parent
-    const parentId = (instance.settings as any)?.parentInstanceId;
-    if (parentId) {
-      const parent = await this.findInstanceById(parentId);
-      const parentSettings = this.getDecryptedSettings(parent);
-      return { grafana_url: parentSettings.grafana_url, api_key: parentSettings.api_key };
-    }
-    return { grafana_url: '', api_key: '' };
-  }
-
-  /**
-   * Get Grafana connection from a parent instance ID (for controller use).
-   */
-  async getGrafanaConnectionById(instanceId: number): Promise<{ grafana_url: string; api_key: string }> {
-    const instance = await this.findInstanceById(instanceId);
-    return this.getGrafanaConnection(instance);
+  async getGrafanaConnectionById(instanceId: number): Promise<never> {
+    await this.findInstanceById(instanceId);
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   // ========================
@@ -843,15 +413,7 @@ export class PluginsService {
       await this.prisma.plugin.upsert({
         where: { slug: def.slug },
         create: def,
-        update: {
-          dataTransform: def.dataTransform,
-          markupFull: def.markupFull,
-          settingsSchema: def.settingsSchema,
-          refreshInterval: def.refreshInterval,
-          description: def.description,
-          icon: def.icon,
-          version: def.version,
-        },
+        update: {},
       });
     }
     this.logger.log(`Seeded ${builtins.length} builtin plugin(s)`);
@@ -947,12 +509,7 @@ export class PluginsService {
   // ========================
 
   async cleanupStalePlugins(): Promise<void> {
-    // Clean up stale TRMNL-synced plugins and mirror (Ruby pipeline removed)
-    const deleted = await this.prisma.plugin.deleteMany({
-      where: { OR: [{ source: 'trmnl' }, { slug: 'trmnl_mirror' }] },
-    });
-    if (deleted.count > 0) {
-      this.logger.log(`Cleaned up ${deleted.count} stale plugins`);
-    }
+    // Legacy definitions and instance configuration are retained. Disabling an
+    // unsafe execution path must never delete the user's stored configuration.
   }
 }

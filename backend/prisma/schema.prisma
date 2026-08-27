@@ -372,12 +372,98 @@ model OutboxEvent {
   processedAt    DateTime? @map("processed_at")
   lastError      String?   @map("last_error")
   createdAt      DateTime  @default(now()) @map("created_at")
+  sourceRefresh  SourceRefreshJob?
 
   @@index([status, availableAt])
   @@index([status, claimUntil])
   @@index([aggregateType, aggregateId])
   @@index([occurredAt])
   @@map("outbox_events")
+}
+
+// Provider credentials remain encrypted and separate from normalized snapshots.
+model SourceSecret {
+  id String @id @default(uuid())
+  ciphertext String
+  createdAt DateTime @default(now()) @map("created_at")
+  sources SourceDefinition[]
+  @@map("source_secrets")
+}
+
+model SourceDefinition {
+  sourceDefinitionId String @id @default(uuid()) @map("source_definition_id")
+  definitionVersion Int @default(1) @map("definition_version")
+  name String
+  connectorType String @map("connector_type")
+  schemaVersion String @map("schema_version")
+  configuration Json
+  secretId String? @map("secret_id")
+  refreshIntervalSeconds Int @map("refresh_interval_seconds")
+  timeoutMs Int @map("timeout_ms")
+  concurrencyGroup String @map("concurrency_group")
+  enabled Boolean @default(true)
+  nextRefreshAt DateTime @map("next_refresh_at")
+  snapshotRevision Int @default(0) @map("snapshot_revision")
+  latestSnapshotId String? @unique @map("latest_snapshot_id")
+  latestValidSnapshotId String? @unique @map("latest_valid_snapshot_id")
+  consecutiveFailures Int @default(0) @map("consecutive_failures")
+  circuitOpenUntil DateTime? @map("circuit_open_until")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  lastSuccessAt DateTime? @map("last_success_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  secret SourceSecret? @relation(fields: [secretId], references: [id], onDelete: Restrict)
+  latestSnapshot SourceSnapshot? @relation("LatestSourceSnapshot", fields: [latestSnapshotId], references: [snapshotId], onDelete: Restrict)
+  latestValidSnapshot SourceSnapshot? @relation("LatestValidSourceSnapshot", fields: [latestValidSnapshotId], references: [snapshotId], onDelete: Restrict)
+  snapshots SourceSnapshot[] @relation("SourceSnapshots")
+  refreshJobs SourceRefreshJob[]
+  @@index([enabled, nextRefreshAt])
+  @@index([concurrencyGroup, connectorType])
+  @@map("source_definitions")
+}
+
+// Immutable attempt snapshots retain last-good data when a refresh fails.
+model SourceSnapshot {
+  snapshotId String @id @default(uuid()) @map("snapshot_id")
+  sourceDefinitionId String @map("source_definition_id")
+  definitionVersion Int @map("definition_version")
+  revision Int
+  protocolVersion String @default("1.0") @map("protocol_version")
+  schemaVersion String @map("schema_version")
+  connectorVersion String @map("connector_version")
+  createdAt DateTime @default(now()) @map("created_at")
+  sourceTimestamp DateTime? @map("source_timestamp")
+  validDataCreatedAt DateTime? @map("valid_data_created_at")
+  freshnessState String @map("freshness_state")
+  staleAfterSeconds Int @map("stale_after_seconds")
+  data Json
+  contentHash String @map("content_hash")
+  errorCode String? @map("error_code")
+  retryable Boolean @default(false)
+  refreshEventId String @map("refresh_event_id")
+  attempt Int
+  source SourceDefinition @relation("SourceSnapshots", fields: [sourceDefinitionId], references: [sourceDefinitionId], onDelete: Restrict)
+  latestFor SourceDefinition? @relation("LatestSourceSnapshot")
+  latestValidFor SourceDefinition? @relation("LatestValidSourceSnapshot")
+  @@unique([sourceDefinitionId, revision])
+  @@unique([refreshEventId, attempt])
+  @@map("source_snapshots")
+}
+
+// Durable queue-group metadata allows atomic global/provider/connector budgets.
+model SourceRefreshJob {
+  eventId String @id @map("event_id")
+  sourceDefinitionId String @map("source_definition_id")
+  definitionVersion Int @map("definition_version")
+  connectorType String @map("connector_type")
+  concurrencyGroup String @map("concurrency_group")
+  scheduledAt DateTime @map("scheduled_at")
+  completedAt DateTime? @map("completed_at")
+  event OutboxEvent @relation(fields: [eventId], references: [eventId], onDelete: Cascade)
+  source SourceDefinition @relation(fields: [sourceDefinitionId], references: [sourceDefinitionId], onDelete: Restrict)
+  @@index([sourceDefinitionId, completedAt])
+  @@index([concurrencyGroup, connectorType])
+  @@map("source_refresh_jobs")
 }
 
 // Revision counters/tombstones are independent of event retention and row deletion.

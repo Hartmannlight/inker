@@ -51,8 +51,10 @@ export {
   type RefreshHints,
 } from './presentation';
 export {
+  parseSourceDefinition,
   parseSourceSnapshot,
   type SnapshotError,
+  type SourceDefinition,
   type SourceSnapshot,
 } from './source';
 export {

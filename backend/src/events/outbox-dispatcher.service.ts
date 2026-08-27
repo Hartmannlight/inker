@@ -15,6 +15,8 @@ import { RenderCacheService, RENDER_REQUESTED } from '../render-cache/render-cac
 import { MaintenanceService, MAINTENANCE_DUE } from '../jobs/maintenance.service';
 import { QUEUE_POLICIES, type QueueName } from '../jobs/queue-policy';
 import type { Prisma } from '@prisma/client';
+import { SourceWorkerService } from '../sources/source-worker.service';
+import { SOURCE_REFRESH } from '../sources/source-job';
 
 @Injectable()
 export class OutboxDispatcher
@@ -38,6 +40,7 @@ export class OutboxDispatcher
     private readonly maintenance: MaintenanceService,
     private readonly playback: PlaybackService,
     private readonly renderCache: RenderCacheService,
+    private readonly sources: SourceWorkerService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -79,12 +82,14 @@ export class OutboxDispatcher
       if (Date.now() >= this.reconcileAt) {
         this.reconcileAt = Date.now() + POLICY.pollMs;
         await this.renderCache.reconcile();
+        await this.sources.schedule();
       }
-      for (const name of ['delivery', 'render', 'timer', 'maintenance'] as const) {
+      for (const name of ['delivery', 'render', 'timer', 'maintenance', 'source-refresh'] as const) {
         for (let i = 0; i < QUEUE_POLICIES[name].globalConcurrency && !this.stopped; i++) {
         const filter = this.queueFilter(name);
-        const event = await this.store.claim(this.owner, new Date(), filter,
-          { where: filter, limit: QUEUE_POLICIES[name].globalConcurrency });
+        const event = name === 'source-refresh' ? await this.sources.claim(this.owner)
+          : await this.store.claim(this.owner, new Date(), filter,
+            { where: filter, limit: QUEUE_POLICIES[name].globalConcurrency });
         if (!event) break;
         this.counts.claimed++;
         try {
@@ -108,7 +113,8 @@ export class OutboxDispatcher
   }
 
   private queueFilter(name: QueueName): Prisma.OutboxEventWhereInput {
-    const special = [RENDER_REQUESTED, PLAYBACK_DUE, MAINTENANCE_DUE];
+    const special = [RENDER_REQUESTED, PLAYBACK_DUE, MAINTENANCE_DUE, SOURCE_REFRESH];
+    if (name === 'source-refresh') return { eventType: SOURCE_REFRESH };
     if (name === 'render') return { eventType: RENDER_REQUESTED };
     if (name === 'timer') return { eventType: PLAYBACK_DUE };
     if (name === 'maintenance') return { eventType: MAINTENANCE_DUE };
@@ -127,11 +133,18 @@ export class OutboxDispatcher
       this.counts.stale++;
       return;
     }
-    const expectedQueue = event.eventType === RENDER_REQUESTED ? 'render'
+    const expectedQueue = event.eventType === SOURCE_REFRESH ? 'source-refresh' : event.eventType === RENDER_REQUESTED ? 'render'
       : event.eventType === PLAYBACK_DUE ? 'timer' : event.eventType === MAINTENANCE_DUE ? 'maintenance' : 'delivery';
     if (queue && queue !== expectedQueue) { this.counts.stale++; return; }
     try {
       signal.throwIfAborted();
+      if (event.eventType === SOURCE_REFRESH) {
+        const outcome = await this.sources.execute(event, signal);
+        if (outcome === 'failed') { this.counts.failed++; return; }
+        if (await this.store.ack(event)) this.counts.delivered++;
+        else this.counts.stale++;
+        return;
+      }
       if (event.eventType === RENDER_REQUESTED) {
         await this.renderCache.render(event, undefined, signal);
         signal.throwIfAborted();

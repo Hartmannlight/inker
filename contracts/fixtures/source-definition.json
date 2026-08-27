@@ -1,0 +1,18 @@
+{
+  "protocolVersion": "1.0",
+  "sourceDefinitionId": "source-fixture-weather",
+  "definitionVersion": 1,
+  "name": "Normalized weather fixture",
+  "connectorType": "fixture",
+  "schemaVersion": "1.0",
+  "configuration": {
+    "data": {
+      "temperatureCelsius": 21.5,
+      "condition": "clear"
+    }
+  },
+  "secretReferences": {},
+  "refreshIntervalSeconds": 300,
+  "timeoutMs": 1000,
+  "concurrencyGroup": "fixtures"
+}

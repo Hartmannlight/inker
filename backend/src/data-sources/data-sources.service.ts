@@ -3,21 +3,21 @@ import {
   NotFoundException,
   Logger,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDataSourceDto } from './dto/create-data-source.dto';
 import { UpdateDataSourceDto } from './dto/update-data-source.dto';
 import { TestUrlDto } from './dto/test-url.dto';
-import { wrapListResponse, wrapPaginatedResponse } from '../common/utils/response.util';
-import axios from 'axios';
-import {
-  validateUrlSafety,
-  isPrivateIp,
-  createSafeHttpAgent,
-  createSafeHttpsAgent,
-  UrlSafetyOptions,
-} from '../common/utils/url-safety';
-import { SettingsService, SETTING_KEYS } from '../settings/settings.service';
+import { wrapPaginatedResponse } from '../common/utils/response.util';
+import { SettingsService } from '../settings/settings.service';
+
+export const SOURCE_REFRESH_REQUIRES_CONNECTOR = 'SOURCE_REFRESH_REQUIRES_CONNECTOR';
+export const SOURCE_SNAPSHOT_UNAVAILABLE = 'SOURCE_SNAPSHOT_UNAVAILABLE';
+
+function unavailable(code: string): never {
+  throw new ServiceUnavailableException({ statusCode: 503, error: 'Service Unavailable', code, message: code });
+}
 
 /**
  * Field metadata extracted from API response.
@@ -35,17 +35,13 @@ export interface FieldMeta {
 export class DataSourcesService {
   private readonly logger = new Logger(DataSourcesService.name);
 
-  // Deduplicates concurrent external API fetches for the same data source
-  // When multiple widgets share a data source, only one fetch runs at a time
-  private pendingFetches = new Map<number, Promise<unknown>>();
-
   constructor(
     private prisma: PrismaService,
-    private settingsService: SettingsService,
+    _settingsService: SettingsService,
   ) {}
 
   /**
-   * Create a new data source and auto-test it
+   * Preserve legacy configuration without provider access in the API process.
    */
   async create(createDataSourceDto: CreateDataSourceDto) {
     const dataSource = await this.prisma.dataSource.create({
@@ -64,32 +60,7 @@ export class DataSourcesService {
 
     this.logger.log(`Data source created: ${dataSource.name}`);
 
-    // Auto-test the new data source to set initial status
-    try {
-      const data = await this.fetchDataFromSource({
-        ...dataSource,
-        headers: dataSource.headers as object | null,
-      });
-      const result = await this.prisma.dataSource.update({
-        where: { id: dataSource.id },
-        data: {
-          lastData: data as object,
-          lastFetchedAt: new Date(),
-          lastError: null,
-        },
-      });
-      return { ...result, headers: this.maskSensitiveHeaders(result.headers as Record<string, string> | null) };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const result = await this.prisma.dataSource.update({
-        where: { id: dataSource.id },
-        data: {
-          lastError: errorMessage,
-          lastFetchedAt: new Date(),
-        },
-      });
-      return { ...result, headers: this.maskSensitiveHeaders(result.headers as Record<string, string> | null) };
-    }
+    return { ...dataSource, headers: this.maskSensitiveHeaders(dataSource.headers as Record<string, string> | null) };
   }
 
   /**
@@ -146,48 +117,10 @@ export class DataSourcesService {
   }
 
   /**
-   * Test a URL without saving - allows users to preview available fields
-   * before creating a data source.
+   * Live URL probes require a registered connector in the worker.
    */
-  async testUrl(dto: TestUrlDto) {
-    try {
-      // If editing an existing data source, unmask sensitive headers using DB values
-      let headers = dto.headers || null;
-      if (dto.dataSourceId && headers) {
-        const existing = await this.prisma.dataSource.findUnique({
-          where: { id: dto.dataSourceId },
-        });
-        if (existing) {
-          headers = this.unmaskedHeaders(headers, existing.headers as Record<string, string> | null);
-        }
-      }
-
-      const data = await this.fetchDataFromSource({
-        type: dto.type,
-        url: dto.url,
-        method: dto.method || 'GET',
-        headers,
-      });
-
-      // Extract all field paths with types and sample values
-      const fields = this.extractFieldsWithMeta(data);
-
-      return {
-        success: true,
-        data,
-        fields,
-        fetchedAt: new Date().toISOString(),
-      };
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
-      return {
-        success: false,
-        error: errorMessage,
-        fields: [],
-        fetchedAt: new Date().toISOString(),
-      };
-    }
+  async testUrl(_dto: TestUrlDto): Promise<never> {
+    return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
   }
 
   /**
@@ -454,148 +387,23 @@ export class DataSourcesService {
     return { message: 'Data source deleted successfully' };
   }
 
-  /**
-   * Test fetch data from the source and update status
-   * Returns the data along with extracted fields for the widget editor
-   */
-  async testFetch(id: number) {
-    const dataSource = await this.prisma.dataSource.findUnique({
-      where: { id },
-    });
-
-    if (!dataSource) {
-      throw new NotFoundException('Data source not found');
-    }
-
-    try {
-      const data = await this.fetchDataFromSource({
-        ...dataSource,
-        headers: dataSource.headers as object | null,
-      });
-      // Extract fields from the data so the widget editor can show a dropdown
-      const fields = this.extractFieldsWithMeta(data);
-
-      // Update status to show API is working
-      await this.prisma.dataSource.update({
-        where: { id },
-        data: {
-          lastData: data as object,
-          lastFetchedAt: new Date(),
-          lastError: null,
-        },
-      });
-
-      return {
-        success: true,
-        data,
-        fields,
-        fetchedAt: new Date().toISOString(),
-      };
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
-
-      // Update status to show API error
-      await this.prisma.dataSource.update({
-        where: { id },
-        data: {
-          lastError: errorMessage,
-          lastFetchedAt: new Date(),
-        },
-      });
-
-      return {
-        success: false,
-        error: errorMessage,
-        fetchedAt: new Date().toISOString(),
-      };
-    }
+  /** No arbitrary legacy provider is registered in the Foundation connector set. */
+  async testFetch(_id: number): Promise<never> {
+    return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
   }
 
-  /**
-   * Force refresh data and cache it
-   */
-  async refresh(id: number) {
-    const dataSource = await this.prisma.dataSource.findUnique({
-      where: { id },
-    });
-
-    if (!dataSource) {
-      throw new NotFoundException('Data source not found');
-    }
-
-    try {
-      const data = await this.fetchDataFromSource({
-        ...dataSource,
-        headers: dataSource.headers as object | null,
-      });
-
-      // Update cached data
-      const updatedDataSource = await this.prisma.dataSource.update({
-        where: { id },
-        data: {
-          lastData: data as object,
-          lastFetchedAt: new Date(),
-          lastError: null,
-        },
-      });
-
-      this.logger.log(`Data source refreshed: ${dataSource.name}`);
-
-      return {
-        success: true,
-        data,
-        dataSource: { ...updatedDataSource, headers: this.maskSensitiveHeaders(updatedDataSource.headers as Record<string, string> | null) },
-      };
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
-
-      // Update error status
-      await this.prisma.dataSource.update({
-        where: { id },
-        data: {
-          lastError: errorMessage,
-          lastFetchedAt: new Date(),
-        },
-      });
-
-      this.logger.error(`Data source fetch failed: ${dataSource.name} - ${errorMessage}`);
-
-      throw new BadRequestException(`Failed to fetch data: ${errorMessage}`);
-    }
+  async refresh(_id: number): Promise<never> {
+    return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
   }
 
-  /**
-   * Fetch data from a data source
-   */
-  private async getUrlSafetyOptions(): Promise<UrlSafetyOptions> {
-    const value = await this.settingsService.get(SETTING_KEYS.ALLOW_LOCAL_NETWORK);
-    return { allowLocalNetwork: value === 'true' };
-  }
-
-  async fetchDataFromSource(dataSource: {
+  async fetchDataFromSource(_dataSource: {
     type: string;
     url: string;
     method: string;
     headers?: object | null;
     jsonPath?: string | null;
-  }): Promise<unknown> {
-    const safetyOptions = await this.getUrlSafetyOptions();
-    try {
-      await validateUrlSafety(dataSource.url, safetyOptions);
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : 'Invalid URL');
-    }
-    const headers = (dataSource.headers as Record<string, string>) || {};
-
-    if (dataSource.type === 'json') {
-      return this.fetchJson(dataSource.url, dataSource.method, headers, dataSource.jsonPath, safetyOptions);
-    } else if (dataSource.type === 'rss') {
-      return this.fetchRss(dataSource.url, headers, safetyOptions);
-    }
-
-    throw new Error(`Unknown data source type: ${dataSource.type}`);
+  }): Promise<never> {
+    return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
   }
 
   /**
@@ -631,65 +439,6 @@ export class DataSourcesService {
       }
     }
     return result;
-  }
-
-  /**
-   * Fetch JSON data from an API
-   */
-  private async fetchJson(
-    url: string,
-    method: string,
-    headers: Record<string, string>,
-    jsonPath?: string | null,
-    safetyOptions?: UrlSafetyOptions,
-  ): Promise<unknown> {
-    // Use DNS-pinning agents to prevent DNS rebinding attacks (TOCTOU)
-    const response = await axios({
-      method: method as 'GET' | 'POST',
-      url,
-      headers,
-      timeout: 30000,
-      maxContentLength: 5 * 1024 * 1024,
-      maxBodyLength: 5 * 1024 * 1024,
-      httpAgent: createSafeHttpAgent(safetyOptions),
-      httpsAgent: createSafeHttpsAgent(safetyOptions),
-    });
-
-    let data = response.data;
-
-    // Apply JSONPath extraction if specified
-    if (jsonPath) {
-      data = this.extractWithJsonPath(data, jsonPath);
-    }
-
-    return data;
-  }
-
-  /**
-   * Fetch and parse RSS/Atom feed
-   */
-  private async fetchRss(
-    url: string,
-    headers: Record<string, string>,
-    safetyOptions?: UrlSafetyOptions,
-  ): Promise<unknown> {
-    // Use DNS-pinning agents to prevent DNS rebinding attacks (TOCTOU)
-    const response = await axios({
-      method: 'GET',
-      url,
-      headers: {
-        ...headers,
-        Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-      },
-      timeout: 30000,
-      responseType: 'text',
-      maxContentLength: 1 * 1024 * 1024,
-      maxBodyLength: 1 * 1024 * 1024,
-      httpAgent: createSafeHttpAgent(safetyOptions),
-      httpsAgent: createSafeHttpsAgent(safetyOptions),
-    });
-
-    return this.parseRss(response.data);
   }
 
   /**
@@ -840,73 +589,20 @@ export class DataSourcesService {
   }
 
   /**
-   * Get cached data for a data source, refreshing if stale
-   * @param skipFetch - If true, return cached data without fetching (for previews/editing)
+   * Legacy compatibility read: never refresh, modify status or load credentials.
+   * The optional argument remains source-compatible; all reads now skip fetch.
    */
-  async getCachedData(id: number, skipFetch = false): Promise<unknown> {
+  async getCachedData(id: number, _skipFetch = false): Promise<unknown> {
     const dataSource = await this.prisma.dataSource.findUnique({
       where: { id },
+      select: { lastData: true },
     });
 
     if (!dataSource) {
       throw new NotFoundException('Data source not found');
     }
 
-    // When skipFetch is true, return cached data without hitting the external API
-    if (skipFetch && dataSource.lastData) {
-      return dataSource.lastData;
-    }
-
-    // Check if data is stale
-    const isStale =
-      !dataSource.lastFetchedAt ||
-      Date.now() - dataSource.lastFetchedAt.getTime() >
-        dataSource.refreshInterval * 1000;
-
-    if (isStale || !dataSource.lastData) {
-      // Deduplicate concurrent fetches — if a fetch for this ID is already
-      // in-flight, reuse that Promise instead of making another API call
-      const pending = this.pendingFetches.get(id);
-      if (pending) {
-        return pending;
-      }
-
-      const fetchPromise = this.fetchAndCache(id, dataSource);
-      this.pendingFetches.set(id, fetchPromise);
-      try {
-        return await fetchPromise;
-      } finally {
-        this.pendingFetches.delete(id);
-      }
-    }
-
+    if (dataSource.lastData === null || dataSource.lastData === undefined) return unavailable(SOURCE_SNAPSHOT_UNAVAILABLE);
     return dataSource.lastData;
-  }
-
-  /**
-   * Fetch data from external source and update DB cache
-   */
-  private async fetchAndCache(id: number, dataSource: any): Promise<unknown> {
-    try {
-      const data = await this.fetchDataFromSource({
-        ...dataSource,
-        headers: dataSource.headers as object | null,
-      });
-      await this.prisma.dataSource.update({
-        where: { id },
-        data: {
-          lastData: data as object,
-          lastFetchedAt: new Date(),
-          lastError: null,
-        },
-      });
-      return data;
-    } catch (error) {
-      // Return cached data if available, even if stale
-      if (dataSource.lastData) {
-        return dataSource.lastData;
-      }
-      throw error;
-    }
   }
 }

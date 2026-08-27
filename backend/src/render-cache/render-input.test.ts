@@ -65,6 +65,15 @@ describe('snapshot render inputs', () => {
     expect(() => renderKey(revision, target, [{ ...a, revision: 0 }])).toThrow('Invalid snapshot');
   });
 
+  it('uses the concrete source version pinned by publication without a live source lookup', () => {
+    const sourceSnapshot = { sourceId: 'source-a', snapshotId: 'snapshot-a', revision: 2, contentHash: 'b'.repeat(64), connectorVersion: 'builtin-fixture-v1' };
+    const pinned = { ...revision, content: { ...content, sourceSnapshot } };
+    const target = targetFor(configuration());
+    expect(renderKey(pinned, target)).toBe(renderKey(pinned, target, [sourceSnapshot]));
+    expect(renderKey(pinned, target)).not.toBe(renderKey(pinned, target, []));
+    expect(() => renderKey({ ...pinned, content: { ...content, sourceSnapshot: { ...sourceSnapshot, revision: 0 } } }, target)).toThrow('Invalid snapshot');
+  });
+
   it('invalidates only for publication, pixel, snapshot and renderer changes', () => {
     const target = targetFor(configuration());
     const key = renderKey(revision, target);

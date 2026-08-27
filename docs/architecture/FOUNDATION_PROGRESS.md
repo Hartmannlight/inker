@@ -112,7 +112,38 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    für verbotenen PIN/fehlerhaften Seed bestanden: Containerexit1, keinerlei
    API-/Workerstart, Ready-Marker fehlt; GesamttestExit0. Nur eigene Container
    ohneMounts/Netzwerk, bereinigt. Hauptagent hat finalen Report überprüft.
-   WP-20 abgenommen; lokaler Commit unmittelbar als nächster Schritt.
-4. Danach bis WP-29 in Indexreihenfolge; keine unerfüllten Gates überspringen.
+   WP-20 abgenommen und lokal in `a3e7162` committed; danach Arbeitsbaum sauber.
+4. Jetzt WP-21. Vollständiges Paket, Architektur1/2/4/5/6.4/6.5/8/Phase6/11/12,
+   ADR001/002/006/007/010 gelesen. Vertrag SourceDefinition ergänzt durch
+   Contractagent; Connectoragent bearbeitet nur pure Fixture/Slow/Failure und
+   Validatoren. Root integriert SourceSecret/Definition/Snapshot/RefreshJob,
+   Scheduler/Queuebudgets, API und echten Snapshot→Publication→Sharp-Nachweis.
+   Audit fand aktive Legacy-API/Render-Netzwerkumgehungen. DataSources-Agent
+   macht Cachelesen strikt persisted-only und lehnt alte direkte Refreshpfade
+   ohne registrierten Connector explizit ab. Plugin-Agent behandelt analoge
+   Provider-/Unknown-Code-/Secretgrenzen. Vorhandene Daten bleiben erhalten.
+   Kein neuer Produktconnector; vollständige Unknown-Code-Isolation folgt WP22.
+   Erste eigene Schemaänderung und Migration `20260831000000_sources` im
+   Arbeitsbaum; noch NICHT abgenommen. SourceSnapshotdaten bleiben unveränderlich,
+   Fehler erzeugen neue stale-Version mit letzter gültiger Datenbasis.
+   Integration inzwischen vollständig: persistente SourceJobs/Secretrefs, globale
+   und Provider-/Connector-/Sourcebudgets, Timeout/Abort/Retry/Circuit, Source-API,
+   explizit gepinnte Snapshot→Publication→Bildbytes. Legacy-Livepfade liefern
+   dokumentierte410/503 statt Netzwerk/Standardbild. Reviews fanden und behoben
+   Secretkopien, späteLeasecommits, Transportdeadletter-Scheduling und SQLite-
+   Burststarvation (begrenzte Writerqueue und Busyretry). Rootverifikation:
+   660Unit+37Contract+80Frontend,18Sourceintegrationen339Assertions,35HTTP/Auth/
+   Publication/WS-Integrationen; Migration9/60 erneut isoliertgrün nach einem
+   5sTimeout unter parallel laufendem Imagebuild. Weitere53Cache/Playback/Outbox/
+   Maintenancefällegrün. Typechecks undgezieltesLint0Errors14Warnings.
+   Redis118,85sgrün,Recovery61,844s,15,3Events/s. Produktionsimagegebaut;
+   Source-Smoke belegt5sTimeout,3Fehler+echte30sCircuitpause,white/blackBildbytes,
+   Login126,3ms und20APIreads p95127,9ms. AbschließenderContainerrestart/Secretaudit
+   undBrowserprüfung nochaktiv. ErsterSourceSmoke scheiterte an falsch benanntem
+   Testskriptparameter; behoben,keineProduktionsregression. Source-Betriebsdoku
+   undRunbookverweise ergänzt. FinalerContainerrestart/Secretauditgrün,Exit0.
+   BrowserAdmin/Editor/Pairing und1920×1080weiß→schwarzohneReloadgeprüft;
+   Testcontainer/Volumesbereinigt. WP21abgenommen,lokalerCommitfolgt.
+5. Danach bis WP-29 in Indexreihenfolge; keine unerfüllten Gates überspringen.
 
-Kein Foundation-Abschluss behauptet. WP-21 bis WP-29 sind noch offen.
+Kein Foundation-Abschluss behauptet. WP-22 bis WP-29 sind noch offen.

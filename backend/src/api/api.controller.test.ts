@@ -14,6 +14,7 @@ describe('ApiController (e2e)', () => {
   let app: INestApplication;
 
   const mockDisplayService = {
+    getCurrentScreenImage: async () => Buffer.from('PNG'),
     getDisplayContent: async () => ({
       status: 200,
       image_url: 'http://localhost:3002/test.png',
@@ -69,6 +70,30 @@ describe('ApiController (e2e)', () => {
 
   afterAll(async () => {
     await app?.close();
+  });
+
+  it('retires anonymous design/device rendering without lookup, existence leaks or fallback', async () => {
+    const render = spyOn(mockScreenRendererService, 'renderScreenDesign');
+    const fallback = spyOn(mockDefaultScreenService, 'getDefaultScreenBuffer');
+    const device = spyOn(mockDisplayService, 'getCurrentScreenImage');
+    try {
+      for (const kind of ['design', 'device']) {
+        for (const id of ['1', '99999999', 'not-an-id']) {
+          const response = await request(app.getHttpServer())
+            .get(`/api/device-images/${kind}/${id}?mode=preview&format=bmp&deviceName=private-name`)
+            .expect(410);
+          expect(response.body).toEqual({ statusCode: 410, message: 'PUBLICATION_REQUIRED', error: 'Gone' });
+          expect(response.text).not.toContain('private-name');
+        }
+      }
+      expect(render).not.toHaveBeenCalled();
+      expect(fallback).not.toHaveBeenCalled();
+      expect(device).not.toHaveBeenCalled();
+    } finally {
+      render.mockRestore();
+      fallback.mockRestore();
+      device.mockRestore();
+    }
   });
 
   describe('GET /api/display', () => {

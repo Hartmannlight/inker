@@ -13,9 +13,10 @@ import {
   HttpStatus,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../common/decorators/public.decorator';
 import { PluginsService } from './plugins.service';
@@ -78,66 +79,7 @@ export class PluginsController {
       return { found: false };
     }
 
-    const base = `https://raw.githubusercontent.com/usetrmnl/plugins/master/lib/${slug}`;
-
-    try {
-      // Fetch ERB template + Ruby source in parallel
-      const [erbRes, rbRes] = await Promise.all([
-        fetch(`${base}/views/full.html.erb`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.text() : null).catch(() => null),
-        fetch(`${base}/${slug}.rb`, { signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.text() : null).catch(() => null),
-      ]);
-
-      if (!erbRes) return { found: false };
-
-      // Convert ERB → Liquid
-      const template = this.convertErbToLiquid(erbRes);
-
-      // Extract API URLs from Ruby source
-      let apiUrl = '';
-      if (rbRes) {
-        const urls: string[] = [];
-        // HTTParty.get/post('url')
-        for (const m of rbRes.matchAll(/HTTParty\.\w+\(\s*['"]([^'"]+)['"]/g)) urls.push(m[1]);
-        // fetch('url')
-        for (const m of rbRes.matchAll(/(?:^|\s)fetch\(\s*['"]([^'"]+)['"]/gm)) urls.push(m[1]);
-        // URI.parse('url')
-        for (const m of rbRes.matchAll(/URI(?:\.parse)?\(\s*['"]([^'"]+)['"]/g)) urls.push(m[1]);
-        // String constant URLs
-        for (const m of rbRes.matchAll(/['"]+(https?:\/\/[^'"]+)['"]+/g)) {
-          if (!urls.includes(m[1])) urls.push(m[1]);
-        }
-        // Pick the first non-GitHub, non-rubygems URL as likely API endpoint
-        apiUrl = urls.find(u => !u.includes('github.com') && !u.includes('rubygems')) || urls[0] || '';
-      }
-
-      // Extract settings keys from Ruby source
-      const settingsKeys: string[] = [];
-      if (rbRes) {
-        for (const m of rbRes.matchAll(/settings\[['"](\w+)['"]\]/g)) {
-          if (!settingsKeys.includes(m[1])) settingsKeys.push(m[1]);
-        }
-        for (const m of rbRes.matchAll(/settings\.fetch\(\s*['"](\w+)['"]/g)) {
-          if (!settingsKeys.includes(m[1])) settingsKeys.push(m[1]);
-        }
-        for (const m of rbRes.matchAll(/settings\[:(\w+)\]/g)) {
-          if (!settingsKeys.includes(m[1])) settingsKeys.push(m[1]);
-        }
-      }
-
-      const sensitivePatterns = ['token', 'key', 'secret', 'password', 'api_key', 'access_token'];
-      const settingsSchema = settingsKeys.map(key => ({
-        key,
-        label: key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
-        type: 'text',
-        encrypted: sensitivePatterns.some(p => key.toLowerCase().includes(p)),
-        required: false,
-      }));
-
-      return { found: true, template, apiUrl, settingsSchema, slug };
-    } catch (error) {
-      this.logger.warn(`GitHub plugin fetch failed for ${slug}: ${error.message}`);
-      return { found: false };
-    }
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   private convertErbToLiquid(erb: string): string {
@@ -308,84 +250,27 @@ export class PluginsController {
 
   @Get('recipes')
   @ApiOperation({ summary: 'Browse TRMNL recipe gallery' })
-  async recipes(@Query('search') search?: string, @Query('page') page?: string) {
-    const params = new URLSearchParams();
-    if (search) params.set('search', search);
-    if (page) params.set('page', page);
-    const url = `https://trmnl.app/recipes.json${params.toString() ? '?' + params.toString() : ''}`;
-    try {
-      const response = await fetch(url, {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'Inker' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok) return { data: [], total: 0 };
-      return response.json();
-    } catch (error) {
-      this.logger.warn(`Recipe gallery fetch failed: ${error.message}`);
-      return { data: [], total: 0 };
-    }
+  async recipes(@Query('search') _search?: string, @Query('page') _page?: string) {
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   @Get('recipes/:recipeId')
   @ApiOperation({ summary: 'Get a single TRMNL recipe' })
-  async recipe(@Param('recipeId') recipeId: string) {
-    try {
-      const response = await fetch(`https://trmnl.app/recipes/${recipeId}.json`, {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'Inker' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok) throw new NotFoundException('Recipe not found');
-      return response.json();
-    } catch (error) {
-      if (error instanceof NotFoundException) throw error;
-      this.logger.warn(`Recipe fetch failed: ${error.message}`);
-      throw new NotFoundException('Recipe not found');
-    }
+  async recipe(@Param('recipeId') _recipeId: string) {
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   @Get('recipe-image')
   @Public()
   @ApiOperation({ summary: 'Proxy a recipe screenshot image (avoids signed URL expiry)' })
-  async recipeImage(@Query('url') imageUrl: string, @Res() res: Response) {
-    if (!imageUrl || (!imageUrl.includes('trmnl') && !imageUrl.includes('amazonaws.com'))) {
-      res.status(400).send('Invalid URL');
-      return;
-    }
-    try {
-      const response = await fetch(imageUrl, {
-        headers: { 'User-Agent': 'Inker' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok) {
-        res.status(response.status).send('Image not available');
-        return;
-      }
-      const contentType = response.headers.get('content-type') || 'image/png';
-      const buffer = Buffer.from(await response.arrayBuffer());
-      res.set({
-        'Content-Type': contentType,
-        'Content-Length': buffer.length,
-        'Cache-Control': 'public, max-age=3600',
-      });
-      res.send(buffer);
-    } catch {
-      res.status(502).send('Failed to fetch image');
-    }
+  async recipeImage(@Query('url') _imageUrl: string, @Res() _res: Response) {
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   @Get('recipe-categories')
   @ApiOperation({ summary: 'List TRMNL recipe categories' })
   async recipeCategories() {
-    try {
-      const response = await fetch('https://trmnl.app/api/categories', {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'Inker' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!response.ok) return { data: [] };
-      return response.json();
-    } catch {
-      return { data: [] };
-    }
+    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
   }
 
   @Post(':id/install')
@@ -401,24 +286,19 @@ export class PluginsController {
   }
 
   @Post('preview-template')
-  @ApiOperation({ summary: 'Preview a Liquid template with mock data (for plugin creator)' })
+  @ApiOperation({ summary: 'Preview a Liquid template with explicitly supplied data' })
   async previewTemplate(@Body() body: { markup: string; data?: Record<string, any> }, @Res() res: Response) {
-    try {
-      const imageBuffer = await this.pluginsService.previewMarkup(body.markup, body.data || {});
-      res.set({
-        'Content-Type': 'image/png',
-        'Content-Length': imageBuffer.length,
-        'Cache-Control': 'no-store',
-      });
-      res.send(imageBuffer);
-    } catch (error) {
-      res.status(400).json({ error: error.message });
-    }
+    const imageBuffer = await this.pluginsService.previewMarkup(body.markup, body.data || {});
+    res.set({
+      'Content-Type': 'image/png',
+      'Content-Length': imageBuffer.length,
+      'Cache-Control': 'no-store',
+    });
+    res.send(imageBuffer);
   }
 
   @Get(':id/preview')
-  @Public()
-  @ApiOperation({ summary: 'Preview a plugin template with empty data' })
+  @ApiOperation({ summary: 'Preview a plugin template with persisted instance data' })
   async previewPlugin(
     @Param('id', ParseIntPipe) id: number,
     @Query('layout') layout: string,
@@ -434,7 +314,7 @@ export class PluginsController {
     res.set({
       'Content-Type': 'image/png',
       'Content-Length': imageBuffer.length,
-      'Cache-Control': 'public, max-age=60',
+      'Cache-Control': 'no-store',
     });
     res.send(imageBuffer);
   }
@@ -504,7 +384,7 @@ export class PluginsController {
   // ========================
 
   @Get('instances/:id/data')
-  @ApiOperation({ summary: 'Fetch fresh data for a plugin instance' })
+  @ApiOperation({ summary: 'Read the last persisted plugin data; never starts a refresh' })
   async fetchData(@Param('id', ParseIntPipe) id: number) {
     return this.pluginsService.fetchData(id);
   }
@@ -601,48 +481,13 @@ export class PluginsController {
   @Post('grafana/dashboards')
   @ApiOperation({ summary: 'List Grafana dashboards via parent instance' })
   async grafanaDashboards(@Body() body: { instanceId: number }) {
-    const conn = await this.pluginsService.getGrafanaConnectionById(body.instanceId);
-    if (!conn.grafana_url || !conn.api_key) throw new NotFoundException('Grafana connection not configured');
-    const baseUrl = conn.grafana_url.replace(/\/+$/, '');
-    const resp = await fetch(`${baseUrl}/api/search?limit=1000`, {
-      headers: { Authorization: `Bearer ${conn.api_key}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) throw new NotFoundException(`Grafana returned ${resp.status}: ${resp.statusText}`);
-    const results = await resp.json();
-    return results
-      .filter((d: any) => d.type === 'dash-db')
-      .map((d: any) => ({ uid: d.uid, title: d.folderTitle ? `${d.folderTitle} / ${d.title}` : d.title, uri: d.uri }));
+    return this.pluginsService.getGrafanaConnectionById(body.instanceId);
   }
 
   @Post('grafana/panels')
   @ApiOperation({ summary: 'List panels for a Grafana dashboard' })
   async grafanaPanels(@Body() body: { instanceId: number; dashboard_uid: string }) {
-    const conn = await this.pluginsService.getGrafanaConnectionById(body.instanceId);
-    if (!conn.grafana_url || !conn.api_key) throw new NotFoundException('Grafana connection not configured');
-    const baseUrl = conn.grafana_url.replace(/\/+$/, '');
-    const resp = await fetch(`${baseUrl}/api/dashboards/uid/${body.dashboard_uid}`, {
-      headers: { Authorization: `Bearer ${conn.api_key}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) throw new NotFoundException(`Grafana returned ${resp.status}: ${resp.statusText}`);
-    const data = await resp.json();
-    const panels: { id: string | number; title: string; type: string; section: string | null }[] = [];
-    const extractPanels = (list: any[]) => {
-      for (const p of list || []) {
-        if (p.type === 'row') {
-          const rowTitle = p.title || `Row ${p.id}`;
-          panels.push({ id: `row-${p.id}`, title: `${rowTitle} (entire section)`, type: 'row', section: rowTitle });
-          for (const child of p.panels || []) {
-            panels.push({ id: child.id, title: child.title || `Panel ${child.id}`, type: child.type, section: rowTitle });
-          }
-        } else {
-          panels.push({ id: p.id, title: p.title || `Panel ${p.id}`, type: p.type, section: null });
-        }
-      }
-    };
-    extractPanels(data.dashboard?.panels);
-    return panels;
+    return this.pluginsService.getGrafanaConnectionById(body.instanceId);
   }
 
   @Post('grafana/generate-screen')

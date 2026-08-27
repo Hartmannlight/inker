@@ -4,6 +4,13 @@ WP-19 stores render intent in SQLite and transports fenced references through th
 BullMQ `render` queue. Rendering consumes only immutable publication snapshots.
 Manifest and artifact reads never enqueue work or modify SQL state.
 
+WP-21 can explicitly publish an immutable SourceSnapshot containing the existing
+fixture-artifact schema. The publication pins its source/snapshot identity,
+revision, content hash and connector version; these also enter the render key.
+Later refreshes or stale/error states never change an already published image.
+See [source operations](SOURCE_OPERATIONS.md) for the supported schema and
+the deliberate 410/503 responses on old direct-provider/image routes.
+
 ## Storage and identity
 
 - `INKER_RENDER_CACHE_PATH` defaults to `.render-cache` relative to the backend;

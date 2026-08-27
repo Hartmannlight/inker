@@ -27,6 +27,10 @@ import { SleepyDeliveryPolicy, ResponsivePullDeliveryPolicy } from '../src/devic
 import { TransportAdapterRegistry } from '../src/device-platform/transport-adapter.registry';
 import { HttpPullTransportAdapter } from '../src/device-platform/http-pull.transport-adapter';
 import { PullLastSeenService } from '../src/device-platform/pull-last-seen.service';
+import { SourcesService } from '../src/sources/sources.service';
+import { SourceReadService } from '../src/sources/source-read.service';
+import { SourceWorkerService } from '../src/sources/source-worker.service';
+import type { EncryptionService } from '../src/common/services/encryption.service';
 
 const root = resolve(import.meta.dir, '..');
 type TargetDevice = Prisma.DeviceGetPayload<{ include: { profile: true; deliveryPolicy: true; publicationState: { include: { desiredRevision: true } } } }>;
@@ -167,6 +171,60 @@ describe('WP-19 persistent render cache', () => {
     expect(sha256(bytes)).toBe(stored.artifactHash!);
     expect(await sharp(bytes).metadata()).toMatchObject({ format: 'png', width: 1920, height: 1080 });
     expect(readdirSync(files.root)).toEqual([stored.artifactHash!]);
+  }, 30_000);
+
+  test('WP-21 pinned persisted snapshots determine real pixels and later source failure cannot mutate a publication', async () => {
+    const sources = new SourcesService(prisma as PrismaService, {} as EncryptionService);
+    const reader = new SourceReadService(prisma as PrismaService);
+    const worker = new SourceWorkerService(prisma as PrismaService, outbox);
+    const input = { protocolVersion: '1.0', name: 'snapshot-fixture', connectorType: 'fixture', schemaVersion: '1',
+      configuration: { data: { fixtureArtifacts: ['mono-800x480-white-png'] } }, refreshIntervalSeconds: 60, timeoutMs: 1000, concurrencyGroup: 'render-proof' };
+    const created = await sources.create(input), sourceId = created.definition.sourceDefinitionId;
+    async function refresh() {
+      const event = await worker.claim('snapshot-render-proof');
+      expect(event).not.toBeNull();
+      const outcome = await worker.execute(event!, new AbortController().signal);
+      if (outcome === 'completed') expect(await outbox.ack(event!)).toBe(true);
+      return reader.read(sourceId);
+    }
+    const a = (await refresh()).snapshot!;
+    expect(a.freshness.state).toBe('fresh');
+    await publisher.publish('source-render-proof', { idempotencyKey: randomUUID(), expectedRevision: 0,
+      draft: { sourceSnapshotId: a.snapshotId }, deviceIds: [device.id] });
+    const renderedA = await requestAndRender(), first = await read();
+    const presentations = new PresentationService(prisma as PrismaService, cache);
+    const manifestA = await presentations.getForDevice(device.id);
+    const rawA = await sharp(first!.artifact.bytes).raw().toBuffer({ resolveWithObject: true });
+    const center = (Math.floor(rawA.info.height / 2) * rawA.info.width + Math.floor(rawA.info.width / 2)) * rawA.info.channels;
+    expect(rawA.data[center]).toBe(255);
+
+    await sources.update(sourceId, { ...input, expectedDefinitionVersion: 1,
+      configuration: { data: { fixtureArtifacts: ['mono-800x480-black-bmp'] } } });
+    const b = (await refresh()).snapshot!;
+    expect(b.contentHash).not.toBe(a.contentHash);
+    expect(await presentations.getForDevice(device.id)).toEqual(manifestA);
+    expect((await read())!.artifact.sha256).toBe(first!.artifact.sha256);
+    await publisher.publish('source-render-proof', { idempotencyKey: randomUUID(), expectedRevision: 1,
+      draft: { sourceSnapshotId: b.snapshotId }, deviceIds: [device.id] });
+    const renderedB = await requestAndRender(), second = await read();
+    expect(renderedB.key).not.toBe(renderedA.key);
+    expect(second!.artifact.sha256).not.toBe(first!.artifact.sha256);
+    const rawB = await sharp(second!.artifact.bytes).raw().toBuffer({ resolveWithObject: true });
+    expect(rawB.data[center]).toBe(0);
+    const manifestB = await presentations.getForDevice(device.id);
+
+    await sources.update(sourceId, { ...input, expectedDefinitionVersion: 2, connectorType: 'failure' });
+    const failed = (await refresh()).snapshot!;
+    expect(failed.freshness.state).toBe('stale');
+    expect(failed.data).toEqual(b.data);
+    writes.length = 0;
+    for (let i = 0; i < 20; i++) {
+      expect(await presentations.getForDevice(device.id)).toEqual(manifestB);
+      expect((await reader.read(sourceId)).snapshot!.snapshotId).toBe(failed.snapshotId);
+      expect((await read())!.artifact.sha256).toBe(second!.artifact.sha256);
+    }
+    expect(writes).toEqual([]);
+    expect(cache.metrics().rendered).toBe(2);
   }, 30_000);
 
   test('two independent processes deduplicate the same request and a restart reads persisted bytes', async () => {

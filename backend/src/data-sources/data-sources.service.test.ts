@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
-import { DataSourcesService } from './data-sources.service';
+import { describe, it, expect, beforeEach, spyOn } from 'bun:test';
+import { NotFoundException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import { DataSourcesService, SOURCE_REFRESH_REQUIRES_CONNECTOR, SOURCE_SNAPSHOT_UNAVAILABLE } from './data-sources.service';
 import { createMockPrisma, MockPrisma } from '../test/mocks/prisma.mock';
 import { createMock } from '../test/mocks/helpers';
+import { validateUrlSafety, isPrivateIp } from '../common/utils/url-safety';
 
 describe('DataSourcesService', () => {
   let service: DataSourcesService;
@@ -420,7 +421,7 @@ describe('DataSourcesService', () => {
       expect((result.headers as any).Authorization).toContain('••••••••');
     });
 
-    it('create() should mask headers even when auto-test fails', async () => {
+    it('create() preserves configuration and masks headers without auto-testing', async () => {
       mockPrisma.dataSource.create.mockResolvedValue({
         id: 1, name: 'New', headers: sensitiveHeaders, type: 'json', url: 'https://fail.example.com', method: 'GET',
       });
@@ -428,10 +429,14 @@ describe('DataSourcesService', () => {
         id: 1, name: 'New', headers: sensitiveHeaders,
       });
 
-      (service as any).fetchDataFromSource = createMock().mockRejectedValue(new Error('fail'));
+      const fetch = createMock().mockImplementation(() => { throw new Error('Unexpected provider access'); });
+      (service as any).fetchDataFromSource = fetch;
 
       const result = await service.create({ name: 'New', type: 'json', url: 'https://fail.example.com' } as any);
       expect(JSON.stringify(result.headers)).not.toContain('super-secret-token-12345');
+      expect(result.url).toBe('https://fail.example.com');
+      expect(fetch.calls).toHaveLength(0);
+      expect(mockPrisma.dataSource.update.calls).toHaveLength(0);
     });
 
     it('update() should mask headers in response', async () => {
@@ -443,17 +448,18 @@ describe('DataSourcesService', () => {
       expect((result.headers as any).Authorization).toContain('••••••••');
     });
 
-    it('refresh() should mask headers in response', async () => {
+    it('refresh() rejects without exposing stored headers or changing cached data', async () => {
       mockPrisma.dataSource.findUnique.mockResolvedValue({
         id: 1, name: 'DS', headers: sensitiveHeaders, type: 'json', url: 'https://example.com', method: 'GET',
       });
       mockPrisma.dataSource.update.mockResolvedValue({ id: 1, headers: sensitiveHeaders });
 
-      (service as any).fetchDataFromSource = createMock().mockResolvedValue({ ok: true });
-
-      const result = await service.refresh(1);
-      expect(JSON.stringify(result.dataSource.headers)).not.toContain('super-secret-token-12345');
-      expect((result.dataSource.headers as any).Authorization).toContain('••••••••');
+      const error = await service.refresh(1).catch(error => error);
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect(error.getResponse()).toMatchObject({ code: SOURCE_REFRESH_REQUIRES_CONNECTOR, statusCode: 503 });
+      expect(JSON.stringify(error.getResponse())).not.toContain('super-secret-token-12345');
+      expect(mockPrisma.dataSource.findUnique.calls).toHaveLength(0);
+      expect(mockPrisma.dataSource.update.calls).toHaveLength(0);
     });
   });
 
@@ -461,7 +467,10 @@ describe('DataSourcesService', () => {
 
   describe('findOne()', () => {
     it('should return data source when found', async () => {
-      const ds = { id: 1, name: 'Test', customWidgets: [], headers: null };
+      const ds = { id: 1, name: 'Test', customWidgets: [], headers: null,
+        description: null, type: 'json', url: 'https://example.invalid', method: 'GET', refreshInterval: 300,
+        jsonPath: null, isActive: true, lastData: null, lastFetchedAt: null, lastError: null,
+        createdAt: new Date(0), updatedAt: new Date(0) };
       mockPrisma.dataSource.findUnique.mockResolvedValue(ds);
       const result = await service.findOne(1);
       expect(result).toEqual(ds);
@@ -520,7 +529,7 @@ describe('DataSourcesService', () => {
       expect(result).toEqual(cachedData);
     });
 
-    it('should return stale cached data when refresh fails', async () => {
+    it('should return stale cached data without attempting a refresh', async () => {
       const staleData = { price: 50 };
       mockPrisma.dataSource.findUnique.mockResolvedValue({
         id: 1,
@@ -533,16 +542,16 @@ describe('DataSourcesService', () => {
         headers: null,
       });
 
-      // Override fetchDataFromSource to simulate failure
-      (service as any).fetchDataFromSource = createMock().mockRejectedValue(
-        new Error('Network error'),
-      );
+      const fetch = createMock().mockImplementation(() => { throw new Error('Unexpected provider access'); });
+      (service as any).fetchDataFromSource = fetch;
 
       const result = await service.getCachedData(1);
       expect(result).toEqual(staleData);
+      expect(fetch.calls).toHaveLength(0);
+      expect(mockPrisma.dataSource.update.calls).toHaveLength(0);
     });
 
-    it('should fetch fresh data when cache is stale', async () => {
+    it('should report a missing snapshot without fetching or writing', async () => {
       const freshData = { price: 200 };
       mockPrisma.dataSource.findUnique.mockResolvedValue({
         id: 1,
@@ -558,9 +567,105 @@ describe('DataSourcesService', () => {
 
       (service as any).fetchDataFromSource = createMock().mockResolvedValue(freshData);
 
-      const result = await service.getCachedData(1);
-      expect(result).toEqual(freshData);
-      expect(mockPrisma.dataSource.update.calls).toHaveLength(1);
+      await expect(service.getCachedData(1)).rejects.toThrow(SOURCE_SNAPSHOT_UNAVAILABLE);
+      expect((service.fetchDataFromSource as any).calls).toHaveLength(0);
+      expect(mockPrisma.dataSource.update.calls).toHaveLength(0);
+    });
+  });
+
+  describe('WP21 persisted-only source boundary', () => {
+    function expectNoWrites() {
+      for (const model of Object.values(mockPrisma)) {
+        if (typeof model !== 'object' || model === null) continue;
+        for (const operation of ['create', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
+          const method = (model as Record<string, any>)[operation];
+          if (method) expect(method.calls).toHaveLength(0);
+        }
+      }
+      expect(mockPrisma.$transaction.calls).toHaveLength(0);
+    }
+
+    it('preserves every non-null JSON value for stale and preview reads without credentials or writes', async () => {
+      const provider = spyOn(service, 'fetchDataFromSource').mockImplementation(() => { throw new Error('Unexpected provider access'); });
+      for (const lastData of [false, 0, '', [], {}, { temperature: 12 }]) {
+        const row = Object.freeze({ lastData, lastFetchedAt: new Date(0), refreshInterval: 1 });
+        mockPrisma.dataSource.findUnique.mockResolvedValue(row);
+        for (const preview of [false, true]) expect(await service.getCachedData(1, preview)).toEqual(lastData);
+      }
+      expect(provider).not.toHaveBeenCalled();
+      for (const [query] of mockPrisma.dataSource.findUnique.calls) {
+        expect(query).toEqual({ where: { id: 1 }, select: { lastData: true } });
+      }
+      expectNoWrites();
+    });
+
+    it('never falls through to live fetching when a preview cache is absent', async () => {
+      const provider = spyOn(service, 'fetchDataFromSource').mockImplementation(() => { throw new Error('Unexpected provider access'); });
+      for (const lastData of [null, undefined]) {
+        mockPrisma.dataSource.findUnique.mockResolvedValue({ lastData });
+        for (const preview of [false, true]) {
+          const error = await service.getCachedData(1, preview).catch(error => error);
+          expect(error).toBeInstanceOf(ServiceUnavailableException);
+          if (!(error instanceof ServiceUnavailableException)) throw new Error('Expected unavailable snapshot');
+          expect(error.getStatus()).toBe(503);
+          expect(error.getResponse()).toMatchObject({ code: SOURCE_SNAPSHOT_UNAVAILABLE });
+        }
+      }
+      expect(provider).not.toHaveBeenCalled();
+      expectNoWrites();
+    });
+
+    it('rejects all provider entrypoints before settings, database or network access with a safe stable code', async () => {
+      const settings = { get: createMock().mockImplementation(() => { throw new Error('Unexpected settings access'); }) };
+      service = new DataSourcesService(mockPrisma as any, settings as any);
+      const blockedFetch = Object.assign(() => { throw new Error('Unexpected HTTP access'); }, { preconnect: globalThis.fetch.preconnect });
+      const network = spyOn(globalThis, 'fetch').mockImplementation(blockedFetch);
+      const secret = 'test-provider-secret-not-for-response';
+      const config = { type: 'json' as const, url: `https://example.invalid/?token=${secret}`, method: 'GET', headers: { Authorization: `Bearer ${secret}` } };
+      try {
+        for (const invoke of [
+          () => service.testUrl({ ...config, dataSourceId: 1 }),
+          () => service.testFetch(1),
+          () => service.refresh(1),
+          () => service.fetchDataFromSource(config),
+        ]) {
+          const error = await invoke().catch(error => error);
+          expect(error).toBeInstanceOf(ServiceUnavailableException);
+          expect(error.getStatus()).toBe(503);
+          expect(error.getResponse()).toMatchObject({ code: SOURCE_REFRESH_REQUIRES_CONNECTOR, message: SOURCE_REFRESH_REQUIRES_CONNECTOR });
+          expect(JSON.stringify(error.getResponse())).not.toContain(secret);
+        }
+        expect(network).not.toHaveBeenCalled();
+        expect(settings.get.calls).toHaveLength(0);
+        expect(mockPrisma.dataSource.findUnique.calls).toHaveLength(0);
+        expectNoWrites();
+      } finally { network.mockRestore(); }
+    });
+
+    it('returns the same persisted data for concurrent reads without enqueueing refresh work', async () => {
+      const data = { result: 'last successful response' };
+      mockPrisma.dataSource.findUnique.mockResolvedValue({ lastData: data });
+      const results = await Promise.all(Array.from({ length: 20 }, () => service.getCachedData(1)));
+      for (const result of results) expect(result).toEqual(data);
+      expectNoWrites();
+    });
+  });
+
+  describe('shared SSRF validation remains intact', () => {
+    it('rejects private and metadata targets without DNS or HTTP', async () => {
+      for (const url of ['http://127.0.0.1', 'http://10.0.0.1', 'http://169.254.169.254', 'file:///etc/passwd']) {
+        await expect(validateUrlSafety(url)).rejects.toThrow();
+      }
+      for (const host of ['localhost', 'inker-redis', 'host.docker.internal', 'metadata.google.internal']) {
+        await expect(validateUrlSafety(`http://${host}`, { allowLocalNetwork: true })).rejects.toThrow('internal services');
+      }
+    });
+
+    it('retains IPv4-mapped IPv6 and private IPv6 classification', () => {
+      for (const address of ['::ffff:127.0.0.1', '::1', 'fc00::1', 'fe80::1', '192.168.1.1', '172.16.0.1']) {
+        expect(isPrivateIp(address)).toBe(true);
+      }
+      expect(isPrivateIp('8.8.8.8')).toBe(false);
     });
   });
 });

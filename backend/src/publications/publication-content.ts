@@ -16,9 +16,18 @@ export interface PublishedArtifact {
   sha256: string;
 }
 
-export type PublicationContent =
+export type PublishedSourceReference = {
+  sourceId: string;
+  snapshotId: string;
+  revision: number;
+  contentHash: string;
+  connectorVersion: string;
+};
+
+export type PublicationContent = (
   | { schemaVersion: 1; fixtureArtifacts: string[] }
-  | { schemaVersion: 1; image: { png: string; width: number; height: number; sha256: string } };
+  | { schemaVersion: 1; image: { png: string; width: number; height: number; sha256: string } }
+) & { sourceSnapshot?: PublishedSourceReference };
 
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 

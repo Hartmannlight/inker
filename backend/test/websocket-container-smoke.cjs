@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const { execFile, execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp20-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp21-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
-let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, stage = 'start';
+let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, sourceBeforeRestart, stage = 'start';
 let workerPaused = false;
 const sockets = [];
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 90_000, env: { ...process.env, ADMIN_PIN: password } });
@@ -75,7 +75,7 @@ async function main() {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
       '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets',
-      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp20-test');
+      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp21-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
@@ -308,6 +308,8 @@ async function main() {
     await until(() => active.code !== undefined); assert.equal(active.code, 4401);
     const rejected = connect(device, token); await until(() => rejected.code !== undefined); assert.equal(rejected.code, 4401);
     const fresh = connect(device, rotated); await until(() => fresh.messages.some(m => m.type === 'presentation.changed'));
+    sourceBeforeRestart = await require('./fixtures/source-container-check.cjs')({ request, db, until, renderedFor, connect, secrets, base, setStage: value => { stage = value; },
+      login: () => request('/api/auth/login', { method: 'POST', data: { password } }) });
     stage = 'pull-create';
     const pull = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 pull', macAddress: 'AA:15:00:00:00:01' } })).body;
     stage = 'pull-setup';
@@ -345,6 +347,8 @@ async function main() {
     const renderedAfterRestart = (await renderedFor(device.id)).ready;
     assert.equal(renderedAfterRestart.key, renderBeforeRestart.key);
     assert.equal(renderedAfterRestart.artifactHash, renderBeforeRestart.artifactHash);
+    assert.equal((await request(`/api/sources/${sourceBeforeRestart.sourceId}`, { admin: true })).body.snapshot.snapshotId, sourceBeforeRestart.snapshotId);
+    assert.equal((await renderedFor(sourceBeforeRestart.deviceId)).ready.artifactHash, sourceBeforeRestart.artifactHash);
     const restartedImage = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: { Authorization: `Bearer ${rotated}` } });
     const restartedBytes = Buffer.from(await (await fetch(base + restartedImage.body.content.url, { headers: { Authorization: `Bearer ${rotated}` } })).arrayBuffer());
     assert.equal(createHash('sha256').update(restartedBytes).digest('hex'), renderBeforeRestart.artifactHash);
@@ -352,7 +356,7 @@ async function main() {
     const logs = docker('logs', name);
     const sessions = db('console.log(JSON.stringify(await p.adminSession.findMany()));');
     const telemetry = db('console.log(JSON.stringify(await p.device.findMany({select:{telemetry:true}})));');
-    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),publications:await p.publicationRevision.findMany()}));');
+    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),publications:await p.publicationRevision.findMany(),sources:await p.sourceDefinition.findMany(),snapshots:await p.sourceSnapshot.findMany(),sourceJobs:await p.sourceRefreshJob.findMany()}));');
     for (const secret of secrets.filter(Boolean)) { assert.equal(logs.includes(secret), false); assert.equal(JSON.stringify(sessions).includes(secret), false); assert.equal(JSON.stringify(telemetry).includes(secret), false); assert.equal(JSON.stringify(durable).includes(secret), false); }
     assert.equal(logs.includes('device-configuration.catalog'), false, 'The production seed catalog must load successfully');
     console.info('WP-15 production smoke passed: admin/CSRF, pairing, heartbeat, idle revocation, reconnect, pull/304/policy/artifact, TRMNL display, restart/key identity, secret audit');
@@ -364,6 +368,8 @@ async function main() {
     if (Number.isFinite(error?.actual) && Number.isFinite(error?.expected)) console.error(`Numeric assertion: actual=${error.actual} expected=${error.expected}`);
     const location = typeof error?.stack === 'string' && error.stack.match(/websocket-container-smoke\.cjs:(\d+):(\d+)/);
     if (location) console.error(`Smoke source location: ${location[1]}:${location[2]}`);
+    const sourceLocation = typeof error?.stack === 'string' && error.stack.match(/source-container-check\.cjs:(\d+):(\d+)/);
+    if (sourceLocation) console.error(`Source fixture location: ${sourceLocation[1]}:${sourceLocation[2]}`);
     {
       try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
     }

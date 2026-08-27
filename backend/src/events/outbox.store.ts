@@ -12,6 +12,7 @@ export interface OutboxClaimBudget {
   /** The complete queue group, even if this worker claims a narrower subset. */
   where: Prisma.OutboxEventWhereInput;
   limit: number;
+  additional?: Array<{ where: Prisma.OutboxEventWhereInput; limit: number }>;
 }
 
 @Injectable()
@@ -35,8 +36,9 @@ export class OutboxStore {
     budget?: OutboxClaimBudget,
   ): Promise<OutboxEvent | null> {
     if (!budget) return this.claimFrom(this.prisma, owner, now, filter);
-    if (!Number.isSafeInteger(budget.limit) || budget.limit < 1
-      || !budget.where || typeof budget.where !== 'object' || Array.isArray(budget.where)) {
+    const budgets = [budget, ...(budget.additional ?? [])];
+    if (budgets.length > 8 || budgets.some(item => !Number.isSafeInteger(item.limit) || item.limit < 1
+      || !item.where || typeof item.where !== 'object' || Array.isArray(item.where))) {
       throw new Error('OUTBOX_INVALID_CLAIM_BUDGET');
     }
     return this.prisma.$transaction(async tx => {
@@ -44,11 +46,13 @@ export class OutboxStore {
       // no rows. Acquire it before reading capacity, avoiding read-to-write
       // upgrades and reservations racing across independent worker processes.
       await tx.$executeRaw`UPDATE outbox_events SET event_id = event_id WHERE 1 = 0`;
-      const active = await tx.outboxEvent.count({ where: {
-        AND: [budget.where, { status: 'processing', claimUntil: { gt: now } }],
-      } });
-      if (active >= budget.limit) return null;
-      return this.claimFrom(tx, owner, now, { AND: [filter, budget.where] });
+      for (const item of budgets) {
+        const active = await tx.outboxEvent.count({ where: {
+          AND: [item.where, { status: 'processing', claimUntil: { gt: now } }],
+        } });
+        if (active >= item.limit) return null;
+      }
+      return this.claimFrom(tx, owner, now, { AND: [filter, ...budgets.map(item => item.where)] });
     });
   }
 

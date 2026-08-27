@@ -74,11 +74,21 @@ export function targetFor(configuration: Pick<ResolvedDeviceConfiguration, 'prof
 export function renderKey(
   revision: PublicationRevision,
   target: RenderTarget,
-  snapshotVersions: readonly SnapshotVersion[] = [],
+  snapshotVersions?: readonly SnapshotVersion[],
   rendererVersion = RENDERER_VERSION,
 ): string {
   validateRenderTarget(target);
-  const snapshots = snapshotVersions.map(({ sourceId, revision, contentHash, connectorVersion }) => {
+  const content = revision.content;
+  const reference = content && typeof content === 'object' && !Array.isArray(content) ? content.sourceSnapshot : undefined;
+  let pinned: SnapshotVersion[] = [];
+  if (reference !== undefined) {
+    if (!reference || typeof reference !== 'object' || Array.isArray(reference)
+      || typeof reference.sourceId !== 'string' || typeof reference.snapshotId !== 'string'
+      || typeof reference.connectorVersion !== 'string' || typeof reference.contentHash !== 'string'
+      || !Number.isSafeInteger(reference.revision)) throw new Error('Invalid pinned source snapshot');
+    pinned = [{ sourceId: reference.sourceId, revision: Number(reference.revision), contentHash: reference.contentHash, connectorVersion: reference.connectorVersion }];
+  }
+  const snapshots = (snapshotVersions ?? pinned).map(({ sourceId, revision, contentHash, connectorVersion }) => {
     if (!sourceId || !Number.isSafeInteger(revision) || revision < 1 || !/^[a-f0-9]{64}$/.test(contentHash)) {
       throw new Error('Invalid snapshot render version');
     }
