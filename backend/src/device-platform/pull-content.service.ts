@@ -1,12 +1,12 @@
-import { Injectable, NotAcceptableException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, NotAcceptableException, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { parseProtocolVersion, type PresentationManifest } from '@inker/contracts';
+import { type PresentationManifest } from '@inker/contracts';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProfileResolverService } from './profile-resolver.service';
 import { DeliveryPolicyRegistry } from './delivery-policy.registry';
 import { TransportAdapterRegistry } from './transport-adapter.registry';
-import { PULL_FIXTURE_ARTIFACTS } from './pull-fixture-artifacts';
+import { publicationArtifacts } from '../publications/publication-content';
 import { PullLastSeenService } from './pull-last-seen.service';
 
 type PullDevice = Prisma.DeviceGetPayload<{ include: { profile: true; deliveryPolicy: true } }>;
@@ -29,17 +29,9 @@ export class PullContentService {
     const revision = state?.desiredRevision;
     if (!revision) throw new NotFoundException('No published device content');
     // Do not serialize arbitrary snapshot fields, DB entities, URLs or parser diagnostics.
-    const content = revision.content;
-    if (!parseProtocolVersion(revision.protocolVersion).success || !content || typeof content !== 'object' || Array.isArray(content)) {
-      throw new ServiceUnavailableException('Published pull artifacts unavailable');
-    }
-    const ids = content.fixtureArtifacts;
-    if (!Array.isArray(ids) || ids.length === 0 || ids.length > PULL_FIXTURE_ARTIFACTS.length ||
-      ids.some((id) => typeof id !== 'string' || !PULL_FIXTURE_ARTIFACTS.some((artifact) => artifact.fixtureId === id))) {
-      throw new ServiceUnavailableException('Published pull artifacts unavailable');
-    }
+    const artifacts = publicationArtifacts(revision);
     const display = configuration.capabilities.display;
-    const candidates = PULL_FIXTURE_ARTIFACTS.filter((artifact) => ids.includes(artifact.fixtureId) &&
+    const candidates = artifacts.filter((artifact) =>
       display.mimeTypes.includes(artifact.mimeType) && display.width === artifact.width && display.height === artifact.height &&
       display.colorSpace === artifact.colorSpace && display.bitDepth === artifact.bitDepth && display.rotation === artifact.rotation);
     const artifact = display.renderFormats.flatMap((format) => candidates.filter((candidate) => candidate.format === format))[0];

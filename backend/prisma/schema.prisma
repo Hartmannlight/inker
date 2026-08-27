@@ -203,6 +203,15 @@ model Publication {
   @@map("publications")
 }
 
+// Permanent command receipts, independent of publication/event retention.
+// Keys are hashed; results contain identifiers/checksums, never draft data.
+model PublicationCommand {
+  keyHash String @id @map("key_hash")
+  requestHash String @map("request_hash")
+  result Json?
+  @@map("publication_commands")
+}
+
 // Revisions are append-only snapshots. The database migration rejects UPDATEs;
 // retention may delete old, unreferenced revisions according to the policy in
 // PublicationCleanupService.
@@ -230,6 +239,7 @@ model PublicationRevision {
 // one is already desired.
 model DevicePublicationState {
   deviceId                          Int       @id @map("device_id")
+  desiredSequence                   Int       @default(0) @map("desired_sequence")
   desiredPublicationRevisionId      String?   @map("desired_publication_revision_id")
   acknowledgedPublicationRevisionId String?   @map("acknowledged_publication_revision_id")
   desiredAt                         DateTime? @map("desired_at")

@@ -111,6 +111,8 @@ export function parseOutboxEvent(event: EventInput): {
   )
     return invalid();
   const created = event.eventType === PUB.revisionCreated;
+  const assigned = event.eventType === PUB.desiredRevisionChanged;
+  if (assigned && event.aggregateRevision != null && !/^[1-9]\d*$/.test(event.aggregateRevision)) return invalid();
   const allowed = [
     'publicationId',
     'publicationRevisionId',
@@ -142,7 +144,9 @@ export function parseOutboxEvent(event: EventInput): {
       event.eventType,
       event.aggregateType,
       event.aggregateId,
-      p.publicationRevisionId,
+      assigned && event.aggregateRevision != null
+        ? `${p.publicationRevisionId}:${event.aggregateRevision}`
+        : p.publicationRevisionId,
     ),
     deviceIds:
       event.eventType === PUB.desiredRevisionChanged

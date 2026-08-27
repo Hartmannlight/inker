@@ -93,6 +93,41 @@ describe('WebDisplay credential lifecycle', () => {
     expect(JSON.parse(socket.send.mock.calls.at(-1)![0])).toEqual({ protocolVersion: '1.0', type: 'pong', nonce: 'abc' });
   });
 
+  it('loads immutable publication images with header auth and retains the last image on failure', async () => {
+    localStorage.setItem(STORAGE_KEY, 'valid-credential');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['image']) });
+    vi.stubGlobal('fetch', fetchMock);
+    const create = vi.fn().mockReturnValue('blob:published-image');
+    const revoke = vi.fn();
+    URL.createObjectURL = create; URL.revokeObjectURL = revoke;
+    class PreloadedImage {
+      onload: (() => void) | null = null;
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    }
+    vi.stubGlobal('Image', PreloadedImage);
+    const view = renderDisplay(`/display/${DISPLAY_ID}`);
+    const socket = MockWebSocket.instances[0];
+    const publication = (revision: number) => ({ protocolVersion: '1.0', type: 'presentation.changed', presentation: {
+      deviceId: 7, externalId: DISPLAY_ID, revision, generatedAt: '2026-08-27T00:00:00.000Z', nextTransitionAt: null,
+      viewport: { width: 800, height: 480 }, content: { kind: 'image', url: `/api/web-displays/${DISPLAY_ID}/artifacts/${'a'.repeat(64)}`,
+        title: 'Published content', fit: 'contain', background: '#ffffff' },
+    } });
+    act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(publication(1)) })));
+    await waitFor(() => expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:published-image'));
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining(`/api/web-displays/${DISPLAY_ID}/artifacts/`), {
+      headers: { Authorization: 'Bearer valid-credential' }, credentials: 'omit', redirect: 'error',
+    });
+    expect(fetchMock.mock.calls[0][0]).not.toContain('valid-credential');
+    fetchMock.mockRejectedValue(new Error('private-error'));
+    act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(publication(2)) })));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:published-image');
+    expect(revoke).not.toHaveBeenCalled();
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('valid-credential');
+    view.unmount();
+    expect(revoke).toHaveBeenCalledWith('blob:published-image');
+  });
+
   it('stops on incompatible protocol without deleting credentials or reflecting errors', () => {
     vi.useFakeTimers();
     localStorage.setItem(STORAGE_KEY, 'valid-credential');

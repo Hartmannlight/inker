@@ -72,7 +72,7 @@ müssen.
 | [ ] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
 | [x] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
 | [x] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
-| [ ] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
+| [x] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
 | [ ] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
 | [ ] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
 | [ ] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
@@ -1941,13 +1941,13 @@ des aktuellen PresentationService. Playlistrotation folgt WP-18.
 
 **Aufgaben:**
 
-- [ ] Implementiere explizites Publish aus einem validierten Entwurf.
-- [ ] Erzeuge unveränderliche Revisionen mit Inhaltschecksumme.
-- [ ] Weise Geräten gewünschte PublicationRevision zu.
-- [ ] Baue PresentationManifest ausschließlich aus persistiertem Zustand.
-- [ ] Entferne Revision-Increment und sonstige fachliche Writes aus GET/Pull/Push.
-- [ ] Definiere Fehler- und Fallbackverhalten bei fehlender Publication.
-- [ ] Ergänze Idempotenz-, Parallelabruf- und unveränderlichkeits-Tests.
+- [x] Implementiere explizites Publish aus einem validierten Entwurf.
+- [x] Erzeuge unveränderliche Revisionen mit Inhaltschecksumme.
+- [x] Weise Geräten gewünschte PublicationRevision zu.
+- [x] Baue PresentationManifest ausschließlich aus persistiertem Zustand.
+- [x] Entferne Revision-Increment und sonstige fachliche Writes aus GET/Pull/Push.
+- [x] Definiere Fehler- und Fallbackverhalten bei fehlender Publication.
+- [x] Ergänze Idempotenz-, Parallelabruf- und unveränderlichkeits-Tests.
 
 **Abnahme:** 100 Abrufe desselben Manifests verändern die Datenbankrevision nicht
 und liefern denselben fachlichen Inhalt.
@@ -1955,6 +1955,224 @@ und liefern denselben fachlichen Inhalt.
 **Validierung:** Service-, API-, Concurrency- und DB-Write-Assertion-Tests.
 
 **Handoff:** Publish-API und Übergangspunkte für Editor/Playlist notieren.
+
+### Abschluss WP-17
+
+- Status: abgeschlossen am 2026-08-27, ausgehend vom sauberen Commit
+  `b5e22ebe9a6c12fb9b6c238fb9ace24357cc8765` auf
+  `codex/device-platform-spike`. Repository und übergeordnete Pfade auf
+  AGENTS-Anweisungen geprüft; keine zusätzlichen gefunden. WP-17, ADRs 001–007
+  und Handoffs WP-04, WP-07 sowie WP-13–WP-16 vollständig gelesen und gegen den
+  tatsächlichen Code geprüft. `ARCHITECTURE_PLAN.md` nicht pauschal geladen.
+  Keine fremden Änderungen überschrieben; keine Aussage über gepushte Commits
+  aus lokalen Trackingdaten abgeleitet. Der WP-17-Abschlusscommit wurde danach
+  ausdrücklich beauftragt; ein Push ist nicht beauftragt.
+
+- Publish-API: Admin-authentisiertes `POST /api/publications/:key/publish`;
+  vorhandene Session-/CSRF-Regeln gelten unverändert. `key` ist ein stabiler
+  Kleinbuchstaben-/Ziffern-/Bindestrich-Bezeichner mit maximal 80 Zeichen.
+  Der Body verlangt `idempotencyKey` als UUID, `expectedRevision` als
+  nichtnegative Ganzzahl, `draft` und `deviceIds` als Liste mit maximal 100
+  Einträgen. Leere Geräteliste veröffentlicht ohne Zuweisung. Beispiel:
+
+  ```json
+  {
+    "idempotencyKey": "147a7e98-b4d6-4f42-8244-d68f28ad5302",
+    "expectedRevision": 0,
+    "draft": {
+      "fixtureArtifacts": ["mono-800x480-white-bmp", "mono-800x480-white-png"]
+    },
+    "deviceIds": [7]
+  }
+  ```
+
+  Alternativer Entwurf: `{"screenId":17,"expectedUpdatedAt":"2026-08-27T12:00:00.000Z"}`
+  für einen existierenden lokalen Upload-Screen. Unbekannte Felder, freie URLs,
+  Live-Designs und Plugin-Renderaufrufe werden nicht akzeptiert. Antwort `201`
+  enthält Publication-ID, PublicationRevision-ID, numerische Publicationrevision,
+  Inhaltschecksumme und zugewiesene Geräte-IDs im bestehenden Admin-Responseformat.
+  `GET /api/publications/:key` liefert nur Publication-/Revisionsmetadaten,
+  keine Bildbytes oder beliebige Snapshotfelder.
+
+- Idempotenz-/Konfliktvertrag: `expectedRevision: 0` bedeutet neue Publication;
+  sonst muss der Wert genau der jüngsten persistierten Revision entsprechen.
+  Gleicher UUID-Schlüssel und semantisch gleicher Befehl liefern dasselbe
+  gespeicherte Ergebnis, ohne neue Revision, Zuweisung oder Outbox-Einträge.
+  Objektfeldreihenfolge sowie Geräte-/Fixture-Reihenfolge sind unerheblich;
+  Geräte-IDs werden als Menge normalisiert. Derselbe Schlüssel für einen anderen
+  Befehl, eine veraltete Publicationrevision oder ein geänderter Screenentwurf
+  ergibt `409`. Ein neuer Schlüssel mit korrekter Ausgangsrevision ist ein neuer
+  bewusster Publish und erzeugt auch bei identischen Bilddaten eine neue Revision.
+  Parallele Befehle mit verschiedenen Schlüsseln und derselben Ausgangsrevision
+  haben genau einen Gewinner; Wiederholungen desselben Schlüssels teilen ein
+  Ergebnis. SQLite-Transaktions-/Busyfehler im Publish ergeben `503` mit Hinweis,
+  denselben Befehl zu wiederholen. Es gibt keinen unbegrenzten internen Retry.
+
+  `PublicationCommand` speichert nur Schlüsselhash, kanonischen Befehlshash und
+  Ergebnisidentifikatoren. Abgeschlossene Belege sind durch einen UPDATE-Trigger
+  unveränderlich und bleiben unabhängig von der Revision-/Event-Retention erhalten.
+  Replay nach Entwurfslöschung oder Retention liefert weiterhin das ursprüngliche
+  Ergebnis, veröffentlicht nichts erneut und stellt keine frühere Sollzuweisung
+  wieder her. Ein alter Erfolgsbeleg ist keine Garantie, dass dessen Artefakt noch
+  vorhanden oder aktuell für das Gerät autorisiert ist.
+
+- Snapshots/Atomarität: Bestehende `PublicationPersistenceService`-Operationen
+  können jetzt an derselben übergebenen Transaktion teilnehmen. Neue Publication,
+  Revision, Sollzuweisungen, Browsersequenzen, Idempotenzbeleg und zugehörige
+  WP-07-/WP-16-Outbox-Ereignisse werden gemeinsam committed oder zurückgerollt.
+  Ein parametrisierter erster INSERT serialisiert konkurrierende Publishbefehle
+  in SQLite; kein RAM-Mutex oder Redis-Lock ist fachliche Voraussetzung.
+  Snapshotformat `schemaVersion: 1`; `contentHash` ist SHA-256 über kanonisches
+  JSON, Bildbytes haben zusätzlich SHA-256. Vorhandene Immutability-Trigger für
+  Publication und PublicationRevision bleiben erhalten.
+
+  Unterstützt sind die bestehenden WP-14-Fixtures und eingefrorene Upload-Bilder
+  unter `/uploads/screens/`. Import liest nur einen validierten lokalen Dateipfad,
+  prüft den aufgelösten Pfad und begrenzt Eingabe auf 8 MiB/16.777.216 Pixel.
+  Sharp normalisiert die Pixel zu PNG ohne Quellmetadaten; maximal 2 MiB Ausgabe
+  werden als Base64 im unveränderlichen Snapshot gespeichert. Screen-ID/Zeitstand
+  werden vor Commit erneut geprüft. Dateiumbenennung/-löschung, spätere
+  Draftänderungen oder Providerzustand beeinflussen die veröffentlichte Ausgabe
+  nicht. Keine Quell-URL, Screenbeschreibung, Providerdaten oder Credentials werden
+  übernommen. Das ist ein begrenzter Import vorhandener Bilder, kein allgemeiner
+  Renderer, Rendercache, Deduplizierungsjob oder Source-Worker.
+
+- Zuweisung: `PUT /api/publications/devices/:deviceId/desired` erwartet
+  `publicationRevisionId` und `expectedDesiredRevisionId` (ID oder `null`).
+  Der Sollwechsel ist atomar mit seinem Outbox-Ereignis. Bereits gewünschtes Ziel
+  ist ein fachlicher No-op; ein abweichender aktueller Ausgangszeiger ergibt `409`.
+  Fehlende Geräte/Revisionen ergeben `404`, unlesbare Snapshotinhalte `503`, ohne
+  die bisherige Zuweisung zu ersetzen. Publish mit Geräteliste und separate
+  Zuweisung erzeugen jeweils denselben dauerhaften Delivery-Hinweis.
+  Die bestehende `Device.presentationRevision` wird nur noch bei tatsächlichen
+  Sollwechseln erhöht und in `DevicePublicationState.desiredSequence` gespiegelt.
+  Zeiger und Sequenz werden aus derselben Zustandszeile gelesen. Auch A→B→A und
+  Wechsel zwischen Publications bleiben für Browser monoton. Neue Sollereignisse
+  verwenden diese Sequenz zusätzlich zur PublicationRevision-ID im Effect-Key;
+  alte Events ohne Aggregatrevision behalten ihren bisherigen Deduplizierungskey.
+  Payload-Version 1 und Payload-Whitelist bleiben unverändert.
+
+- Manifestverträge: `PresentationManifest` unter `/api/v1/device-content` bleibt
+  der WP-04-/WP-14-Vertrag mit Publication-ID, Publicationrevision, Profilvariante,
+  Hashartefakt und Refresh-Policy. Der Browser behält `WebDisplayManifest` mit
+  numerischer Geräte-Zuweisungssequenz, `content`, `viewport` und
+  `nextTransitionAt: null`. `generatedAt` stammt aus `publishedAt`, beim
+  unzugewiesenen Browser aus der Geräteerstellung. GET, Reconnect und Push lesen
+  weder Playlistitems noch Entwürfe und schreiben weder Playbackzustand,
+  Revisionen, Publications noch Outbox-Aufträge. Ein Refresh allein veröffentlicht
+  nichts und sendet auf einer Verbindung keine bereits bekannte Sequenz erneut.
+  Die erste Outbox-Delivery speichert ausschließlich einen technischen, validierten
+  Retry-Snapshot; konkurrierende Adapterprozesse teilen ihn, spätere Retries lesen
+  ihn ohne Write. Neue Sollzuweisung verändert alte Retry-Snapshots nicht.
+
+  Browserbilder werden über
+  `GET /api/web-displays/:externalId/artifacts/:sha256` mit Device-Bearer gelesen.
+  Der angepasste Browser lädt per Headerauthentisierung ohne Admin-Cookies oder
+  Redirect-Freigabe, verwendet lokale Blob-URLs und gibt diese wieder frei.
+  Kein Credential gelangt in Bild-URLs. Zugriff gilt nur für das aktuell gewünschte
+  kompatible Artefakt; Hash-ETag, Auth vor Conditional GET und leere `304` sind
+  getestet. Der WebSocket-Parser erlaubt genau diesen zusätzlichen URL-Pfad;
+  die bisherige Wireform und sicheren Legacy-Pfade bleiben parserkompatibel.
+  Bestehende Browser-Tabs benötigen nach Deployment einen Reload, um geschützte
+  Publicationbilder per Header laden zu können.
+
+- Fehler/Fallback/Übergänge: Pull ohne gewünschte Publication bleibt `404`;
+  Browser ohne Zuweisung zeigt eine feste öffentliche Hinweisseite ohne
+  Entwurfsdaten oder Live-Render-URL. Inkompatible Artefakt-/Profilvarianten ergeben
+  `406`, unlesbare/inkompatible Snapshots oder falsche neue Inhaltschecksummen
+  `503`. Fehlgeschlagenes Publish/Import lässt die vorherige Zuweisung unverändert.
+  Gerätekompatibilität wird weiterhin im Lesepfad über vorhandene Konfiguration,
+  Profile, Policies und Adapter geprüft; Publish garantiert keine neu gerenderte
+  Variante für jedes Zielgerät. Browser dürfen ein passendes Format skalieren,
+  Pull verlangt unverändert exakte Dimensionen/Farbraum/Bit-Tiefe/Rotation.
+  Fehler beim nächsten Bild lassen das zuletzt geladene Browserbild erhalten;
+  Betriebsausfälle verwenden den bestehenden WebSocket-Close-/Reconnectpfad.
+  Server wählen nicht stillschweigend Latest, Draft oder Acknowledged als Ersatz.
+  Wechselt die Sollrevision zwischen Manifest- und Bildabruf, kann die alte URL
+  `404` liefern: aktuelles Manifest erneut beziehen. Weitere Artefaktfallbacks
+  bleiben WP-19.
+
+  Editor-Speichern, Playlistzuweisung/-änderung und Design-Refresh bleiben
+  Entwurfsoperationen mit vorhandener Outbox, ohne Veröffentlichung. Ein Editor
+  muss anschließend ausdrücklich Publish mit aktuellem Zeit-/Revisionsstand
+  auslösen; ein neuer Publish-UI-Workflow wurde nicht vorweggenommen. Dynamische
+  Designs/Plugins sind zuerst in eine zulässige persistierte Ausgabe zu überführen;
+  aktuelle Live-Renderendpunkte sind keine Publicationartefakte. WP-18 erhält den
+  Sollzuweisungs-/Sequenzpfad als Übergabepunkt für persistierte Rotation, nicht
+  die alten GET-Timer. Legacy-TRMNL `/api/setup` und `/api/display` samt bisherigem
+  Firmware-/Draftverhalten bleiben separat kompatibel; immutable Publications
+  werden über den versionierten Contentpfad geliefert, nicht stillschweigend
+  durch eine Änderung des alten Firmwarevertrags.
+
+- Migration/Rollout: ausschließlich neue Vorwärtsmigration
+  `20260828000000_explicit_publications`; keine bestehende Migration geändert.
+  Sie ergänzt Commandbelege und `desired_sequence`, übernimmt vorhandene
+  `presentation_revision`-Werte und leert ausschließlich
+  `OutboxDelivery.presentation`. Zustellidentitäten, Claims, Targets, Acks,
+  Deduplizierungsbelege, gewünschte/bestätigte Revisionen und Credentials bleiben.
+  Keine automatische Veröffentlichung bestehender Drafts. Vorhandene WP-14-
+  Fixture-Snapshots ohne `schemaVersion` bleiben lesbar, ohne Umschreiben ihrer
+  damaligen Hashwerte; neue Snapshots unterliegen der vollständigen Checksumme.
+  Upgrade mit gestoppten alten API-/Adapterprozessen durchführen, gemeinsam neu
+  starten und Browser neu laden; gemischter Betrieb mit alten Draft-Schreibern ist
+  kein unterstützter Rollout. Bestehenden DB-/Secret-Backupvertrag einhalten.
+
+- Retention/Sicherheit: `delivered` weiterhin 30 Tage, `dead-letter` 90 Tage;
+  `pending`/`processing` nie allein wegen Alters löschen. Revisionretention bleibt
+  90 Tage mit Latest-/Desired-/Acknowledged-Schutz. Commandbelege und dauerhafte
+  Effect-Keys bleiben erhalten; ihre langfristige Kompaktierung ist offen.
+  Redis bleibt nur Transport, SQLite die dauerhafte Auftragsquelle. Claim-Fencing,
+  Recovery, Retrylimits, Auth/Rotation/Revocation, Heartbeats, Origins/Proxychecks,
+  Telemetriebegrenzung, Adminsessions/CSRF, Pairing und Instance-Key-Persistenz
+  wurden nicht ersetzt. Neue Manifest-/Snapshotfelder sind explizit projiziert.
+
+- Verifikation: **553 Backendtests, 27 Contracttests, 58 Frontendtests,
+  18 Publication-Integrationstests, 5 Migrationstests, 13 SQLite-Outbox-Fälle,
+  16 weitere Auth-/Enrollment-/Secret-/WebSocket-Integrationsfälle und eine echte
+  Redis-/Mehrprozess-Suite** bestanden. Zentrale Abnahme: je 100 sequenzielle und
+  100 parallele Browser-/Pullabrufe auf Service- und HTTP-Ebene mit SQL-Write-
+  Assertions; kein Write im beobachteten Telemetrieintervall, gleiche Fachinhalte.
+  Zusätzlich Publish/Read-Interleaving, Publishrennen über zwei Prisma-Clients,
+  gleiche/konfligierende Idempotenzschlüssel, konkurrierende erste Delivery-
+  Snapshots, A→B→A, Draftänderung/-löschung/Restart, Checksumfehler, atomarer
+  Outbox-Rollback und Retention/Replays. Die anfänglich verwendeten interaktiven
+  Lesetransaktionen scheiterten bei 100 parallelen Abrufen; der endgültige Pfad
+  liest atomaren Zeiger/Sequenz plus immutable Inhalte ohne diese Transaktionen.
+
+  Backend-/Frontend-/Contract-Typechecks, separate Publication-/Outbox-Test-
+  Typechecks, gezieltes Produktions-/Testlint, Prisma-Validierung, alle Builds,
+  Compose-Prüfung und `git diff --check` bestanden. Repositoryweites Lint bleibt
+  exakt auf WP-16-Baseline: Backend **76 Fehler/41 Warnungen**, Frontend
+  **85 Fehler/9 Warnungen**; kein grünes Gesamt-Lint behauptet.
+
+  Neu gebautes `inker:wp17-test` samt ausdrücklicher Prisma-Client-Initialisierung
+  und erweitertem `node test/websocket-container-smoke.cjs` erfolgreich geprüft:
+  echtes Nginx/Nest/SQLite, Publish/Replay/CSRF, 100 sequenzielle + 100 parallele
+  Browserabrufe mit DB-Triggerzählern, geschützte Artefakte/304, Outbox-Ack ohne
+  Revisionsinkrement beim Refresh, Pairing, Heartbeat, Widerruf/Reconnect,
+  Pull/ETag/Policy, Legacy-TRMNL und Restart mit stabiler Instance-Key-ID/ETag.
+  Nur der Testcontainer verwendet `THROTTLE_LIMIT=1000` für die Abrufserie;
+  das bestehende Produktionslimit 100/Minute bleibt bestehen. Testsecrets wurden
+  gegen reguläre Logs/Antworten/Outbox/Session-/Telemetriedaten geprüft.
+  Redis-Systemlauf: 100 Events in 5855 ms (17,1/s), kein Kapazitätsversprechen.
+  Ausschließlich eigene Testcontainer/temporäre Datenbanken und Volumes verwendet.
+
+- Reproduktion/Grenzen: aus `backend/` die bestehenden `bun test ./src`,
+  `bun test ./test/publication-persistence.integration.ts`,
+  `bun test ./test/migrations.integration.ts`, `bun test ./test/outbox.integration.ts`
+  und `bun test ./test/outbox-redis.integration.ts`; Test-Typecheck über
+  `node node_modules/typescript/bin/tsc -p test/tsconfig.publications.json` bzw.
+  `test/tsconfig.outbox.json`. Frontend ausschließlich `bun run test` (Vitest).
+  Tatsächliches lokales Bun: `inker\.tmp\bun-1.3.14\bun-windows-x64\bun.exe`
+  (der angegebene Pfad `inker.tmp` existierte nicht). Windows-EPERM und blockierte
+  Prisma-Prüfsummenabrufe wurden über freigegebene Wiederholungen geprüft;
+  lokale Backend-Contractkopie nach Build aktualisiert, Frontend nutzt den Link.
+  Optionale Runtime-Seed-Warnung `device-configuration.catalog`, Prisma-7- und
+  Browserslist-Warnungen sowie der bekannte Docker-Installationsfehlerpfad bleiben.
+  Kein physischer TRMNL-/ESP32-Test. Keine WP-18-Zustandsmaschine, kein WP-19-
+  Rendercache, kein WP-20-Bootstrap, keine Source-Jobs, Interactions oder MQTT.
+  Bildsnapshots vergrößern SQLite/Backups; größere/variantenreiche Artefakte und
+  deren Worker-/Cacheauslagerung sind ausdrücklich Folgearbeit.
 
 ## WP-18 – Playlistrotation als Zustandsmaschine
 

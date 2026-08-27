@@ -252,6 +252,11 @@ describe('durable outbox with real SQLite transactions', () => {
       d.id,
       published.revision.publicationRevisionId,
     );
+    // Same assignment is now a producer no-op. An actual duplicate event still
+    // exercises the permanent WP-16 consumer deduplication receipt.
+    const assigned = await p.outboxEvent.findFirstOrThrow({ where: { eventType: 'device.publication.desired-revision.changed' } });
+    const { eventId: _assignedId, ...assignedData } = assigned;
+    await p.outboxEvent.create({ data: { ...assignedData, payload: assignedData.payload as any } });
     await publications.setDesiredRevision(
       d.id,
       published.revision.publicationRevisionId,
@@ -370,13 +375,12 @@ describe('durable outbox with real SQLite transactions', () => {
     await events.notifyDevicesRefresh([d.id]);
     await store.prepare((await store.claim('owner'))!);
     const delivery = await p.outboxDelivery.findFirstOrThrow();
-    await expect(
-      new PresentationService(p as any).getForDevice(d.id, {
+    const manifest = await new PresentationService(p as any).getForDevice(d.id, {
         deliveryId: delivery.deliveryId,
         signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow('OUTBOX_INVALID_PRESENTATION');
-    expect((await p.outboxDelivery.findFirstOrThrow()).presentation).toBeNull();
+      });
+    expect(manifest.content.url).toBe('/assets/publication-unassigned.svg');
+    expect(JSON.stringify((await p.outboxDelivery.findFirstOrThrow()).presentation)).not.toContain('do-not-persist');
     expect(
       (await p.device.findUniqueOrThrow({ where: { id: d.id } }))
         .presentationRevision,

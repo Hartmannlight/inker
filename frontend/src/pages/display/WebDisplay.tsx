@@ -56,6 +56,9 @@ export function WebDisplay() {
   const [pairingCode, setPairingCode] = useState(initialShortCode.current ?? '');
   const [connectionApiUrl, setConnectionApiUrl] = useState(config.apiUrl);
   const [presentation, setPresentation] = useState<PresentationManifest | null>(null);
+  const displayedBlob = useRef<string | null>(null);
+  const displayedRevision = useRef(-1);
+  useEffect(() => () => { if (displayedBlob.current) URL.revokeObjectURL(displayedBlob.current); }, []);
   const [state, setState] = useState<ConnectionState>(
     pairingToken || initialShortCode.current ? 'pairing' : credential ? 'connecting' : 'unpaired',
   );
@@ -187,7 +190,7 @@ export function WebDisplay() {
             setState('connected');
             setMessage('Connected');
           } else if (data.type === 'presentation.changed') {
-            preloadPresentation(data.presentation);
+            void preloadPresentation(data.presentation);
           } else if (data.type === 'ping') {
             armWatchdog();
             socket?.send(JSON.stringify({ protocolVersion: '1.0', type: 'pong', nonce: data.nonce }));
@@ -226,11 +229,37 @@ export function WebDisplay() {
       socket.onerror = () => socket?.close();
     };
 
-    const preloadPresentation = (next: PresentationManifest) => {
-      const image = new Image();
-      image.onload = () => { if (!stopped) setPresentation((current) => !current || next.revision >= current.revision ? next : current); };
-      image.onerror = () => setMessage('The next screen could not be loaded. Waiting for another update…');
-      image.src = new URL(next.content.url, window.location.origin).toString();
+    const preloadPresentation = async (next: PresentationManifest) => {
+      let blobUrl: string | null = null;
+      try {
+        let url = new URL(next.content.url, window.location.origin).toString();
+        if (/^\/api\/web-displays\/[A-Za-z0-9_-]+\/artifacts\/[a-f0-9]{64}$/.test(next.content.url)) {
+          // Device credentials stay in headers. Never put a token in an img URL,
+          // use admin cookies, or forward authorization across a redirect.
+          url = new URL(next.content.url, new URL(connectionApiUrl, window.location.origin)).toString();
+          const response = await fetch(url, { headers: { Authorization: `Bearer ${credential}` }, credentials: 'omit', redirect: 'error' });
+          if (!response.ok) throw new Error();
+          blobUrl = URL.createObjectURL(await response.blob());
+          url = blobUrl;
+        }
+        if (stopped) { if (blobUrl) URL.revokeObjectURL(blobUrl); return; }
+        const image = new Image();
+        image.onload = () => {
+          if (stopped || next.revision < displayedRevision.current) { if (blobUrl) URL.revokeObjectURL(blobUrl); return; }
+          if (displayedBlob.current) URL.revokeObjectURL(displayedBlob.current);
+          displayedBlob.current = blobUrl;
+          displayedRevision.current = next.revision;
+          setPresentation({ ...next, content: { ...next.content, url } });
+        };
+        image.onerror = () => {
+          if (blobUrl) URL.revokeObjectURL(blobUrl);
+          if (!stopped) setMessage('The next screen could not be loaded. Keeping the previous publication.');
+        };
+        image.src = url;
+      } catch {
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        if (!stopped) setMessage('The next screen could not be loaded. Keeping the previous publication.');
+      }
     };
 
     connect();

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PrismaClient } from "@prisma/client";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PublicationCleanupService } from "../src/publications/publication-cleanup.service";
@@ -19,6 +19,20 @@ import { SleepyDeliveryPolicy, ResponsivePullDeliveryPolicy } from '../src/devic
 import { HttpPullTransportAdapter } from '../src/device-platform/http-pull.transport-adapter';
 import { TransportAdapterRegistry } from '../src/device-platform/transport-adapter.registry';
 import { hashToken } from '../src/common/utils/crypto.util';
+import { randomUUID } from 'node:crypto';
+import { PublishService } from '../src/publications/publish.service';
+import { PresentationService } from '../src/device-platform/presentation.service';
+import { canonicalJson, sha256 } from '../src/publications/publication-content';
+import { PULL_FIXTURE_ARTIFACTS } from '../src/device-platform/pull-fixture-artifacts';
+import { OutboxStore } from '../src/events/outbox.store';
+import { parseOutboxEvent } from '../src/events/outbox.types';
+import { DevicePlatformModule } from '../src/device-platform/device-platform.module';
+import { PublicationsModule } from '../src/publications/publications.module';
+import { EventsModule } from '../src/events/events.module';
+import { APP_GUARD } from '@nestjs/core';
+import { PinAuthGuard } from '../src/auth/guards/pin-auth.guard';
+import { AdminSessionService } from '../src/auth/admin-session.service';
+import request from 'supertest';
 
 const backendRoot = resolve(import.meta.dir, "..");
 const migrationScript = join(backendRoot, "scripts", "migrate-database.ts");
@@ -49,6 +63,8 @@ describe("publication persistence boundary", () => {
   let persistence: PublicationPersistenceService;
   let cleanup: PublicationCleanupService;
   let path: string;
+  let writes: string[];
+  let publisher: PublishService;
 
   beforeEach(async () => {
     const directory = mkdtempSync(join(tmpdir(), "inker-publication-test-"));
@@ -57,10 +73,14 @@ describe("publication persistence boundary", () => {
     await migrate(path);
     prisma = new PrismaClient({
       datasources: { db: { url: databaseUrl(path) } },
+      log: [{ level: 'query', emit: 'event' }],
     });
+    writes = [];
+    prisma.$on('query' as never, (event: { query: string }) => { if (/^\s*(UPDATE|INSERT|DELETE|REPLACE)\b/i.test(event.query)) writes.push(event.query); });
     await prisma.$connect();
     persistence = new PublicationPersistenceService(prisma as any);
     cleanup = new PublicationCleanupService(prisma as any);
+    publisher = new PublishService(prisma as any, persistence);
   }, 30_000);
 
   afterEach(async () => {
@@ -68,6 +88,238 @@ describe("publication persistence boundary", () => {
     for (const directory of createdDirectories.splice(0)) {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  async function target(name = 'browser', pull = false) {
+    return prisma.device.create({ data: { name, externalId: name, lastSeenAt: new Date(),
+      profileId: pull ? 'trmnl-byod-7.5-mono' : 'browser-hd-1920x1080',
+      deliveryPolicyId: pull ? 'reference-sleepy' : 'reference-connected-browser' } });
+  }
+  function command(deviceIds: number[] = [], expectedRevision = 0) {
+    return { idempotencyKey: randomUUID(), expectedRevision, deviceIds,
+      draft: { fixtureArtifacts: ['mono-800x480-white-bmp', 'mono-800x480-white-png'] } };
+  }
+
+  test('WP-17 explicit publish validates input, hashes canonical content and atomically assigns with two events', async () => {
+    const d = await target();
+    const input = command([d.id]);
+    const result = await publisher.publish('main', input) as any;
+    const revision = await prisma.publicationRevision.findUniqueOrThrow({ where: { publicationRevisionId: result.publicationRevisionId } });
+    expect(revision.contentHash).toBe(sha256(canonicalJson(revision.content)));
+    expect(await prisma.outboxEvent.count()).toBe(2);
+    expect((await persistence.getDevicePublicationState(d.id))?.desiredPublicationRevisionId).toBe(revision.publicationRevisionId);
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: d.id } })).presentationRevision).toBe(1);
+    const before = await prisma.devicePublicationState.findUnique({ where: { deviceId: d.id } });
+    writes.length = 0;
+    expect(await publisher.publish('main', input)).toEqual(result);
+    expect(writes).toEqual([]);
+    expect(await prisma.devicePublicationState.findUnique({ where: { deviceId: d.id } })).toEqual(before);
+    await expect(publisher.publish('main', { ...input, expectedRevision: 1 })).rejects.toThrow('Idempotency key');
+    await expect(publisher.publish('main', command([], 0))).rejects.toThrow('revision conflict');
+    await expect(publisher.publish('main', { ...command(), draft: { fixtureArtifacts: ['unknown'], credential: 'secret' } })).rejects.toThrow();
+    expect(await prisma.publicationRevision.count()).toBe(1);
+    expect(await prisma.publicationCommand.count()).toBe(1);
+  });
+
+  test('WP-17 100 sequential and 100 parallel browser/pull reads perform zero SQL writes', async () => {
+    const browser = await target(), pull = await target('pull', true);
+    await publisher.publish('stable', command([browser.id, pull.id]));
+    const module = await Test.createTestingModule({ imports: [DevicePlatformModule, EventsModule] })
+      .overrideProvider(PrismaService).useValue(prisma).compile();
+    const app = module.createNestApplication(); await app.init();
+    try {
+      const d = await prisma.device.findUniqueOrThrow({ where: { id: pull.id }, include: { profile: true, deliveryPolicy: true } });
+      const read = async () => [await module.get(PresentationService).getForDevice(browser.id), (await module.get(PullContentService).read(d)).manifest];
+      const before = await prisma.device.findMany();
+      const reference = await read();
+      writes.length = 0;
+      for (let i = 0; i < 100; i++) expect(await read()).toEqual(reference);
+      const parallel = await Promise.all(Array.from({ length: 100 }, read));
+      for (const value of parallel) expect(value).toEqual(reference);
+      expect(writes).toEqual([]);
+      expect(await prisma.device.findMany()).toEqual(before);
+    } finally { await app.close(); }
+  }, 30_000);
+
+  test('WP-17 simultaneous publishers across separate clients: same key replays, different keys conflict', async () => {
+    const other = new PrismaClient({ datasources: { db: { url: databaseUrl(path) } } });
+    const second = new PublishService(other as any, new PublicationPersistenceService(other as any));
+    const input = command();
+    try {
+      const same = await Promise.all(Array.from({ length: 8 }, (_, i) => (i % 2 ? publisher : second).publish('race', input)));
+      for (const result of same) expect(result).toEqual(same[0]);
+      const attempts = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => (i % 2 ? publisher : second).publish('race', command([], 1))));
+      expect(attempts.filter(a => a.status === 'fulfilled')).toHaveLength(1);
+      for (const attempt of attempts) if (attempt.status === 'rejected') expect(attempt.reason.getStatus()).toBe(409);
+      expect(await prisma.publicationRevision.count()).toBe(2);
+      expect(await prisma.outboxEvent.count()).toBe(2);
+    } finally { await other.$disconnect(); }
+  }, 30_000);
+
+  test('WP-17 publication, receipt, desired state, sequence and outbox roll back on assignment-event failure', async () => {
+    const d = await target();
+    const initial = await publisher.publish('rollback', command([d.id])) as any;
+    const before = await prisma.device.findUnique({ where: { id: d.id } });
+    await prisma.$executeRawUnsafe("CREATE TRIGGER fail_wp17 BEFORE INSERT ON outbox_events WHEN NEW.event_type = 'device.publication.desired-revision.changed' BEGIN SELECT RAISE(ABORT, 'forced'); END");
+    const input = command([d.id], 1);
+    await expect(publisher.publish('rollback', input)).rejects.toThrow();
+    expect(await prisma.publicationRevision.count()).toBe(1);
+    expect(await prisma.publicationCommand.count()).toBe(1);
+    expect(await prisma.outboxEvent.count()).toBe(2);
+    expect(await prisma.device.findUnique({ where: { id: d.id } })).toEqual(before);
+    expect((await persistence.getDevicePublicationState(d.id))?.desiredPublicationRevisionId).toBe(initial.publicationRevisionId);
+    await prisma.$executeRawUnsafe('DROP TRIGGER fail_wp17');
+    expect((await publisher.publish('rollback', input) as any).revision).toBe(2);
+  });
+
+  test('WP-17 uploaded draft pixels survive edits, deletion and restart; replay never rereads the draft', async () => {
+    const directory = join(backendRoot, 'uploads', 'screens');
+    mkdirSync(directory, { recursive: true });
+    const filename = `${randomUUID()}.png`, file = join(directory, filename);
+    writeFileSync(file, PULL_FIXTURE_ARTIFACTS[2].bytes);
+    try {
+      const d = await target();
+      const screen = await prisma.screen.create({ data: { name: 'secret-metadata-not-copied', imageUrl: `/uploads/screens/${filename}` } });
+      const input = { ...command([d.id]), draft: { screenId: screen.id, expectedUpdatedAt: screen.updatedAt.toISOString() } };
+      const result = await publisher.publish('upload', input) as any;
+      const service = new PresentationService(prisma as any);
+      const manifest = await service.getForDevice(d.id);
+      const hash = manifest.content.url.split('/').pop()!;
+      const artifact = await service.artifact(d.id, hash);
+      expect(sha256(artifact.bytes)).toBe(hash);
+      await prisma.screen.update({ where: { id: screen.id }, data: { imageUrl: '/uploads/changed.png' } });
+      await expect(publisher.publish('upload', { ...input, idempotencyKey: randomUUID(), expectedRevision: 1 })).rejects.toThrow('Draft changed');
+      await prisma.screen.delete({ where: { id: screen.id } });
+      writeFileSync(file, 'unavailable');
+      await prisma.$disconnect(); await prisma.$connect();
+      expect(await publisher.publish('upload', input)).toEqual(result);
+      expect(await service.getForDevice(d.id)).toEqual(manifest);
+      expect((await service.artifact(d.id, hash)).bytes).toEqual(artifact.bytes);
+      expect(JSON.stringify(await prisma.publicationRevision.findMany())).not.toContain('secret-metadata');
+      expect(JSON.stringify(await prisma.outboxEvent.findMany())).not.toContain(filename);
+    } finally { unlinkSync(file); }
+  });
+
+  test('WP-17 retry snapshots never mint revisions and preserve their original content after a new publish', async () => {
+    const d = await target();
+    await publisher.publish('delivery', command([d.id]));
+    const store = new OutboxStore(prisma as any);
+    const events = await prisma.outboxEvent.findMany({ where: { eventType: 'device.publication.desired-revision.changed' } });
+    const key = parseOutboxEvent(events[0]).key;
+    await prisma.outboxEffect.create({ data: { key, eventId: events[0].eventId } });
+    const delivery = await prisma.outboxDelivery.create({ data: { effectKey: key, deviceId: d.id } });
+    const context = { deliveryId: delivery.deliveryId, signal: new AbortController().signal };
+    const service = new PresentationService(prisma as any);
+    const before = await prisma.device.findUnique({ where: { id: d.id } });
+    const other = new PrismaClient({ datasources: { db: { url: databaseUrl(path) } } });
+    let first: Awaited<ReturnType<PresentationService['getForDevice']>>;
+    try {
+      const competing = new PresentationService(other as any);
+      const initial = await Promise.all(Array.from({ length: 8 }, (_, i) => (i % 2 ? service : competing).getForDevice(d.id, context)));
+      first = initial[0];
+      for (const manifest of initial) expect(manifest).toEqual(first);
+    } finally { await other.$disconnect(); }
+    for (const retry of await Promise.all(Array.from({ length: 10 }, () => service.getForDevice(d.id, context)))) expect(retry).toEqual(first);
+    expect(await prisma.device.findUnique({ where: { id: d.id } })).toEqual(before);
+    await publisher.publish('delivery', command([d.id], 1));
+    expect(await service.getForDevice(d.id, context)).toEqual(first);
+    expect((await service.getForDevice(d.id)).revision).toBe(first.revision + 1);
+    expect(await prisma.publicationRevision.count()).toBe(2);
+    expect(await store.claim('still-durable')).not.toBeNull();
+  });
+
+  test('WP-17 reassignment is idempotent, conflicts are explicit, and A-B-A has distinct durable effects', async () => {
+    const d = await target();
+    const a = await publisher.publish('a', command([d.id])) as any;
+    const b = await publisher.publish('b', command()) as any;
+    await publisher.assign(d.id, { publicationRevisionId: b.publicationRevisionId, expectedDesiredRevisionId: a.publicationRevisionId });
+    await publisher.assign(d.id, { publicationRevisionId: b.publicationRevisionId, expectedDesiredRevisionId: a.publicationRevisionId });
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: d.id } })).presentationRevision).toBe(2);
+    await expect(publisher.assign(d.id, { publicationRevisionId: a.publicationRevisionId, expectedDesiredRevisionId: null })).rejects.toThrow('conflict');
+    await publisher.assign(d.id, { publicationRevisionId: a.publicationRevisionId, expectedDesiredRevisionId: b.publicationRevisionId });
+    const events = await prisma.outboxEvent.findMany({ where: { eventType: 'device.publication.desired-revision.changed' } });
+    expect(new Set(events.map(e => parseOutboxEvent(e).key)).size).toBe(3);
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: d.id } })).presentationRevision).toBe(3);
+  });
+
+  test('WP-17 APIs preserve admin/CSRF, device auth before 304 and isolated read-only manifests', async () => {
+    const module = await Test.createTestingModule({ imports: [DevicePlatformModule, PublicationsModule, EventsModule], providers: [
+      { provide: APP_GUARD, useClass: PinAuthGuard },
+      { provide: AdminSessionService, useValue: { validate: async (token: string) => token === 'test-session' ? { sessionId: 'session', adminId: 'admin' } : null, verifyCsrf: async (_id: string, token: string) => token === 'test-csrf' } },
+    ] }).overrideProvider(PrismaService).useValue(prisma).compile();
+    const app = module.createNestApplication(); app.setGlobalPrefix('api'); await app.init();
+    try {
+      const d = await target(), pull = await target('api-pull', true);
+      const browserToken = 'browser-token-012345678901234567890123456789';
+      const browserAuthorization = `Bearer ${browserToken}`;
+      await prisma.deviceCredential.create({ data: { deviceId: d.id, tokenHash: hashToken(browserToken), kind: 'web-display' } });
+      await prisma.deviceCredential.create({ data: { deviceId: pull.id, tokenHash: hashToken('pull-token') } });
+      const input = command([d.id, pull.id]);
+      await request(app.getHttpServer()).post('/api/publications/api/publish').send(input).expect(401);
+      await request(app.getHttpServer()).post('/api/publications/api/publish').set('Cookie', 'inker_admin_session=test-session').send(input).expect(403);
+      const published = await request(app.getHttpServer()).post('/api/publications/api/publish').set('Cookie', 'inker_admin_session=test-session').set('X-CSRF-Token', 'test-csrf').send(input).expect(201);
+      expect(published.body.revision).toBe(1);
+      const webUrl = `/api/web-displays/${d.externalId}/presentation`;
+      const first = await request(app.getHttpServer()).get(webUrl).set('Authorization', browserAuthorization).expect(200);
+      writes.length = 0;
+      for (let i = 0; i < 100; i++) expect((await request(app.getHttpServer()).get(webUrl).set('Authorization', browserAuthorization).expect(200)).body).toEqual(first.body);
+      await Promise.all(Array.from({ length: 100 }, async () => expect((await request(app.getHttpServer()).get(webUrl).set('Authorization', browserAuthorization).expect(200)).body).toEqual(first.body)));
+      expect(writes).toEqual([]);
+      const artifact = await request(app.getHttpServer()).get(first.body.content.url).set('Authorization', browserAuthorization).expect(200);
+      const unchanged = await request(app.getHttpServer()).get(first.body.content.url).set('Authorization', browserAuthorization).set('If-None-Match', artifact.headers.etag).expect(304);
+      expect(unchanged.text).toBe('');
+      await request(app.getHttpServer()).get(first.body.content.url).set('If-None-Match', artifact.headers.etag).expect(401);
+      const pullFirst = await request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').expect(200);
+      writes.length = 0;
+      for (let i = 0; i < 100; i++) await request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').set('If-None-Match', pullFirst.headers.etag).expect(304).expect(r => expect(r.text).toBe(''));
+      await Promise.all(Array.from({ length: 100 }, () => request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').expect(200).expect(r => expect(r.body).toEqual(pullFirst.body))));
+      expect(writes).toEqual([]);
+      await prisma.deviceCredential.updateMany({ where: { deviceId: d.id }, data: { revokedAt: new Date() } });
+      await request(app.getHttpServer()).get(first.body.content.url).set('Authorization', browserAuthorization).set('If-None-Match', artifact.headers.etag).expect(401);
+    } finally { await app.close(); }
+  }, 30_000);
+
+  test('WP-17 concurrent publish and 100 reads never mix an assignment sequence with another snapshot', async () => {
+    const d = await target();
+    await publisher.publish('interleaved', command([d.id]));
+    const service = new PresentationService(prisma as any);
+    const first = await service.getForDevice(d.id);
+    const reads = Array.from({ length: 100 }, () => service.getForDevice(d.id));
+    const write = publisher.publish('interleaved', command([d.id], 1));
+    const results = await Promise.all(reads);
+    await write;
+    const second = await service.getForDevice(d.id);
+    for (const manifest of results) expect(manifest).toEqual(manifest.revision === 1 ? first : second);
+    expect(second.revision).toBe(2);
+  });
+
+  test('WP-17 missing/corrupt publications fail without replacing valid desired content or using a draft', async () => {
+    const d = await target();
+    const service = new PresentationService(prisma as any);
+    expect((await service.getForDevice(d.id)).content.url).toBe('/assets/publication-unassigned.svg');
+    const valid = await publisher.publish('valid', command([d.id])) as any;
+    const broken = await persistence.createPublication({ publicationKey: 'broken', protocolVersion: '1.0',
+      content: { schemaVersion: 1, fixtureArtifacts: ['mono-800x480-white-png'] }, contentHash: 'wrong-checksum' });
+    await expect(publisher.assign(d.id, { publicationRevisionId: broken.revision.publicationRevisionId, expectedDesiredRevisionId: valid.publicationRevisionId })).rejects.toThrow('unavailable');
+    await expect(publisher.assign(d.id, { publicationRevisionId: 'missing', expectedDesiredRevisionId: valid.publicationRevisionId })).rejects.toThrow('not found');
+    expect((await persistence.getDevicePublicationState(d.id))?.desiredPublicationRevisionId).toBe(valid.publicationRevisionId);
+    await persistence.setDesiredRevision(d.id, broken.revision.publicationRevisionId);
+    writes.length = 0;
+    await expect(service.getForDevice(d.id)).rejects.toThrow('unavailable');
+    expect(writes).toEqual([]);
+  });
+
+  test('WP-17 completed idempotency receipts survive revision retention and cannot reassign on replay', async () => {
+    const d = await target();
+    const input = command([d.id]);
+    const first = await publisher.publish('retained-command', input) as any;
+    const second = await publisher.publish('retained-command', command([d.id], 1)) as any;
+    const result = await cleanup.cleanup(new Date(Date.now() + 100 * 86400_000));
+    expect(result.publicationRevisions).toBe(1);
+    expect(await publisher.publish('retained-command', input)).toEqual(first);
+    expect((await persistence.getDevicePublicationState(d.id))?.desiredPublicationRevisionId).toBe(second.publicationRevisionId);
+    await expect(Promise.resolve(prisma.publicationCommand.updateMany({ data: { result: {} } }))).rejects.toThrow();
+    expect(await prisma.outboxEvent.count({ where: { status: 'pending' } })).toBe(4);
   });
 
   test("stores an immutable revision and its versioned outbox event atomically", async () => {
@@ -334,7 +586,7 @@ describe("publication persistence boundary", () => {
       expect(result.manifest.revision).toBe('1'); // Latest revision is deliberately NOT desired.
       for (let i = 0; i < 20; i++) expect((await read()).etag).toBe(result.etag);
       await module.close();
-      expect(await prisma.$queryRawUnsafe('SELECT writes FROM pull_write_count')).toEqual([{ writes: 1 }]);
+      expect(await prisma.$queryRawUnsafe<{ writes: number }[]>('SELECT writes FROM pull_write_count')).toEqual([{ writes: 1 }]);
       expect(await prisma.outboxEvent.count()).toBe(beforeEvents);
       expect(await persistence.getDevicePublicationState(device.id)).toEqual(beforeState);
 
@@ -342,7 +594,7 @@ describe("publication persistence boundary", () => {
       await prisma.$connect();
       module = await createModule();
       expect((await read()).etag).toBe(result.etag);
-      expect(await prisma.$queryRawUnsafe('SELECT writes FROM pull_write_count')).toEqual([{ writes: 1 }]);
+      expect(await prisma.$queryRawUnsafe<{ writes: number }[]>('SELECT writes FROM pull_write_count')).toEqual([{ writes: 1 }]);
       const changed = await prisma.device.update({ where: { id: device.id }, data: { deliveryPolicyId: 'reference-responsive-pull' } });
       const responsive = await read();
       expect(responsive.etag).toBe(result.etag);

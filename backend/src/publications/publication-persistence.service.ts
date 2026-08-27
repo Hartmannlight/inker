@@ -15,11 +15,11 @@ type TransactionClient = Prisma.TransactionClient;
 export class PublicationPersistenceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createPublication(input: CreatePublicationInput) {
+  async createPublication(input: CreatePublicationInput, tx?: TransactionClient) {
     this.assertRevisionInput(input);
     const occurredAt = input.publishedAt ?? new Date();
 
-    return this.prisma.$transaction(async (transaction) => {
+    return this.run(tx, async (transaction) => {
       const publication = await transaction.publication.create({
         data: { publicationKey: input.publicationKey },
       });
@@ -53,11 +53,11 @@ export class PublicationPersistenceService {
     });
   }
 
-  async appendRevision(input: AppendPublicationRevisionInput) {
+  async appendRevision(input: AppendPublicationRevisionInput, tx?: TransactionClient) {
     this.assertRevisionInput(input);
     const occurredAt = input.publishedAt ?? new Date();
 
-    return this.prisma.$transaction(async (transaction) => {
+    return this.run(tx, async (transaction) => {
       const publication = await transaction.publication.findUnique({
         where: { publicationId: input.publicationId },
       });
@@ -98,31 +98,43 @@ export class PublicationPersistenceService {
     });
   }
 
-  async setDesiredRevision(deviceId: number, publicationRevisionId: string) {
+  async setDesiredRevision(deviceId: number, publicationRevisionId: string, tx?: TransactionClient) {
     const occurredAt = new Date();
 
-    return this.prisma.$transaction(async (transaction) => {
+    return this.run(tx, async (transaction) => {
+      // Serialize assignment commands before reading the current pointer.
+      await transaction.$executeRaw`UPDATE devices SET id = id WHERE id = ${deviceId}`;
+      const current = await transaction.devicePublicationState.findUnique({ where: { deviceId } });
+      if (current?.desiredPublicationRevisionId === publicationRevisionId) return current;
       const revision = await this.requireRevision(
         transaction,
         publicationRevisionId,
       );
+      const device = await transaction.device.update({ where: { id: deviceId },
+        data: { presentationRevision: { increment: 1 } }, select: { presentationRevision: true } });
       const state = await transaction.devicePublicationState.upsert({
         where: { deviceId },
         create: {
           deviceId,
           desiredPublicationRevisionId: publicationRevisionId,
+          desiredSequence: device.presentationRevision,
           desiredAt: occurredAt,
         },
         update: {
           desiredPublicationRevisionId: publicationRevisionId,
+          desiredSequence: device.presentationRevision,
           desiredAt: occurredAt,
         },
       });
+
+      // Browser compatibility sequence: advances on explicit assignment only,
+      // including switching back to an older revision or another publication.
 
       await this.createOutboxEvent(transaction, {
         eventType: PUBLICATION_EVENT_TYPES.desiredRevisionChanged,
         aggregateType: "DevicePublicationState",
         aggregateId: String(deviceId),
+        aggregateRevision: String(device.presentationRevision),
         payload: {
           deviceId,
           publicationId: revision.publicationId,
@@ -232,6 +244,7 @@ export class PublicationPersistenceService {
       eventType: string;
       aggregateType: string;
       aggregateId: string;
+      aggregateRevision?: string;
       payload: Prisma.InputJsonValue;
       occurredAt: Date;
     },
@@ -243,6 +256,10 @@ export class PublicationPersistenceService {
         availableAt: input.occurredAt,
       },
     });
+  }
+
+  private run<T>(tx: TransactionClient | undefined, operation: (transaction: TransactionClient) => Promise<T>): Promise<T> {
+    return tx ? operation(tx) : this.prisma.$transaction(operation);
   }
 
   private assertRevisionInput(input: {

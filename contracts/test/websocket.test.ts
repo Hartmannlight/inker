@@ -32,7 +32,10 @@ describe('device WebSocket v1 boundary', () => {
     const presentation = { deviceId: 1, externalId: 'screen', revision: 2, generatedAt: '2026-08-27T00:00:00Z', nextTransitionAt: null,
       viewport: { width: 800, height: 480 }, content: { kind: 'image', url: '/api/device-images/device/1?t=2', title: 'Screen', fit: 'contain', background: '#ffffff' } };
     expect(parseDeviceServerMessage({ protocolVersion: '1.0', type: 'presentation.changed', presentation }).success).toBe(true);
-    for (const url of ['/image?token=secret', 'https://user:secret@example.com/img', '//example.com/img', '/image?credential=secret']) {
+    expect(parseDeviceServerMessage({ protocolVersion: '1.0', type: 'presentation.changed', presentation: { ...presentation,
+      content: { ...presentation.content, url: `/api/web-displays/screen/artifacts/${'a'.repeat(64)}` } } }).success).toBe(true);
+    for (const url of ['/image?token=secret', 'https://user:secret@example.com/img', '//example.com/img', '/image?credential=secret',
+      `/api/web-displays/screen/artifacts/${'a'.repeat(64)}?t=2`, '/api/web-displays/screen/pair', '/api/web-displays/../artifacts/hash']) {
       expect(parseDeviceServerMessage({ protocolVersion: '1.0', type: 'presentation.changed', presentation: { ...presentation, content: { ...presentation.content, url } } }).success).toBe(false);
     }
   });

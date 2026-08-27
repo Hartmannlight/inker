@@ -73,7 +73,8 @@ function manifest(value: unknown): WebDisplayManifest {
   const r = record(value), content = record(r.content), viewport = record(r.viewport);
   const url = text(content.url, 2048);
   // The compatibility path only needs local images and known non-secret render parameters.
-  if (!/^\/(?:uploads\/|assets\/|api\/device-images\/|api\/plugins\/instances\/)[A-Za-z0-9_./%?=&+-]+$/.test(url) || /%2f|%5c|\.\./i.test(url)) throw new Error();
+  const publicationArtifact = /^\/api\/web-displays\/[A-Za-z0-9_-]+\/artifacts\/[a-f0-9]{64}$/.test(url);
+  if ((!publicationArtifact && !/^\/(?:uploads\/|assets\/|api\/device-images\/|api\/plugins\/instances\/)[A-Za-z0-9_./%?=&+-]+$/.test(url)) || /%2f|%5c|\.\./i.test(url)) throw new Error();
   const [path, query] = url.split('?');
   if (!path || url.split('?').length > 2) throw new Error();
   if (query) for (const pair of query.split('&')) {

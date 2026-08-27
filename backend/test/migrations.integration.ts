@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -100,6 +101,37 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-17 preserves published state and delivery identity while invalidating only legacy retry snapshots', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp17-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
+    const latest = '20260828000000_explicit_publications';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath);
+    try {
+      database.exec(`
+        INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,updated_at)
+          VALUES(10,'upgrade','upgrade','browser-hd-1920x1080','reference-connected-browser',42,CURRENT_TIMESTAMP);
+        INSERT INTO publications(publication_id,publication_key) VALUES('publication','upgrade');
+        INSERT INTO publication_revisions(publication_revision_id,publication_id,revision,protocol_version,content,content_hash)
+          VALUES('revision','publication',1,'1.0','{"fixtureArtifacts":["mono-800x480-white-png"]}','legacy-hash');
+        INSERT INTO device_publication_states(device_id,desired_publication_revision_id,acknowledged_publication_revision_id,updated_at)
+          VALUES(10,'revision','revision',CURRENT_TIMESTAMP);
+        INSERT INTO outbox_effects(key,event_id) VALUES('effect','event');
+        INSERT INTO outbox_deliveries(delivery_id,effect_key,device_id,presentation)
+          VALUES('delivery','effect',10,'{"revision":42,"content":{"url":"/api/device-images/design/1"}}');
+      `);
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(database.query('SELECT desired_publication_revision_id, acknowledged_publication_revision_id, desired_sequence FROM device_publication_states').get()).toEqual({
+        desired_publication_revision_id: 'revision', acknowledged_publication_revision_id: 'revision', desired_sequence: 42,
+      });
+      expect(database.query('SELECT delivery_id, effect_key, presentation FROM outbox_deliveries').get()).toEqual({ delivery_id: 'delivery', effect_key: 'effect', presentation: null });
+      expect(database.query('SELECT content_hash FROM publication_revisions').get()).toEqual({ content_hash: 'legacy-hash' });
+      expect(database.query('SELECT * FROM publication_commands').all()).toEqual([]);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
   test("installs a fresh database and is idempotent on restart", async () => {
     const databasePath = join(createTemporaryDirectory(), "fresh.db");
 
@@ -127,6 +159,7 @@ describe("Prisma migration baseline", () => {
         "20260824004000_device_enrollments",
         "20260825000000_admin_credentials_sessions",
         "20260827000000_outbox_dispatch",
+        "20260828000000_explicit_publications",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

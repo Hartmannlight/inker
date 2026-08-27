@@ -1,169 +1,76 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { PresentationManifest } from './presentation.types';
-import { resolveDeviceConfiguration } from './device-configuration';
+import { Injectable, NotAcceptableException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
+import { PrismaService } from '../prisma/prisma.service';
+import { resolveDeviceConfiguration } from './device-configuration';
 import type { DeliveryContext } from '../events/outbox.types';
-import { parseDeviceServerMessage } from '@inker/contracts';
+import { publicationArtifacts } from '../publications/publication-content';
 
 @Injectable()
 export class PresentationService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getForDevice(deviceId: number, context?: DeliveryContext): Promise<PresentationManifest> {
+  async getForDevice(deviceId: number, context?: DeliveryContext): Promise<WebDisplayManifest> {
     if (!context) return this.build(deviceId, this.prisma);
     context.signal.throwIfAborted();
+    const cached = await this.prisma.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: context.deliveryId } });
+    if (cached.deviceId !== deviceId) throw new Error('OUTBOX_DEVICE_MISMATCH');
+    if (cached.presentation) return this.validate(cached.presentation);
     return this.prisma.$transaction(async tx => {
-      // Acquire the SQLite writer lock before reading; simultaneous adapter
-      // processes prepare exactly one revision/snapshot for this delivery.
-      await tx.outboxDelivery.update({ where: { deliveryId: context.deliveryId, deviceId }, data: { deviceId } });
+      // Technical receipt only. Neither initial delivery nor retries publish,
+      // rotate playlists, change device state or increment a domain revision.
+      await tx.$executeRaw`UPDATE outbox_deliveries SET device_id = device_id WHERE delivery_id = ${context.deliveryId} AND device_id = ${deviceId}`;
       const receipt = await tx.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: context.deliveryId } });
       if (receipt.deviceId !== deviceId) throw new Error('OUTBOX_DEVICE_MISMATCH');
-      if (receipt.presentation) return receipt.presentation as unknown as PresentationManifest;
+      if (receipt.presentation) return this.validate(receipt.presentation);
       const presentation = await this.build(deviceId, tx);
-      // Validate URL/field secrecy before persisting a retry snapshot, not only
-      // at the later WebSocket boundary.
-      if (!parseDeviceServerMessage({ protocolVersion: '1.0', type: 'presentation.changed', presentation }).success) {
-        throw new Error('OUTBOX_INVALID_PRESENTATION');
-      }
       context.signal.throwIfAborted();
-      await tx.outboxDelivery.update({ where: { deliveryId: receipt.deliveryId },
+      await tx.outboxDelivery.update({ where: { deliveryId: context.deliveryId },
         data: { presentation: presentation as unknown as Prisma.InputJsonValue } });
       return presentation;
     });
   }
 
-  private async build(deviceId: number, database: Prisma.TransactionClient): Promise<PresentationManifest> {
-    const device = await database.device.findUnique({
-      where: { id: deviceId },
-      include: {
-        profile: true,
-        deliveryPolicy: true,
-        playlist: {
-          include: {
-            items: {
-              include: {
-                screen: true,
-                screenDesign: true,
-                pluginInstance: { include: { plugin: true } },
-              },
-              orderBy: { order: 'asc' },
-            },
-          },
-        },
-      },
-    });
+  async artifact(deviceId: number, hash: string) {
+      const { artifact } = await this.read(deviceId, this.prisma);
+      if (!artifact || artifact.sha256 !== hash) throw new NotFoundException('Published artifact not found');
+      return artifact;
+  }
+
+  private async read(deviceId: number, database: Prisma.TransactionClient) {
+    const device = await database.device.findUnique({ where: { id: deviceId }, include: {
+      profile: true, deliveryPolicy: true, publicationState: { include: { desiredRevision: true } },
+    } });
     if (!device || !device.externalId) throw new NotFoundException('Display device not found');
+    const display = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride).capabilities.display;
+    const revision = device.publicationState?.desiredRevision;
+    const artifacts = revision ? publicationArtifacts(revision) : [];
+    const artifact = display.renderFormats.flatMap(format => artifacts.filter(a => a.format === format && display.mimeTypes.includes(a.mimeType)))[0];
+    // Browser scales an immutable image to its viewport. Pull continues to
+    // require an exact hardware variant, including dimensions/depth/rotation.
+    if (revision && !artifact) throw new NotAcceptableException('No compatible published browser artifact');
+    return { device, display, revision, artifact };
+  }
 
-    const now = new Date();
-    const items = device.playlist?.items ?? [];
-    let item: (typeof items)[number] | null = null;
-    let startedAt = device.screenStartedAt ?? now;
-    let nextTransitionAt: Date | null = null;
-
-    if (items.length > 0) {
-      const ids = items.map((candidate) => this.itemId(candidate));
-      let index = device.lastScreenId ? ids.indexOf(device.lastScreenId) : -1;
-      if (index < 0) {
-        index = 0;
-        startedAt = now;
-      } else {
-        let elapsed = Math.max(0, now.getTime() - startedAt.getTime());
-        const cycleMs = items.reduce((sum, candidate) => sum + this.durationMs(candidate.duration), 0);
-        if (cycleMs > 0 && elapsed > cycleMs) elapsed %= cycleMs;
-        while (elapsed >= this.durationMs(items[index].duration)) {
-          elapsed -= this.durationMs(items[index].duration);
-          index = (index + 1) % items.length;
-        }
-        startedAt = new Date(now.getTime() - elapsed);
-      }
-      item = items[index];
-      nextTransitionAt = new Date(startedAt.getTime() + this.durationMs(item.duration));
-    }
-
-    const currentId = item ? this.itemId(item) : null;
-    const updated = await database.device.update({
-      where: { id: device.id },
-      data: {
-        lastScreenId: currentId,
-        screenStartedAt: item ? startedAt : null,
-        presentationRevision: { increment: 1 },
-      },
-      select: { presentationRevision: true },
+  private async build(deviceId: number, database: Prisma.TransactionClient): Promise<WebDisplayManifest> {
+    const { device, display, revision, artifact } = await this.read(deviceId, database);
+    return this.validate({
+      deviceId: device.id, externalId: device.externalId,
+      // Pointer and assignment sequence come from the same state row/read.
+      // Reading the immutable referenced content needs no interactive transaction.
+      revision: device.publicationState?.desiredSequence ?? device.presentationRevision,
+      generatedAt: (revision?.publishedAt ?? device.createdAt).toISOString(),
+      nextTransitionAt: null,
+      content: { kind: 'image', fit: 'contain', background: '#ffffff',
+        title: revision ? 'Published content' : 'No publication assigned',
+        url: artifact ? `/api/web-displays/${device.externalId}/artifacts/${artifact.sha256}` : '/assets/publication-unassigned.svg' },
+      viewport: { width: display.width, height: display.height },
     });
-
-    const content = this.contentFor(item, device, updated.presentationRevision);
-    const viewport = device.profile && device.deliveryPolicy
-      ? resolveDeviceConfiguration(
-          device.profile,
-          device.deliveryPolicy,
-          device.capabilitiesOverride,
-        ).capabilities.display
-      : { width: device.width || 1920, height: device.height || 1080 };
-    return {
-      deviceId: device.id,
-      externalId: device.externalId,
-      revision: updated.presentationRevision,
-      generatedAt: now.toISOString(),
-      nextTransitionAt: nextTransitionAt?.toISOString() ?? null,
-      content,
-      viewport: {
-        width: viewport.width,
-        height: viewport.height,
-      },
-    };
   }
 
-  private durationMs(duration: number | null): number {
-    return Math.max(1, duration ?? 60) * 1000;
-  }
-
-  private itemId(item: any): string {
-    if (item.screenDesign) return `design-${item.screenDesign.id}`;
-    if (item.screen) return `screen-${item.screen.id}`;
-    if (item.pluginInstance) return `plugin-${item.pluginInstance.id}`;
-    return `item-${item.id}`;
-  }
-
-  private contentFor(item: any | null, device: any, revision: number): PresentationManifest['content'] {
-    if (item?.screen) {
-      return {
-        kind: 'image',
-        url: item.screen.imageUrl,
-        title: item.screen.name,
-        fit: 'contain',
-        background: '#000000',
-      };
-    }
-    if (item?.screenDesign) {
-      const query = new URLSearchParams({
-        mode: 'preview',
-        t: String(revision),
-        deviceName: device.name,
-      });
-      return {
-        kind: 'image',
-        url: `/api/device-images/design/${item.screenDesign.id}?${query.toString()}`,
-        title: item.screenDesign.name,
-        fit: 'contain',
-        background: item.screenDesign.background || '#ffffff',
-      };
-    }
-    if (item?.pluginInstance) {
-      return {
-        kind: 'image',
-        url: `/api/plugins/instances/${item.pluginInstance.id}/render?mode=preview&t=${revision}`,
-        title: item.pluginInstance.name || item.pluginInstance.plugin?.name || 'Plugin',
-        fit: 'contain',
-        background: '#ffffff',
-      };
-    }
-    return {
-      kind: 'image',
-      url: `/api/device-images/device/${device.id}?t=${revision}`,
-      title: 'Inker',
-      fit: 'contain',
-      background: '#ffffff',
-    };
+  private validate(presentation: unknown): WebDisplayManifest {
+    const parsed = parseDeviceServerMessage({ protocolVersion: '1.0', type: 'presentation.changed', presentation });
+    if (!parsed.success || parsed.data.type !== 'presentation.changed') throw new Error('OUTBOX_INVALID_PRESENTATION');
+    return parsed.data.presentation;
   }
 }

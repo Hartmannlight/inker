@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp15-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp17-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
@@ -40,8 +40,9 @@ function connect(device, token, options = {}) {
 }
 async function main() {
   try {
-    docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
-      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', process.env.INKER_SMOKE_IMAGE || 'inker:wp15-test');
+    // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
+    docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
+      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', process.env.INKER_SMOKE_IMAGE || 'inker:wp17-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
@@ -54,17 +55,39 @@ async function main() {
     const token = pair.body.credential; secrets.push(token);
     const http = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: { Authorization: `Bearer ${token}` } }); assert.equal(http.response.status, 200);
     const active = connect(device, token); await until(() => active.messages.some(m => m.type === 'presentation.changed'));
-    if (process.env.INKER_SMOKE_IMAGE === 'inker:wp16-test') {
+    {
+      stage = 'explicit publish';
+      const publishInput = { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [device.id], draft: { fixtureArtifacts: ['mono-800x480-white-png'] } };
+      assert.equal((await request('/api/publications/browser/publish', { method: 'POST', headers: { Cookie: cookie }, data: publishInput })).response.status, 403);
+      const publication = await request('/api/publications/browser/publish', { method: 'POST', admin: true, data: publishInput });
+      assert.equal(publication.response.status, 201);
+      assert.deepEqual((await request('/api/publications/browser/publish', { method: 'POST', admin: true, data: publishInput })).body, publication.body);
+      await until(() => active.messages.filter(m => m.type === 'presentation.changed').length === 2);
+      const manifestPath = `/api/web-displays/${device.externalId}/presentation`;
+      const auth = { Authorization: `Bearer ${token}` };
+      const publishedManifest = await request(manifestPath, { headers: auth });
+      db(`await p.$executeRawUnsafe('CREATE TABLE wp17_writes (n INTEGER NOT NULL)'); await p.$executeRawUnsafe('INSERT INTO wp17_writes VALUES (0)');
+        await p.$executeRawUnsafe('CREATE TRIGGER wp17_device_writes AFTER UPDATE OF presentation_revision,last_screen_id,screen_started_at ON devices BEGIN UPDATE wp17_writes SET n=n+1; END');
+        await p.$executeRawUnsafe('CREATE TRIGGER wp17_state_writes AFTER UPDATE ON device_publication_states BEGIN UPDATE wp17_writes SET n=n+1; END'); console.log('true');`);
+      stage = '100 sequential manifest reads';
+      for (let i = 0; i < 100; i++) assert.deepEqual((await request(manifestPath, { headers: auth })).body, publishedManifest.body);
+      stage = '100 parallel manifest reads';
+      await Promise.all(Array.from({ length: 100 }, async () => assert.deepEqual((await request(manifestPath, { headers: auth })).body, publishedManifest.body)));
+      assert.equal(db("console.log(JSON.stringify(await p.$queryRawUnsafe('SELECT n FROM wp17_writes')));")[0].n, 0);
+      stage = 'browser artifact auth and conditional get';
+      const image = await fetch(base + publishedManifest.body.content.url, { headers: auth }); assert.equal(image.status, 200);
+      const unchanged = await fetch(base + publishedManifest.body.content.url, { headers: { ...auth, 'If-None-Match': image.headers.get('etag') } });
+      assert.equal(unchanged.status, 304); assert.equal(await unchanged.text(), '');
+      assert.equal((await fetch(base + publishedManifest.body.content.url, { headers: { 'If-None-Match': image.headers.get('etag') } })).status, 401);
       stage = 'outbox refresh';
       const before = active.messages.filter(m => m.type === 'presentation.changed').length;
       assert.equal((await request(`/api/devices/${device.id}/refresh`, { method: 'POST', admin: true })).response.status, 201);
-      stage = 'outbox websocket delivery';
-      await until(() => active.messages.filter(m => m.type === 'presentation.changed').length === before + 1);
       stage = 'outbox durable ack';
       await until(() => db("console.log(JSON.stringify(await p.outboxEvent.count({where:{eventType:'device:refresh',status:'delivered'}})));") === 1);
+      assert.equal(active.messages.filter(m => m.type === 'presentation.changed').length, before);
       const outbox = JSON.stringify(db('console.log(JSON.stringify(await p.outboxEvent.findMany()));'));
       for (const value of secrets) assert.equal(outbox.includes(value), false);
-      console.info('WP-16 container outbox refresh and secret audit passed');
+      console.info('WP-17 publish/replay, 100 sequential + 100 parallel read-only manifests, authenticated artifacts and WP-16 durable refresh passed');
     }
     stage = 'heartbeat'; await until(() => active.pings >= 1, 450); assert.equal(active.code, undefined);
     stage = 'rotation';
@@ -80,8 +103,9 @@ async function main() {
     const setup = await request('/api/setup', { headers: { HTTP_ID: 'AA:15:00:00:00:01' } }); assert.equal(setup.response.status, 200);
     pull.apiKey = setup.body.api_key; assert.ok(pull.apiKey); secrets.push(pull.apiKey);
     stage = 'pull-fixture';
-    const fixture = db(`const r=await p.publication.create({data:{publicationKey:'wp15-smoke',revisions:{create:{revision:1,protocolVersion:'1.0',contentHash:'wp15-fixture',content:{fixtureArtifacts:['mono-800x480-white-bmp','mono-800x480-white-png']}}}},include:{revisions:true}}); await p.devicePublicationState.create({data:{deviceId:input.id,desiredPublicationRevisionId:r.revisions[0].publicationRevisionId}}); console.log(JSON.stringify({id:r.publicationId}));`, { id: pull.id });
-    assert.ok(fixture.id);
+    const fixture = await request('/api/publications/pull/publish', { method: 'POST', admin: true, data: { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [pull.id], draft: { fixtureArtifacts: ['mono-800x480-white-bmp', 'mono-800x480-white-png'] } } });
+    assert.equal(fixture.response.status, 201);
+    assert.ok(fixture.body.publicationId);
     const headers = { HTTP_ID: pull.apiKey };
     stage = 'pull-manifest';
     const manifest = await request('/api/v1/device-content', { headers }); assert.equal(manifest.response.status, 200);
@@ -110,7 +134,7 @@ async function main() {
     if (logs.includes('device-configuration.catalog')) console.info('Known optional runtime seed warning observed.');
   } catch {
     console.error(`WP-15 production smoke failed at ${stage}`); process.exitCode = 1;
-    if (process.env.INKER_SMOKE_IMAGE === 'inker:wp16-test') {
+    {
       try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
     }
     try {

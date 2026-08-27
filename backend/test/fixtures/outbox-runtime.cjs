@@ -15,6 +15,7 @@ const { OutboxStore } = require('../../src/events/outbox.store');
 const { EventsService } = require('../../src/events/events.service');
 const { DeviceUpdateCoordinator } = require('../../src/device-platform/device-update-coordinator.service');
 const { WebSocketTransportAdapter } = require('../../src/device-platform/websocket.transport-adapter');
+const { PublishService } = require('../../src/publications/publish.service');
 
 async function main() {
   const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
@@ -25,6 +26,11 @@ async function main() {
   process.on('message', async ({ id, command, deviceId, designId }) => {
     try {
       if (command === 'notify') await app.get(EventsService).notifyDevicesRefresh([deviceId]);
+      if (command === 'publish') {
+        const latest = await p.publication.findUnique({ where: { publicationKey: 'system-test' }, include: { revisions: { orderBy: { revision: 'desc' }, take: 1 } } });
+        await app.get(PublishService).publish('system-test', { idempotencyKey: id, expectedRevision: latest?.revisions[0]?.revision ?? 0,
+          draft: { fixtureArtifacts: ['mono-800x480-white-png'] }, deviceIds: [deviceId] });
+      }
       if (command === 'design') await app.get(EventsService).notifyScreenDesignUpdate(designId);
       if (command === 'subscriber-off') app.get(OutboxRedisService).subscriber.disconnect();
       if (command === 'subscriber-on') await app.get(OutboxRedisService).subscriber.connect();
@@ -37,11 +43,17 @@ async function main() {
         let first = true;
         adapter.dispatchRefresh = (...args) => { if (first) { first = false; throw new Error('credential-test-secret-do-not-log'); } return original(...args); };
       }
-      if (command === 'crash-before-ack') app.get(OutboxStore).ack = async () => { process.exit(73); };
+      if (command === 'crash-before-ack') {
+        const store = app.get(OutboxStore), ack = store.ack.bind(store);
+        store.ack = async (...args) => {
+          if (args[0].eventType === 'device.publication.desired-revision.changed') process.exit(73);
+          return ack(...args);
+        };
+      }
       if (command === 'lose-target-ack-once') {
         const store = app.get(OutboxStore), finish = store.finishTarget.bind(store);
         let first = true;
-        store.finishTarget = (...args) => { if (first && args[3]) { first = false; return Promise.resolve(false); } return finish(...args); };
+        store.finishTarget = async (...args) => { if (first && args[3] && await p.outboxDelivery.count({ where: { effectKey: args[0] } })) { first = false; return false; } return finish(...args); };
       }
       if (command === 'stop') {
         await app.close(); await p.$disconnect(); process.send({ id }); process.exit(0);

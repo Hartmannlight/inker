@@ -47,7 +47,7 @@ async function connect(child, d) {
   await until(() => messages.length === 1);
   return { socket, messages };
 }
-async function latest() { return p.outboxEvent.findFirstOrThrow({ orderBy: [{ occurredAt: 'desc' }, { eventId: 'desc' }] }); }
+async function latest() { return p.outboxEvent.findFirstOrThrow({ where: { eventType: { not: 'publication.revision.created' } }, orderBy: [{ occurredAt: 'desc' }, { eventId: 'desc' }] }); }
 async function delivered() { await until(async () => (await latest()).status === 'delivered'); return latest(); }
 async function main() {
   try {
@@ -69,36 +69,39 @@ async function main() {
     await p.deviceScreenAssignment.create({ data: { screenDesignId: design.id, deviceId: d.id } });
     await command(a, 'design', { designId: design.id });
     const designEvent = await delivered();
-    await until(() => ca.messages.length === 2 && cb.messages.length === 2);
+    // Draft notifications are durable but cannot implicitly publish.
+    assert.equal(ca.messages.length, 1); assert.equal(cb.messages.length, 1);
     assert.equal(await p.outboxEvent.count(), 1);
+    await command(a, 'publish', { deviceId: d.id }); await delivered();
+    await until(() => ca.messages.length === 2 && cb.messages.length === 2);
     assert.equal(ca.messages[1].revision, cb.messages[1].revision);
     assert.equal(designEvent.eventType, 'screen_design:updated');
     progress('subscriber interruption');
     await command(b, 'subscriber-off');
-    await command(a, 'notify', { deviceId: d.id }); await delivered();
+    await command(a, 'publish', { deviceId: d.id }); await delivered();
     await until(() => ca.messages.length === 3 && cb.messages.length === 3);
     await command(b, 'subscriber-on');
     progress('retry');
-    await command(a, 'fail-once'); await command(a, 'notify', { deviceId: d.id });
+    await command(a, 'fail-once'); await command(a, 'publish', { deviceId: d.id });
     const retried = await delivered(); assert.equal(retried.attempts, 2);
     await until(() => ca.messages.length === 4 && cb.messages.length === 4);
     assert.equal(ca.messages[3].revision, cb.messages[3].revision);
     progress('lost target ack');
     await command(a, 'lose-target-ack-once');
-    await command(a, 'notify', { deviceId: d.id });
+    await command(a, 'publish', { deviceId: d.id });
     const lostAck = await delivered(); assert.equal(lostAck.attempts, 2);
     await until(() => ca.messages.length === 5 && cb.messages.length === 5);
     assert.equal(ca.messages[4].revision, cb.messages[4].revision);
     progress('Redis outage and empty restart');
     docker('stop', '-t', '1', name);
-    await command(a, 'notify', { deviceId: d.id });
+    await command(a, 'publish', { deviceId: d.id });
     await until(async () => (await latest()).attempts >= 1);
     assert.notEqual((await latest()).status, 'delivered');
     docker('start', name); await delivered();
     await until(() => ca.messages.length === 6 && cb.messages.length === 6);
     progress('crash after commit');
     await command(a, 'pause'); await command(b, 'pause');
-    await command(a, 'notify', { deviceId: d.id });
+    await command(a, 'publish', { deviceId: d.id });
     assert.equal((await latest()).status, 'pending');
     a.kill('SIGKILL'); b.kill('SIGKILL');
     await until(() => a.exitCode !== null || a.signalCode !== null);
@@ -106,7 +109,7 @@ async function main() {
     ca = await connect(a, d);
     progress('crash after dispatch before ack');
     await command(a, 'crash-before-ack');
-    await command(a, 'notify', { deviceId: d.id });
+    await command(a, 'publish', { deviceId: d.id });
     await until(() => a.exitCode === 73);
     const crashed = await latest(); assert.equal(crashed.status, 'processing');
     const revision = (await p.device.findUniqueOrThrow({ where: { id: d.id } })).presentationRevision;
