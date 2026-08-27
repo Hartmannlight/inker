@@ -66,10 +66,10 @@ müssen.
 | [x] | WP-08 | Reparierter Browser-Credential-Lebenszyklus | WP-01 |
 | [x] | WP-09 | Short-Code-Pairing im Backend | WP-06, WP-08 |
 | [x] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
-| [ ] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
+| [x] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
 | [x] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
 | [x] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
-| [ ] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
+| [x] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
 | [x] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
 | [x] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
 | [x] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
@@ -1083,6 +1083,19 @@ Kopieren nur der SQLite-Datei liefert keine direkt nutzbaren Provider-Secrets.
 
 ### Abschluss WP-11
 
+- Goal-Nachprüfung 2026-08-28: Umsetzung ist bereits in `e1a7bee` committed;
+  die offene Indexmarkierung war veraltet. Ein unabhängiger Review fand zusätzlich
+  fehlende Redaction für API-Key-/Legacy-Aliase, zitierte JSON-Werte und
+  Basic-/Digest-Authorization. Die zentrale Text-/Strukturredaction wurde korrigiert,
+  vier relevante Regressionstests zunächst rot, danach grün nachgewiesen.
+  Hauptagent: 569 Backendtests ohne Fehler, sieben Redaction- und vier echte
+  Secret-Startup-/Restart-/Missing-Secret-Integrationen, Backend-Typecheck,
+  Backend-Build und Produktions-ESLint bestanden. Der vorhandene Containernachweis
+  unten bleibt gültiger historischer Nachweis; in dieser Nachprüfung wurde kein
+  neuer Containerlauf behauptet. Keine Secretwerte in Prüfprotokollen.
+  Der bisherige Hinweis auf uncommittierte WP-11-Dateien beschreibt nur den
+  damaligen Paketabschluss. Nächster Schritt im fortlaufenden Goal: WP-19.
+
 - Status: abgeschlossen am 2026-08-25
 - Ergebnis: Bekannte Admin- und Encryption-Defaults sind entfernt. `ADMIN_PIN`
   ist explizit erforderlich, `1111` wird in Compose, Setup und Anwendung
@@ -1344,6 +1357,17 @@ hinaus.
 notieren.
 
 ### Abschluss WP-14
+
+- Goal-Nachprüfung 2026-08-28: Umsetzung ist bereits in `2f3ff2b` committed;
+  die offene Indexmarkierung wurde nach Code-/Testabgleich geschlossen. Keine
+  erneute Pull-Implementierung. Unabhängige gezielte Prüfung: 105 erfolgreiche
+  Secret-/HTTP-/Pull-/Policytests inklusive echter Nest-HTTP-Pfade und vier
+  Secret-Startupintegrationen; zusätzlich drei ausgewählte SQLite-Publication-
+  Integrationen mit parallelen read-only Abrufen und Last-Seen-/Restartverhalten.
+  Die dabei ausgefilterten anderen Paketfälle zählen nicht als ausgeführte Tests.
+  Hauptagent bestätigt die vollständige Backend-Baseline (569 nach WP-11-Fix),
+  27 Contracttests und 58 Frontendtests. Hardwaregrenzen bleiben ausdrücklich
+  offen wie unten dokumentiert. Nächster offener Indexeintrag: WP-19.
 
 - Status: abgeschlossen am 2026-08-27. Voraussetzungen WP-07 (`528c568`) und
   WP-13 (`79f14eb`) sowie WP-11 (`e1a7bee`) und WP-12 (`2052430`) sind im

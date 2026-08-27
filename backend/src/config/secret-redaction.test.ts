@@ -56,4 +56,70 @@ describe('secret redaction', () => {
     expect(text).not.toContain('csrf-value');
     expect(text).not.toContain('cookie-value');
   });
+
+  test('redacts API keys and credential aliases in free-form text', () => {
+    for (const key of ['api_key', 'apiKey', 'X-API-Key', 'private_key', 'http_id', 'access-token']) {
+      expect(redactSecretText(`request failed: ${key}=synthetic-marker`)).toBe(
+        `request failed: ${key}=[REDACTED]`,
+      );
+    }
+  });
+
+  test('redacts quoted JSON values without losing adjacent diagnostic fields', () => {
+    const document = {
+      password: 'synthetic marker with spaces, a comma; and an escaped "quote"',
+      nested: {
+        apiKey: 'synthetic-api-key',
+        authorization: 'Basic synthetic-basic-credential',
+        cookie: 'session=synthetic-cookie; other=synthetic-other-cookie',
+        http_id: 'synthetic-device-key',
+        keyId: 'public-key-id',
+        status: 'failed',
+      },
+    };
+    expect(JSON.parse(redactSecretText(JSON.stringify(document)))).toEqual({
+      password: '[REDACTED]',
+      nested: {
+        apiKey: '[REDACTED]',
+        authorization: '[REDACTED]',
+        cookie: '[REDACTED]',
+        http_id: '[REDACTED]',
+        keyId: 'public-key-id',
+        status: 'failed',
+      },
+    });
+    expect(redactSecretText("provider failed: {'clientSecret': 'synthetic secret with spaces'}"))
+      .toBe("provider failed: {'clientSecret': '[REDACTED]'}");
+  });
+
+  test('redacts complete authorization and cookie header lines including non-Bearer schemes', () => {
+    const text = redactSecretText([
+      'Authorization: Basic synthetic-basic-credential',
+      'Proxy-Authorization: Digest username="synthetic-user", response="synthetic-response"',
+      'Cookie: session=synthetic-cookie; refresh=synthetic-refresh',
+      'Set-Cookie: session=synthetic-cookie; HttpOnly; Secure',
+      'X-Request-ID: public-request-id',
+    ].join('\r\n'));
+    expect(text).not.toContain('synthetic');
+    expect(text).toContain('X-Request-ID: public-request-id');
+    expect(text.match(/\[REDACTED\]/g)).toHaveLength(4);
+    expect(redactSecretText('request failed Authorization: Basic synthetic-credential'))
+      .toBe('request failed Authorization: [REDACTED]');
+    expect(redactSecretText('request failed Authorization: Digest username="synthetic-user", response="synthetic-response"'))
+      .toBe('request failed Authorization: [REDACTED]');
+  });
+
+  test('redacts serialized error messages and legacy credential fields in structured logs', () => {
+    expect(redactLogValue({
+      message: 'provider rejected {"password":"synthetic-password","status":401}',
+      http_id: 'synthetic-device-key',
+      'proxy-authorization': 'Basic synthetic-proxy-key',
+      keyId: 'public-key-id',
+    })).toEqual({
+      message: 'provider rejected {"password":"[REDACTED]","status":401}',
+      http_id: '[REDACTED]',
+      'proxy-authorization': '[REDACTED]',
+      keyId: 'public-key-id',
+    });
+  });
 });

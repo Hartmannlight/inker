@@ -1,13 +1,27 @@
 const REDACTED = '[REDACTED]';
-const SENSITIVE_KEY = /(?:pin|password|passphrase|secret|token|credential|authorization|cookie|api[_-]?key|private[_-]?key|encryption[_-]?key)$/i;
+const SENSITIVE_KEY_PATTERN = '(?:pin|password|passphrase|secret|token|credential|authorization|cookie|api[_-]?key|private[_-]?key|encryption[_-]?key|http_id)';
+const SENSITIVE_KEY = new RegExp(`${SENSITIVE_KEY_PATTERN}$`, 'i');
+// Match sensitive keys directly so an enclosing non-secret JSON object cannot
+// consume nested fields before the scanner reaches their sensitive assignments.
+const TEXT_SECRET_ASSIGNMENT = new RegExp(
+  `((["']?)[a-z0-9_-]*${SENSITIVE_KEY_PATTERN}\\2\\s*[:=]\\s*)("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|[^\\s,;{}]+)`,
+  'gi',
+);
 
 export function redactSecretText(text: string): string {
   return text
+    // Digest and Cookie headers can contain several comma/semicolon-separated
+    // values. A complete header line is sensitive, regardless of auth scheme.
+    .replace(/^([ \t]*(?:proxy-authorization|authorization|set-cookie|cookie)\s*:\s*)[^\r\n]*/gim, `$1${REDACTED}`)
     .replace(/((?:set-cookie|cookie)\s*:\s*)[^\r\n]+/gi, `$1${REDACTED}`)
-    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/gi, `$1${REDACTED}`)
+    .replace(/(authorization\s*[:=]\s*)Digest\s+[^\r\n]*/gi, `$1${REDACTED}`)
+    .replace(/(authorization\s*[:=]\s*)(?:[a-z][a-z0-9_-]*\s+)?[^\s,;]+/gi, `$1${REDACTED}`)
     .replace(
-      /((?:admin[_-]?pin|encryption[_-]?key|csrf[_-]?(?:secret|token)|secret|password|passphrase|token|credential)\s*[:=]\s*)[^\s,;]+/gi,
-      `$1${REDACTED}`,
+      TEXT_SECRET_ASSIGNMENT,
+      (_match, prefix: string, _keyQuote: string, value: string) => {
+        const quote = value[0] === '"' || value[0] === "'" ? value[0] : '';
+        return `${prefix}${quote}${REDACTED}${quote}`;
+      },
     );
 }
 
