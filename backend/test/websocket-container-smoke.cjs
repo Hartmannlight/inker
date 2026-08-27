@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp17-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp18-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
-let cookie, csrf, stage = 'start';
+let cookie, csrf, playbackBeforeRestart, stage = 'start';
 const sockets = [];
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ADMIN_PIN: password } });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -42,7 +42,7 @@ async function main() {
   try {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
-      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', process.env.INKER_SMOKE_IMAGE || 'inker:wp17-test');
+      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', process.env.INKER_SMOKE_IMAGE || 'inker:wp18-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
@@ -89,6 +89,36 @@ async function main() {
       for (const value of secrets) assert.equal(outbox.includes(value), false);
       console.info('WP-17 publish/replay, 100 sequential + 100 parallel read-only manifests, authenticated artifacts and WP-16 durable refresh passed');
     }
+    stage = 'WP18 playlist publication and automatic transition';
+    {
+      const auth = { Authorization: `Bearer ${token}` };
+      const next = await request('/api/publications/browser-next/publish', { method: 'POST', admin: true,
+        data: { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [], draft: { fixtureArtifacts: ['mono-800x480-white-png'] } } });
+      assert.equal(next.response.status, 201);
+      const fixture = db("const desired=await p.devicePublicationState.findUniqueOrThrow({where:{deviceId:input.deviceId}}); const playlist=await p.playlist.create({data:{name:'WP18 draft',items:{create:[{order:0,duration:2},{order:1,duration:null}]}},include:{items:{orderBy:{order:'asc'}}}}); console.log(JSON.stringify({playlist,desired}));", { deviceId: device.id });
+      const draft = await request(`/api/playback/playlists/${fixture.playlist.id}/draft`, { admin: true });
+      const published = await request(`/api/playback/playlists/${fixture.playlist.id}/publish`, { method: 'POST', admin: true,
+        data: { version: 1, idempotencyKey: randomUUID(), expectedRevision: 0, expectedDraftHash: draft.body.draftHash,
+          bindings: fixture.playlist.items.map((item, i) => ({ itemId: item.id, publicationRevisionId: i ? next.body.publicationRevisionId : fixture.desired.desiredPublicationRevisionId })) } });
+      assert.equal(published.response.status, 201);
+      const command = { version: 1, idempotencyKey: randomUUID(), action: 'start', expectedVersion: 0,
+        expectedDesiredSequence: fixture.desired.desiredSequence, playlistRevisionId: published.body.playlistRevisionId };
+      assert.equal((await request(`/api/playback/devices/${device.id}/commands`, { method: 'POST', data: command, headers: { Cookie: cookie } })).response.status, 403);
+      assert.equal((await request(`/api/playback/devices/${device.id}/commands`, { method: 'POST', data: command, headers: auth })).response.status, 401);
+      const started = await request(`/api/playback/devices/${device.id}/commands`, { method: 'POST', admin: true, data: command });
+      assert.equal(started.response.status, 201);
+      assert.deepEqual((await request(`/api/playback/devices/${device.id}/commands`, { method: 'POST', admin: true, data: command })).body, started.body);
+      await until(async () => (await request(`/api/playback/devices/${device.id}`, { admin: true })).body.version === 2);
+      playbackBeforeRestart = (await request(`/api/playback/devices/${device.id}`, { admin: true })).body.state;
+      assert.equal(playbackBeforeRestart.currentItemId, fixture.playlist.items[1].id);
+      assert.equal(playbackBeforeRestart.nextTransitionAt, null);
+      const current = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: auth });
+      assert.equal(current.body.revision, fixture.desired.desiredSequence + 1);
+      assert.equal(current.body.nextTransitionAt, null);
+      await until(() => active.messages.some(m => m.presentation?.revision === current.body.revision));
+      assert.ok(db("console.log(JSON.stringify(await p.outboxEvent.count({where:{eventType:'playback.transition.due',status:'delivered'}})));") === 1);
+      console.info('WP-18 admin/CSRF, explicit playlist release, scheduled transition and browser assignment sequence passed');
+    }
     stage = 'heartbeat'; await until(() => active.pings >= 1, 450); assert.equal(active.code, undefined);
     stage = 'rotation';
     const enrollment = await request(`/api/devices/${device.id}/enrollments`, { method: 'POST', admin: true }); assert.equal(enrollment.response.status, 201); secrets.push(enrollment.body.code);
@@ -125,11 +155,16 @@ async function main() {
     assert.equal(JSON.parse(docker('exec', name, 'cat', '/app/secrets/instance.json')).keyId, keyId);
     const restarted = connect(device, rotated); await until(() => restarted.messages.some(m => m.type === 'presentation.changed'));
     assert.equal((await request('/api/v1/device-content', { headers })).response.headers.get('etag'), etag);
+    const playbackAfterRestart = db('console.log(JSON.stringify(await p.playbackState.findUniqueOrThrow({where:{deviceId:input.deviceId}})));', { deviceId: device.id });
+    assert.equal(playbackAfterRestart.currentItemId, playbackBeforeRestart.currentItemId);
+    assert.equal(playbackAfterRestart.anchorAt, playbackBeforeRestart.anchorAt);
+    assert.equal(playbackAfterRestart.version, playbackBeforeRestart.version);
     stage = 'secret-audit';
     const logs = docker('logs', name);
     const sessions = db('console.log(JSON.stringify(await p.adminSession.findMany()));');
     const telemetry = db('console.log(JSON.stringify(await p.device.findMany({select:{telemetry:true}})));');
-    for (const secret of secrets.filter(Boolean)) { assert.equal(logs.includes(secret), false); assert.equal(JSON.stringify(sessions).includes(secret), false); assert.equal(JSON.stringify(telemetry).includes(secret), false); }
+    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),publications:await p.publicationRevision.findMany()}));');
+    for (const secret of secrets.filter(Boolean)) { assert.equal(logs.includes(secret), false); assert.equal(JSON.stringify(sessions).includes(secret), false); assert.equal(JSON.stringify(telemetry).includes(secret), false); assert.equal(JSON.stringify(durable).includes(secret), false); }
     console.info('WP-15 production smoke passed: admin/CSRF, pairing, heartbeat, idle revocation, reconnect, pull/304/policy/artifact, TRMNL display, restart/key identity, secret audit');
     if (logs.includes('device-configuration.catalog')) console.info('Known optional runtime seed warning observed.');
   } catch {

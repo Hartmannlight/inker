@@ -73,7 +73,7 @@ müssen.
 | [x] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
 | [x] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
 | [x] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
-| [ ] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
+| [x] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
 | [ ] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
 | [ ] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
 | [ ] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
@@ -2189,13 +2189,13 @@ und Tests. Rendercache folgt WP-19.
 
 **Aufgaben:**
 
-- [ ] Definiere Zustände, Eingaben und Übergänge für Start, Advance, Playlist-
+- [x] Definiere Zustände, Eingaben und Übergänge für Start, Advance, Playlist-
   Änderung, Pause und Neustart.
-- [ ] Berechne Position aus stabiler Zeitbasis und persistiertem Anchor.
-- [ ] Vermeide sekündliche Writes und Abruf-seitige Fortschaltung.
-- [ ] Plane den nächsten Übergang über dauerhafte Ereignis-/Jobsemantik.
-- [ ] Rekonstruiere Zustand nach Neustart deterministisch.
-- [ ] Teste leere/einzelne Playlists, lange Downtime, Uhrgrenzen und Parallelität.
+- [x] Berechne Position aus stabiler Zeitbasis und persistiertem Anchor.
+- [x] Vermeide sekündliche Writes und Abruf-seitige Fortschaltung.
+- [x] Plane den nächsten Übergang über dauerhafte Ereignis-/Jobsemantik.
+- [x] Rekonstruiere Zustand nach Neustart deterministisch.
+- [x] Teste leere/einzelne Playlists, lange Downtime, Uhrgrenzen und Parallelität.
 
 **Abnahme:** Zwei Prozesse berechnen aus demselben Zustand denselben Eintrag und
 nächsten Übergang; ein Restart startet nicht erneut bei Element 1.
@@ -2203,6 +2203,253 @@ nächsten Übergang; ein Restart startet nicht erneut bei Element 1.
 **Validierung:** Table-driven Unit-Tests mit Fake Clock und Restart-Integrationstest.
 
 **Handoff:** Übergangsevents und Cache-Invalidierungsinputs für WP-19 notieren.
+
+### Abschluss WP-18
+
+- Status: abgeschlossen am 2026-08-28.
+- Ausgangsstand: sauberer Branch `codex/device-platform-spike`, Commit
+  `d380bf686b60f8e488a11c2c8fb58df39ffb1854`. Repository-/Elternpfade und
+  AGENTS-Anweisungen geprüft; keine zusätzlichen gefunden. WP-18, ADRs 001–007
+  und Handoffs WP-04, WP-07 und WP-13–WP-17 gegen die Implementierung geprüft.
+  Der alte WP-18-Kontext zu `getForDevice()` ist überholt: WP-17 hatte die
+  abrufseitige Rotation bereits entfernt. Kein pauschales Laden von
+  `ARCHITECTURE_PLAN.md`, keine Änderung fremder Arbeitsstände oder anderer
+  Paketstatus/Handoffs. Keine Aussage über gepushte Commits aus Trackingdaten.
+  Der WP-18-Abschlusscommit wurde anschließend vom Benutzer ausdrücklich
+  beauftragt. Ein Push ist nicht beauftragt.
+
+- Veröffentlichungsgrenze: Editierbare `Playlist`/`PlaylistItem` bleiben Drafts.
+  `PublishedPlaylist` und `PublishedPlaylistEntry` speichern eine ausdrücklich
+  veröffentlichte, nach `order`, dann stabiler Item-ID geordnete Liste. Jeder
+  Eintrag bindet eine konkrete bestehende `PublicationRevision`, niemals Latest,
+  Draft-URLs oder Live-Rendering. Reihenfolge, Item-IDs, Dauern und gebundene
+  Revisionen bilden den kanonischen SHA-256-Inhaltshash. UPDATE-Trigger schützen
+  Releases und Einträge; jeder Lesezugriff prüft den Hash. Draft-IDs sind
+  Herkunftsangaben ohne kaskadierende Draft-Fremdschlüssel. Draftänderung/-löschung
+  verändert eine veröffentlichte Liste nicht.
+
+  Die Bilder werden vorher über WP-17 veröffentlicht: Pull-Fixtures oder
+  eingefrorene lokale Upload-Bilder. Die Bindung je Item ist eine ausdrückliche
+  Adminentscheidung, keine implizite Render-/Herkunftserkennung. Designs/Plugins
+  dürfen nur an bereits vorhandene gültige Publicationartefakte gebunden werden;
+  ihre dynamischen Render-URLs werden nicht übernommen oder aufgerufen.
+  Playlistname, Beschreibung, Providerdaten, `isActive`, `advanceOnTap` und
+  Secrets werden nicht kopiert. Höchstens 100 Items; Dauer ist `null` oder eine
+  ganze Zahl von 1 bis 86400 Sekunden. Null-Sekunden-/negative Dauern werden
+  abgewiesen, nicht in Schleifen übersprungen.
+
+- Adminvertrag, Version `1`: Alle neuen Endpunkte liegen unter `/api/playback`
+  und sind durch die vorhandene Admin-Session/CSRF-Grenze geschützt.
+  Device-Credentials berechtigen nicht zum Steuern oder Veröffentlichen.
+
+  | Operation | Vertrag |
+  |---|---|
+  | `GET /playlists/:id/draft` | Read-only-Item-/Quell-IDs, Reihenfolge, Dauern und `draftHash`; keine URLs/Settings |
+  | `POST /playlists/:id/publish` | `version:1`, UUID-`idempotencyKey`, `expectedRevision` (anfangs 0), `expectedDraftHash`, vollständige `bindings:[{itemId,publicationRevisionId}]` |
+  | `GET /devices/:id` | Persistierter `state`, `version`, `desiredSequence` und rein berechnete `projected`-Position; ohne Playback Version 0 und `state:null` |
+  | `POST /devices/:id/commands` | `version:1`, UUID-`idempotencyKey`, `expectedVersion`, `expectedDesiredSequence`, `action`; nur für `start`/`change` zusätzlich `playlistRevisionId` |
+
+  Publish liefert `playlistRevisionId`, numerische Playlistrevision und
+  `contentHash`. Steuerbefehle liefern Playback-ID/-Version, Playlistrevision-ID,
+  Status, Item-ID, nächsten Zeitpunkt und Sollsequenz; beide POSTs antworten
+  `201` im bestehenden Admin-Responseformat. Ungültige/zusätzliche Felder,
+  Versionen, IDs, Dauern oder Bindings ergeben `400`; fehlende Ziele/Revisionen
+  `404`, veraltete Draft-/Revisions-/Sequenzstände oder unzulässige Übergänge
+  `409`, unlesbare Publication-/Playlistinhalte `503`. Keine neue UI.
+  Die getrennte Admin-Lesesicht auf Playback und Sollsequenz ist optimistisch:
+  Ein gleichzeitiger Übergang kann eine erneute Abfrage erfordern; beide
+  erwarteten Werte werden im Schreibpfad unter dem Schreiblock erneut geprüft.
+
+- Zustände/Befehle: `playback.machine.ts` ist frei von Framework-, Datenbank-,
+  Netzwerk- und impliziten Uhrabhängigkeiten. Zustände sind `empty`, `running`,
+  `paused`, `stopped`; der Aufrufer liefert die Zeit. `position()` liefert
+  aktuelle Item-/Publicationrevision-ID, verstrichene Zeit und nächste Grenze.
+
+  | Befehl | Übergang |
+  |---|---|
+  | `start` | Aus fehlendem, leerem oder gestopptem Playback mit expliziter Playlistrevision; erstes Item bzw. `empty` |
+  | `advance` | Erst aktuelle Zeitposition berechnen, dann genau ein Item weiter mit voller Dauer; Pause bleibt Pause |
+  | `change` | Neue Playlistrevision übernehmen; aktuelle stabile Item-ID samt verstrichener Zeit erhalten; nach Entfernung erstes neues Item mit voller Dauer |
+  | `pause` | Aktuelle Zeitposition einschließlich überfälliger Grenzen übernehmen und Itemzeit einfrieren |
+  | `resume` | Gefrorene Itemzeit erhalten; Pausenzeit nicht mitzählen |
+  | `restart` | Fälligen Zustand aus bestehendem Anchor nachführen, niemals implizit bei Item 1 beginnen; ohne fällige Grenze No-op |
+  | `stop` | Zeitplanung beenden und Sollhoheit freigeben; zuletzt zugewiesene gültige Publication bleibt sichtbar |
+
+  Leere Listen haben kein aktuelles Item und keinen Job und behalten ebenfalls
+  die letzte Sollpublication. Einzelne Items erhalten keinen automatischen
+  Wiederholungsjob. `null` hält unbegrenzt bis `advance`/`change`. Umordnen erhält
+  Itemidentität, nicht den alten Index. Dauerverkürzung übernimmt bereits
+  verstrichene Zeit und kann unmittelbar mehrere Grenzen überschreiten; bei
+  Pause erst mit Resume. Dies gilt auch beim Wechsel von unbegrenzter auf
+  endliche Dauer. Leerer/gestoppter Advance und wiederholtes Pause/Resume im
+  bereits passenden Zustand sind No-ops. Eine neue Playlistrevision wird auch
+  bei identischem Anchor und identischer Uhrzeit übernommen.
+
+- Zeit/Persistenz: `PlaybackState` speichert eine eigene stabile ID, monotonen
+  `version`-Zähler, Playlistrevision, Status, `anchorIndex`, `anchorAt`,
+  `elapsedMs`, `evaluatedAt`, zuletzt berechnete Item-ID und `nextTransitionAt`.
+  Ganzzahlige Unix-Millisekunden; Intervalle sind links geschlossen/rechts offen:
+  An der exakten Endgrenze gilt das nächste Item. Effektive Zeit ist
+  `max(now,evaluatedAt,anchorAt)`. Eine rückwärts springende Uhr fällt nicht
+  hinter die letzte persistierte Auswertung zurück; Uhrspitzen zwischen Writes
+  werden bewusst nicht archiviert. Vorwärtssprünge/Downtime werden mit
+  Zyklusmodulo plus höchstens einem Listendurchlauf verarbeitet, nicht durch
+  Wiedergabe jedes verpassten Jobs. `null` beendet das automatische Durchlaufen.
+  Automatische Übergänge/Restart behalten den Anchor; Pause/Resume, Advance und
+  explizite Listenänderung setzen ihn mit entsprechendem Zeitoffset neu.
+
+  Keine sekündlichen Playback-Ticks/Writes, kein GET-Schreibpfad und kein
+  gerätespezifischer RAM-Timer. Nur Grenzen und explizite Befehle schreiben.
+  Sehr kurze konfigurierte Itemdauern erzeugen entsprechend häufige fachliche
+  Übergänge; 1 Sekunde ist eine technische Eingabegrenze, keine geprüfte
+  Firmwaregrenze. Bestehende Pull-/Refresh-Policies werden nicht verkürzt oder
+  umgangen; langsam pollende Geräte können Items auslassen.
+
+- Atomarität/Sollhoheit: Playback, gewünschte Publicationrevision,
+  `DevicePublicationState.desiredSequence`, gespiegelte Browsersequenz,
+  Commandbeleg und betroffene Outbox-Einträge werden gemeinsam committed oder
+  zurückgerollt. Wiederverwendet wird
+  `PublicationPersistenceService.setDesiredRevision(...,tx,playbackId)`.
+  Publicationrevision, Playlistrevision, Playbackversion und Browsersequenz sind
+  getrennt. Nur tatsächliche Sollzeigerwechsel erhöhen die Browsersequenz;
+  A→B→A bleibt monoton. Zwei Items mit derselben Publication ändern Playback,
+  aber weder Sollsequenz noch Manifestinhalt.
+  Während `running`/`paused` verweigern Einzelzuweisung/Publish eine Sollübernahme
+  mit `409`, auch bei identischem Ziel. Erst `stop`/`empty` gibt sie frei.
+  Ein überfälliger Auftrag für ein deaktiviertes Gerät stoppt Playback ohne neue
+  Zuweisung; Reaktivierung startet es nicht automatisch. Legacy-Geräte-/Playlist-
+  Zuordnungen bleiben Draftoperationen und starten/ändern dieses Playback nicht.
+
+- Ereignisse/Scheduling: Payload-Version `1`, Aggregate `PlaybackState`,
+  Aggregat-ID = Playback-ID, Aggregatrevision = Playbackversion.
+  `playback.state.changed` enthält nur `{playbackId,version}`;
+  `playback.transition.due` zusätzlich `dueAt` in Unix-ms. `availableAt` ist
+  genau die persistierte Fälligkeit. Sollwechsel erzeugen unverändert
+  `device.publication.desired-revision.changed` über WP-17s Sequenzpfad;
+  Zustandsereignisse erzeugen keine zweite Geräte-Delivery.
+  WP-16s Dispatcher/Claims und unveränderter `dispatch-v1`-Jobvertrag transportieren
+  fällige Events über die vorhandene BullMQ-Queue `delivery`. Der Playbackhandler
+  verarbeitet Due-Events vor normalem Delivery-Fan-out. SQLite enthält Zustand
+  und Fälligkeit bereits vor Enqueueing; Redis-/Jobverlust verliert sie nicht.
+  WP-20 kann diese Arbeit später der vorgesehenen Queuegruppe `timer` zuordnen;
+  kein neuer Bootstrap und keine allgemeinen Queue-Policies vorweggenommen.
+
+- Idempotenz/Konflikte/Recovery: `PlaybackCommand` hält dauerhafte gehashte
+  UUID-Schlüssel, kanonische Befehlshashes und Ergebnisidentifikatoren, keine
+  Draftinhalte. Bindings werden nach Item-ID normalisiert. Exakte Wiederholung
+  liefert das ursprüngliche Ergebnis vor Draft-/Device-Lookup ohne Writes;
+  anderer Befehl mit gleichem Schlüssel ergibt `409`. Abgeschlossene Belege sind
+  per UPDATE-Trigger unveränderlich und überleben Draft-/Eventlöschung.
+  Replay stellt keine frühere Zuweisung wieder her und garantiert nicht die
+  heutige Verfügbarkeit eines historischen Ziels.
+  Der erste parametrisierte Receipt-INSERT serialisiert SQLite-Schreiber;
+  Playbackversion/Sollsequenz werden danach geprüft. Konkurrierende verschiedene
+  Befehle mit gleichem Ausgangsstand haben einen Gewinner. Busy-/Transaktionsfehler
+  ergeben `503` mit Wiederholung desselben Befehls, ohne unbegrenzten internen
+  Retry oder RAM-/Redis-Mutex.
+  Due-Events prüfen unter Schreiblock Claim-Owner/-Token/-Frist, Playback-ID,
+  Version, Status und ursprüngliche Fälligkeit. Zu frühe Ausführung ist ein
+  Retryfehler; alte Versionen/gelöschte Playbacks sind erfolgreiche No-ops.
+  Der permanente `OutboxEffect`-Key aus Typ/Aggregat/ID/Version wird atomar mit
+  dem Übergang geschrieben. Doppelte Jobs und Crash nach Commit vor Ack ändern
+  nichts erneut; alte Claims können weder Übergang noch Ack schreiben.
+  Pro neuer Playbackversion entsteht höchstens eine Fälligkeit. Ersetzte
+  `pending`-Schedules werden transaktional als `delivered` terminalisiert
+  (fachlich erledigt/ersetzt, keine Displaybestätigung), nicht gelöscht.
+  Bereits laufende Jobs werden über ihre Version abgewehrt. Fünf Versuche,
+  Backoff/Jitter und 30-Sekunden-Claims/Recovery bleiben unverändert. Nach
+  ausgeschöpften Versuchen bleibt `dead-letter` sichtbar, ohne Retry-Reset.
+  Ein explizites `restart` mit neuer UUID und aktuellem Versions-/Sequenzstand
+  kann fälliges Playback abgleichen und neu planen; der alte Dead Letter bleibt.
+
+- Manifestvertrag: Keine Wireänderung. `WebDisplayManifest.revision` bleibt
+  Geräte-Sollsequenz, `generatedAt` Publicationzeit und `nextTransitionAt:null`.
+  Der Browser erhält keine lokale Rotationsanweisung. `PresentationManifest`
+  bleibt der andere Vertrag mit Publicationrevision, Artefakthash, Profilvariante,
+  ETag und unveränderter Refresh-Policy. Bei Dispatcher-Ausfall kann die reine
+  Adminprojektion weiter sein als der committed Sollzeiger; Geräte lesen stets
+  Letzteren. Fälligkeit berechtigt keinen GET zu Publish, Rotation oder Writes.
+  Reconnect/Push verwenden weiterhin WP-17s read-only Zusammenbau und technischen
+  Retry-Snapshot. Profile, Policies, Adapter und Nest-Discovery bleiben die
+  Auswahlgrenze. Variantenkompatibilität wird wie in WP-17 im Delivery-Lesepfad
+  geprüft (`406`); keine fehlenden Gerätevarianten werden erzeugt. Auth vor
+  `304`, ETags, leere `304`, Artefaktzugriff und Legacy-TRMNL bleiben unverändert.
+
+- Migration/Retention/Rollout: Nur neue Vorwärtsmigration
+  `20260829000000_playlist_playback`; keine alte Migration geändert. Neue
+  Release-/Entry-/Playback-/Receipt-Tabellen, Constraints, Indizes und Trigger;
+  keine Adoption bestehender Drafts und kein Umschreiben von Publications,
+  Sollzeigern, Sequenzen, Credentials oder Outbox. Fremdschlüssel und Cleanup
+  schützen auch nicht aktuelle, in veröffentlichten Playlists gebundene
+  Publicationrevisionen. Alle Playlistreleases/Bindungen bleiben vorerst erhalten;
+  replay-sichere Release-Retention ist Folgearbeit. Outbox bleibt `delivered`
+  30 Tage, `dead-letter` 90 Tage; `pending`/`processing` nie allein altersbedingt
+  löschen. Commandbelege/Effect-Keys bleiben dauerhaft. Bestehenden DB-/Key-Backup-
+  Vertrag einhalten, alte API-/Adapterprozesse für Migration stoppen und gemeinsam
+  mit neuem Prisma-Client starten. Gemischter Betrieb alter Sollschreiber mit
+  neuem Playback ist nicht unterstützt.
+
+- Verifikation: **565 Backendtests** einschließlich zwölf table-driven
+  Zustandsmaschinentests, **27 Contracttests, 58 Frontendtests, 15 neue Playback-
+  Integrationen, sechs Migrationstests, 18 Publication-, 13 SQLite-Outbox- und
+  16 weitere Auth-/Enrollment-/Secret-/WebSocket-Integrationen** bestanden.
+  Zentrale Abnahme mit zwei echten Node-Prozessen und unabhängigen Prisma-Clients:
+  identische Projektionen, lange Downtime, Prozessabbruch nach Commit vor Ack und
+  Restart ohne Item 1. Zusätzlich Befehls-/Jobrennen, doppelte Jobs, alte Claims/
+  Versionen, erzwungene SQL-Trigger-Rollbacks, Lease-Recovery, Dead Letter,
+  Retention, A→B→A, gleiche Publication auf zwei Items und Releasewechsel bei
+  identischer Uhrzeit. 100 sequenzielle und 100 parallele Browser-/Pullabrufe
+  bleiben auch bei überfälligem Playback ohne fachliche SQL-Writes; WP-17s
+  HTTP-/Artefakt-/Publish-Interleaving-Abnahme bleibt grün.
+  Backend-/Frontend-/Contract-Typechecks und Builds, separate Playback-/Publication-
+  /Outbox-Test-Typechecks, Prisma-Validierung, Migrations-Datamodel-Diffs,
+  gezieltes Produktions-/Testlint, CJS-Syntax und Compose-Validierung bestanden.
+  ESLint berücksichtigt eng begrenzt die neuen WP-18-Tests. Gesamtlint bleibt
+  exakt Baseline: Backend **76 Fehler/41 Warnungen**, Frontend **85 Fehler/9
+  Warnungen**; kein grünes Gesamt-Lint. Fehlerhafte Bun-Matcher auf Prisma-
+  Thenables wurden korrigiert.
+
+  Die echte Redis-/Mehrprozess-Suite prüft zusätzlich geplanten Übergang während
+  Redis-Stopp/Restart ohne gespeicherte Queue und Zustellung an zwei Adapter.
+  `inker:wp18-test` wurde neu gebaut und mit initialisiertem Prisma-Client und
+  erweitertem Produktions-Smoke geprüft: echtes Nginx/Nest/SQLite, expliziter
+  Playlistpublish, automatischer Übergang, CSRF-/Deviceauth-Abweisung von Befehlen,
+  Replay, Browsersequenz und Playback nach Containerrestart. WP-17s 100+100
+  Abrufe/geschützte Artefakte, Pairing/Heartbeat/Widerruf/Reconnect, Pull-/304-/
+  Policy-/TRMNL-Verträge und stabile Instance-Key-ID bleiben geprüft. Logs,
+  Publications, Playback, Commandbelege, Outbox, Sessions und Telemetrie werden
+  gegen Testsecrets geprüft. Nur eigene temporäre DBs, Prozesse, Container und
+  Volumes verwendet; keine produktiven Container/Daten verändert.
+
+- Reproduktion/Grenzen: Bun
+  `inker\.tmp\bun-1.3.14\bun-windows-x64\bun.exe`; Backend `bun test ./src`,
+  `bun test ./test/playback.integration.ts`, vorhandene Integrationstestdateien
+  und `bun test ./test/outbox-redis.integration.ts`; neuer Test-Typecheck
+  `node node_modules/typescript/bin/tsc -p test/tsconfig.playback.json`.
+  Frontend ausschließlich `bun run test` (Vitest). Imagebau:
+  `docker build --target production -t inker:wp18-test .`; Smoke aus `backend/`
+  mit gesetztem `INKER_SMOKE_IMAGE=inker:wp18-test` und
+  `node test/websocket-container-smoke.cjs`. Redis-Suite verwendet weiterhin
+  `inker:wp15-test` als Redis-Binaryquelle und Loopback-Port 18716;
+  Produktions-Smoke Port 18715. Sandbox-EPERM, Prisma-Netzabrufe und Docker-Pipe
+  wurden mit genehmigten Wiederholungen behandelt. Bekannte optionale Runtime-
+  Seed-, Prisma-7-/Browserslist-Warnungen und Docker-Installationsfehlerpfad bleiben.
+  Kein physischer TRMNL-/ESP32-Test und keine Hardware-/Durchsatzgarantie.
+
+- WP-19-Handoff/Risiken: Cache-/Renderinputs sind konkrete Publication-ID/-Revision,
+  Content-/Artefakthash, Snapshotversionen und effektive Profil-/Format-/Dimensions-
+  /Farbraum-/Bit-Tiefe-/Rotationsvariante. Playlistrevision-ID/-Hash und Item-ID
+  bestimmen die Auswahl; Playbackversion, Anchor und Fälligkeit bestimmen den
+  Übergang, nicht neue Bildbytes. Geräte-Sollsequenz gehört zu Delivery/
+  Manifestinvalidierung, nicht als alleiniger Inhalts-/Render-Key verwendet.
+  Gleiche Publication auf mehreren Items und A→B→A dürfen dieselben immutable
+  Artefakte wiederverwenden. Keine Uhrzeit, Draft-URL oder Zufallsrevision im
+  künftigen Render-Key. Beobachten: überfällige Zeitpunkte, Claims, Dead Letters,
+  Übergangsverzug, SQLite-Writezeit und wachsende Release-/Receipt-/Effecttabellen.
+  Alle gebundenen Publications werden beim Publish/aktiven Zustandswechsel
+  validiert; viele große Bildsnapshots erhöhen Transaktionskosten. Größere
+  Artefakte und Cache-/Render-Deduplizierung bleiben WP-19; Worker-/Queueaufteilung
+  WP-20. Keine Source-Jobs, Interactions, MQTT oder allgemeine Renderer implementiert.
 
 ## WP-19 – Rendercache, Deduplizierung und Artefaktfallback
 

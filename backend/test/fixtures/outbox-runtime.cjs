@@ -16,6 +16,7 @@ const { EventsService } = require('../../src/events/events.service');
 const { DeviceUpdateCoordinator } = require('../../src/device-platform/device-update-coordinator.service');
 const { WebSocketTransportAdapter } = require('../../src/device-platform/websocket.transport-adapter');
 const { PublishService } = require('../../src/publications/publish.service');
+const { PlaybackService } = require('../../src/playback/playback.service');
 
 async function main() {
   const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
@@ -26,6 +27,17 @@ async function main() {
   process.on('message', async ({ id, command, deviceId, designId }) => {
     try {
       if (command === 'notify') await app.get(EventsService).notifyDevicesRefresh([deviceId]);
+      if (command === 'playback-start') {
+        const playback = app.get(PlaybackService);
+        const revisions = await p.publicationRevision.findMany({ orderBy: { revision: 'asc' }, take: 2 });
+        const playlist = await p.playlist.create({ data: { name: 'WP18', items: { create: [{ order: 0, duration: 2 }, { order: 1, duration: null }] } }, include: { items: { orderBy: { order: 'asc' } } } });
+        const published = await playback.publish(playlist.id, { version: 1, idempotencyKey: require('node:crypto').randomUUID(), expectedRevision: 0,
+          expectedDraftHash: (await playback.draft(playlist.id)).draftHash,
+          bindings: playlist.items.map((item, i) => ({ itemId: item.id, publicationRevisionId: revisions[i].publicationRevisionId })) });
+        const desired = await p.devicePublicationState.findUniqueOrThrow({ where: { deviceId } });
+        await playback.execute(deviceId, { version: 1, idempotencyKey: id, action: 'start', expectedVersion: 0,
+          expectedDesiredSequence: desired.desiredSequence, playlistRevisionId: published.playlistRevisionId });
+      }
       if (command === 'publish') {
         const latest = await p.publication.findUnique({ where: { publicationKey: 'system-test' }, include: { revisions: { orderBy: { revision: 'desc' }, take: 1 } } });
         await app.get(PublishService).publish('system-test', { idempotencyKey: id, expectedRevision: latest?.revisions[0]?.revision ?? 0,

@@ -11,6 +11,8 @@ import { OutboxStore } from './outbox.store';
 import { OutboxRedisService, OutboxJob } from './outbox-redis.service';
 import { OUTBOX_POLICY as POLICY } from './outbox.types';
 import { DeviceUpdateCoordinator } from '../device-platform/device-update-coordinator.service';
+import { PlaybackService } from '../playback/playback.service';
+import { PLAYBACK_DUE } from '../playback/playback.events';
 
 @Injectable()
 export class OutboxDispatcher
@@ -30,6 +32,7 @@ export class OutboxDispatcher
     private readonly redis: OutboxRedisService,
     private readonly consumer: DeviceUpdateCoordinator,
     private readonly cleanup: PublicationCleanupService,
+    private readonly playback: PlaybackService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -104,6 +107,12 @@ export class OutboxDispatcher
       return;
     }
     try {
+      if (event.eventType === PLAYBACK_DUE) {
+        await this.playback.advanceDue(event);
+        if (await this.store.ack(event)) this.counts.delivered++;
+        else this.counts.stale++;
+        return;
+      }
       const prepared = await this.store.prepare(event);
       if (!prepared.duplicate) {
         await this.redis.publish();

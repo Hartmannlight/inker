@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -98,12 +98,15 @@ export class PublicationPersistenceService {
     });
   }
 
-  async setDesiredRevision(deviceId: number, publicationRevisionId: string, tx?: TransactionClient) {
+  async setDesiredRevision(deviceId: number, publicationRevisionId: string, tx?: TransactionClient, playbackId?: string) {
     const occurredAt = new Date();
 
     return this.run(tx, async (transaction) => {
       // Serialize assignment commands before reading the current pointer.
       await transaction.$executeRaw`UPDATE devices SET id = id WHERE id = ${deviceId}`;
+      const playback = await transaction.playbackState.findUnique({ where: { deviceId } });
+      if (playback && ['running', 'paused'].includes(playback.status) && playback.id !== playbackId)
+        throw new ConflictException('Stop playback before assigning a publication');
       const current = await transaction.devicePublicationState.findUnique({ where: { deviceId } });
       if (current?.desiredPublicationRevisionId === publicationRevisionId) return current;
       const revision = await this.requireRevision(

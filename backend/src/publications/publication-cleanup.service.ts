@@ -64,6 +64,7 @@ export class PublicationCleanupService {
           publishedAt: true,
           desiredByDevices: { select: { deviceId: true }, take: 1 },
           acknowledgedByDevices: { select: { deviceId: true }, take: 1 },
+          playlistEntries: { select: { playlistRevisionId: true }, take: 1 },
         },
       });
       const seenPublications = new Set<string>();
@@ -73,7 +74,7 @@ export class PublicationCleanupService {
         seenPublications.add(revision.publicationId);
         const referenced =
           revision.desiredByDevices.length > 0 ||
-          revision.acknowledgedByDevices.length > 0;
+          revision.acknowledgedByDevices.length > 0 || revision.playlistEntries.length > 0;
         if (!latest && !referenced && revision.publishedAt < revisionCutoff) {
           removableRevisionIds.push(revision.publicationRevisionId);
         }

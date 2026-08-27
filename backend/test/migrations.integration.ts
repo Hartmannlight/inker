@@ -101,6 +101,35 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-18 upgrades WP-17 without adopting drafts or changing desired state, credentials or outbox', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp18-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
+    const latest = '20260829000000_playlist_playback';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath);
+    try {
+      database.exec(`
+        INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,updated_at)
+          VALUES(10,'upgrade','upgrade','browser-hd-1920x1080','reference-connected-browser',42,CURRENT_TIMESTAMP);
+        INSERT INTO publications(publication_id,publication_key) VALUES('publication','upgrade');
+        INSERT INTO publication_revisions(publication_revision_id,publication_id,revision,protocol_version,content,content_hash)
+          VALUES('revision','publication',1,'1.0','{"fixtureArtifacts":["mono-800x480-white-png"]}','legacy-hash');
+        INSERT INTO device_publication_states(device_id,desired_publication_revision_id,desired_sequence,updated_at)
+          VALUES(10,'revision',42,CURRENT_TIMESTAMP);
+        INSERT INTO playlists(id,name,updated_at) VALUES(1,'draft',CURRENT_TIMESTAMP);
+      `);
+      const desired = database.query('SELECT * FROM device_publication_states').all();
+      const devices = database.query('SELECT * FROM devices').all();
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(database.query('SELECT * FROM device_publication_states').all()).toEqual(desired);
+      expect(database.query('SELECT * FROM devices').all()).toEqual(devices);
+      expect(database.query('SELECT * FROM playback_states').all()).toEqual([]);
+      expect(database.query('SELECT * FROM published_playlists').all()).toEqual([]);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
   test('WP-17 preserves published state and delivery identity while invalidating only legacy retry snapshots', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp17-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
@@ -129,6 +158,8 @@ describe("Prisma migration baseline", () => {
       expect(database.query('SELECT * FROM publication_commands').all()).toEqual([]);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
+    // Compare the latest datamodel only after applying later forward migrations.
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -160,6 +191,7 @@ describe("Prisma migration baseline", () => {
         "20260825000000_admin_credentials_sessions",
         "20260827000000_outbox_dispatch",
         "20260828000000_explicit_publications",
+        "20260829000000_playlist_playback",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

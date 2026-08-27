@@ -61,6 +61,7 @@ model Device {
   profile           DeviceProfile            @relation(fields: [profileId], references: [profileId])
   deliveryPolicy    DeliveryPolicy           @relation(fields: [deliveryPolicyId], references: [policyId])
   publicationState  DevicePublicationState?
+  playbackState     PlaybackState?
 
   @@map("devices")
 }
@@ -228,6 +229,7 @@ model PublicationRevision {
   publication           Publication              @relation(fields: [publicationId], references: [publicationId], onDelete: Cascade)
   desiredByDevices      DevicePublicationState[] @relation("DesiredPublicationRevision")
   acknowledgedByDevices DevicePublicationState[] @relation("AcknowledgedPublicationRevision")
+  playlistEntries       PublishedPlaylistEntry[]
 
   @@unique([publicationId, revision])
   @@index([publicationId, publishedAt])
@@ -254,6 +256,59 @@ model DevicePublicationState {
   @@index([desiredPublicationRevisionId])
   @@index([acknowledgedPublicationRevisionId])
   @@map("device_publication_states")
+}
+
+// Explicit immutable playlist releases. Source IDs are provenance, not live draft FKs.
+model PublishedPlaylist {
+  id String @id @default(cuid())
+  playlistId Int @map("playlist_id")
+  revision Int
+  contentHash String @map("content_hash")
+  publishedAt DateTime @default(now()) @map("published_at")
+  entries PublishedPlaylistEntry[]
+  playbacks PlaybackState[]
+  @@unique([playlistId, revision])
+  @@map("published_playlists")
+}
+
+model PublishedPlaylistEntry {
+  playlistRevisionId String @map("playlist_revision_id")
+  ordinal Int
+  itemId Int @map("item_id")
+  durationMs Int? @map("duration_ms")
+  publicationRevisionId String @map("publication_revision_id")
+  playlist PublishedPlaylist @relation(fields: [playlistRevisionId], references: [id], onDelete: Restrict)
+  publication PublicationRevision @relation(fields: [publicationRevisionId], references: [publicationRevisionId], onDelete: Restrict)
+  @@id([playlistRevisionId, ordinal])
+  @@unique([playlistRevisionId, itemId])
+  @@index([publicationRevisionId])
+  @@map("published_playlist_entries")
+}
+
+model PlaybackState {
+  id String @id @default(cuid())
+  deviceId Int @unique @map("device_id")
+  playlistRevisionId String @map("playlist_revision_id")
+  version Int
+  status String
+  anchorIndex Int @map("anchor_index")
+  anchorAt DateTime @map("anchor_at")
+  elapsedMs Float @map("elapsed_ms")
+  evaluatedAt DateTime @map("evaluated_at")
+  currentItemId Int? @map("current_item_id")
+  nextTransitionAt DateTime? @map("next_transition_at")
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  playlist PublishedPlaylist @relation(fields: [playlistRevisionId], references: [id], onDelete: Restrict)
+  @@index([status, nextTransitionAt])
+  @@map("playback_states")
+}
+
+// Permanent hashed command receipts survive draft deletion and event retention.
+model PlaybackCommand {
+  keyHash String @id @map("key_hash")
+  requestHash String @map("request_hash")
+  result Json?
+  @@map("playback_commands")
 }
 
 // Durable handoff from domain transactions to the later WP-16 dispatcher.

@@ -74,6 +74,8 @@ export class PublishService {
     return this.prisma.$transaction(async tx => {
       await tx.$executeRaw`UPDATE devices SET id = id WHERE id = ${deviceId}`;
       if (!await tx.device.findFirst({ where: { id: deviceId, isActive: true } })) throw new NotFoundException('Target device not found');
+      const playback = await tx.playbackState.findUnique({ where: { deviceId } });
+      if (playback && ['running', 'paused'].includes(playback.status)) throw new ConflictException('Stop playback before assigning a publication');
       const current = await tx.devicePublicationState.findUnique({ where: { deviceId } });
       if (current?.desiredPublicationRevisionId === revisionId) return { deviceId, publicationRevisionId: revisionId };
       if ((current?.desiredPublicationRevisionId ?? null) !== input.expectedDesiredRevisionId) throw new ConflictException('Device publication conflict');

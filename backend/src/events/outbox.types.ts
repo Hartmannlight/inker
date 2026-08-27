@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DeviceEvent } from './events.service';
 import { PUBLICATION_EVENT_TYPES as PUB } from '../publications/publication-persistence.types';
+import { parsePlaybackEvent, PLAYBACK_CHANGED } from '../playback/playback.events';
 
 export const OUTBOX_POLICY = {
   maxAttempts: 5,
@@ -68,6 +69,10 @@ export function parseOutboxEvent(event: EventInput): {
   )
     return invalid();
   const p = event.payload as Record<string, unknown>;
+  if (event.eventType === PLAYBACK_CHANGED) {
+    parsePlaybackEvent(event);
+    return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, event.aggregateRevision!), deviceIds: [] };
+  }
   const shape = legacy.get(event.eventType);
   if (shape) {
     const [aggregate, idField] = shape;

@@ -129,6 +129,29 @@ async function main() {
     assert.equal(JSON.stringify(await p.outboxEvent.findMany()).includes(secret), false);
     console.info(`WP-16 measured: ${count} events in ${elapsed} ms (${(count * 1000 / elapsed).toFixed(1)} events/s), real Redis/BullMQ/SQLite, offline adapter, command roundtrips included`);
     console.info('WP-16 Redis/fanout/subscriber/retry/crash/restart: passed');
+    progress('WP-18 durable playback through empty Redis restart');
+    b = await host();
+    ca = await connect(a, d); cb = await connect(b, d);
+    await command(a, 'playback-start', { deviceId: d.id });
+    const started = await p.playbackState.findUniqueOrThrow({ where: { deviceId: d.id } });
+    docker('stop', '-t', '1', name);
+    await sleep(2500);
+    // Content reads remain stable; DB holds the due event while Redis is absent.
+    assert.equal((await p.playbackState.findUniqueOrThrow({ where: { deviceId: d.id } })).version, 1);
+    assert.ok(await p.outboxEvent.count({ where: { eventType: 'playback.transition.due', status: { in: ['pending', 'processing'] } } }));
+    docker('start', name);
+    await until(async () => (await p.playbackState.findUniqueOrThrow({ where: { deviceId: d.id } })).version === 2, 45_000);
+    const advanced = await p.playbackState.findUniqueOrThrow({ where: { deviceId: d.id } });
+    assert.notEqual(advanced.currentItemId, started.currentItemId);
+    assert.equal(advanced.anchorAt.toISOString(), started.anchorAt.toISOString());
+    assert.equal(advanced.nextTransitionAt, null);
+    const sequence = (await p.devicePublicationState.findUniqueOrThrow({ where: { deviceId: d.id } })).desiredSequence;
+    await until(() => ca.messages.at(-1).revision === sequence && cb.messages.at(-1).revision === sequence);
+    await until(async () => await p.outboxEvent.count({ where: { eventType: 'playback.transition.due', status: 'delivered' } }) === 1);
+    assert.equal(await p.outboxEvent.count({ where: { status: 'dead-letter' } }), 0);
+    assert.equal(logs.includes(secret), false);
+    assert.equal(redisLogs.includes(secret), false);
+    console.info('WP-18 scheduled transition, Redis loss/recovery, two adapter processes and monotonic delivery: passed');
   } finally {
     monitor?.disconnect();
     for (const socket of sockets) socket.terminate();

@@ -39,6 +39,13 @@ module.exports = [
     },
   },
   {
+    files: ['src/playback/*.test.ts', 'test/playback.integration.ts'],
+    languageOptions: {
+      globals: { Bun: 'readonly' },
+      parserOptions: { project: './test/tsconfig.playback.json' },
+    },
+  },
+  {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.js'],
   },
 ];
