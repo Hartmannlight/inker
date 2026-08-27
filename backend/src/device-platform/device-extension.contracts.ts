@@ -4,6 +4,7 @@ import type {
   DeviceCapabilities,
   DeviceProfile,
   DeliveryPolicy as DeliveryPolicyContract,
+  ProtocolVersion,
 } from '@inker/contracts';
 import type { ResolvedDeviceConfiguration } from './device-configuration';
 
@@ -29,6 +30,8 @@ export interface TransportRegistration {
 export interface TransportAdapter {
   readonly adapterId: string;
   readonly transportMode: string;
+  /** Implemented pull wire contract, independent of legacy device identity. */
+  readonly pullProtocolVersion?: ProtocolVersion;
   readonly legacy: {
     deviceType: LegacyDeviceType;
     transport: LegacyTransport;
@@ -42,6 +45,12 @@ export interface DeliveryPolicy {
   readonly mode: DeliveryMode;
   readonly dispatchOnRefresh: boolean;
   selectTransport(capabilities: DeviceCapabilities): string;
+  pullHints?(capabilities: DeviceCapabilities, policy: DeliveryPolicyContract): PullDeliveryHints;
+}
+
+export interface PullDeliveryHints {
+  refreshAfterSeconds: number;
+  telemetryIntervalSeconds: number;
 }
 
 export interface CreateProfileSelection {

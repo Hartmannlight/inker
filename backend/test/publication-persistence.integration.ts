@@ -6,6 +6,19 @@ import { join, resolve } from "node:path";
 import { PublicationCleanupService } from "../src/publications/publication-cleanup.service";
 import { PublicationPersistenceService } from "../src/publications/publication-persistence.service";
 import { PUBLICATION_EVENT_TYPES } from "../src/publications/publication-persistence.types";
+import { Test } from '@nestjs/testing';
+import { DiscoveryModule } from '@nestjs/core';
+import { PrismaService } from '../src/prisma/prisma.service';
+import { PullContentService } from '../src/device-platform/pull-content.service';
+import { PullDeviceAuthService } from '../src/device-platform/pull-device-auth.service';
+import { PullLastSeenService } from '../src/device-platform/pull-last-seen.service';
+import { ProfileResolverService } from '../src/device-platform/profile-resolver.service';
+import { DeviceConfigurationService } from '../src/device-platform/device-configuration.service';
+import { DeliveryPolicyRegistry } from '../src/device-platform/delivery-policy.registry';
+import { SleepyDeliveryPolicy, ResponsivePullDeliveryPolicy } from '../src/device-platform/delivery-policies';
+import { HttpPullTransportAdapter } from '../src/device-platform/http-pull.transport-adapter';
+import { TransportAdapterRegistry } from '../src/device-platform/transport-adapter.registry';
+import { hashToken } from '../src/common/utils/crypto.util';
 
 const backendRoot = resolve(import.meta.dir, "..");
 const migrationScript = join(backendRoot, "scripts", "migrate-database.ts");
@@ -284,5 +297,73 @@ describe("publication persistence boundary", () => {
     const events = await persistence.listOutboxEvents({ status: "pending" });
     expect(events).toHaveLength(1);
     expect(events[0].eventType).toBe(PUBLICATION_EVENT_TYPES.revisionCreated);
+  });
+
+  test('pull reads only the desired immutable revision, survives restart and throttles real SQLite writes', async () => {
+    const device = await prisma.device.create({ data: {
+      name: 'Pull fixture', externalId: 'pull-fixture', profileId: 'trmnl-byod-7.5-mono',
+      deliveryPolicyId: 'reference-sleepy', apiKey: 'legacy-pull-fixture-secret',
+    } });
+    const token = 'pull-fixture-credential-secret';
+    await prisma.deviceCredential.create({ data: { deviceId: device.id, tokenHash: hashToken(token) } });
+    const first = await persistence.createPublication({ publicationKey: 'pull-test', protocolVersion: '1.0',
+      content: { fixtureArtifacts: ['mono-800x480-white-bmp'] }, contentHash: 'fixture-white' });
+    const second = await persistence.appendRevision({ publicationId: first.publication.publicationId, protocolVersion: '1.0',
+      content: { fixtureArtifacts: ['mono-800x480-black-bmp'] }, contentHash: 'fixture-black' });
+    await persistence.setDesiredRevision(device.id, first.revision.publicationRevisionId);
+    await prisma.$executeRawUnsafe('CREATE TABLE pull_write_count (writes INTEGER NOT NULL)');
+    await prisma.$executeRawUnsafe('INSERT INTO pull_write_count VALUES (0)');
+    await prisma.$executeRawUnsafe('CREATE TRIGGER count_pull_seen AFTER UPDATE OF last_seen_at ON devices BEGIN UPDATE pull_write_count SET writes = writes + 1; END');
+    const beforeEvents = await prisma.outboxEvent.count();
+    const beforeState = await persistence.getDevicePublicationState(device.id);
+
+    const createModule = async () => {
+      const module = await Test.createTestingModule({ imports: [DiscoveryModule], providers: [
+        PullContentService, PullDeviceAuthService, PullLastSeenService, ProfileResolverService,
+        DeviceConfigurationService, HttpPullTransportAdapter, TransportAdapterRegistry,
+        { provide: PrismaService, useValue: prisma },
+        { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy()]) },
+      ] }).compile();
+      await module.init();
+      return module;
+    };
+    let module = await createModule();
+    const read = async () => module.get(PullContentService).read(await module.get(PullDeviceAuthService).authenticate({ authorization: `Bearer ${token}` }));
+    try {
+      const result = await read();
+      expect(result.manifest.revision).toBe('1'); // Latest revision is deliberately NOT desired.
+      for (let i = 0; i < 20; i++) expect((await read()).etag).toBe(result.etag);
+      await module.close();
+      expect(await prisma.$queryRawUnsafe('SELECT writes FROM pull_write_count')).toEqual([{ writes: 1 }]);
+      expect(await prisma.outboxEvent.count()).toBe(beforeEvents);
+      expect(await persistence.getDevicePublicationState(device.id)).toEqual(beforeState);
+
+      await prisma.$disconnect();
+      await prisma.$connect();
+      module = await createModule();
+      expect((await read()).etag).toBe(result.etag);
+      expect(await prisma.$queryRawUnsafe('SELECT writes FROM pull_write_count')).toEqual([{ writes: 1 }]);
+      const changed = await prisma.device.update({ where: { id: device.id }, data: { deliveryPolicyId: 'reference-responsive-pull' } });
+      const responsive = await read();
+      expect(responsive.etag).toBe(result.etag);
+      expect(responsive.hints.refreshAfterSeconds).toBe(60);
+      expect([changed.id, changed.externalId, changed.profileId, changed.playlistId, changed.apiKey]).toEqual([device.id, device.externalId, device.profileId, device.playlistId, device.apiKey]);
+      await persistence.setDesiredRevision(device.id, second.publicationRevisionId);
+      expect((await read()).etag).not.toBe(result.etag);
+      await prisma.deviceCredential.updateMany({ where: { deviceId: device.id }, data: { revokedAt: new Date() } });
+      await expect(read()).rejects.toThrow('Invalid device credentials');
+    } finally { await module.close(); }
+  }, 30_000);
+
+  test('pull credentials cannot read another device publication', async () => {
+    const owner = await prisma.device.create({ data: { name: 'Owner', profileId: 'trmnl-byod-7.5-mono', deliveryPolicyId: 'reference-sleepy' } });
+    const other = await prisma.device.create({ data: { name: 'Other', profileId: 'trmnl-byod-7.5-mono', deliveryPolicyId: 'reference-sleepy' } });
+    await prisma.deviceCredential.create({ data: { deviceId: other.id, tokenHash: hashToken('other-device-token') } });
+    const publication = await persistence.createPublication({ publicationKey: 'owner', protocolVersion: '1.0', content: { fixtureArtifacts: ['mono-800x480-white-bmp'] }, contentHash: 'fixture' });
+    await persistence.setDesiredRevision(owner.id, publication.revision.publicationRevisionId);
+    const auth = new PullDeviceAuthService(prisma as any);
+    const authenticated = await auth.authenticate({ authorization: 'Bearer other-device-token' });
+    expect(authenticated.id).toBe(other.id);
+    expect(await persistence.getDevicePublicationState(authenticated.id)).toBeNull();
   });
 });

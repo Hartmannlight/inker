@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication, ValidationPipe, Logger } from '@nestjs/common';
 import request from 'supertest';
 import { ApiController } from './api.controller';
 import { DisplayService } from './display/display.service';
@@ -72,6 +72,18 @@ describe('ApiController (e2e)', () => {
   });
 
   describe('GET /api/display', () => {
+    it('does not leak any legacy credential header or credential prefix into logs', async () => {
+      const debug = spyOn(Logger.prototype, 'debug').mockImplementation(() => {});
+      const secret = 'secret-legacy-value-never-log';
+      try {
+        for (const header of ['HTTP_ID', 'HTTP-ID', 'ID', 'X-Device-ID', 'Device-ID', 'Access-Token']) {
+          const response = await request(app.getHttpServer()).get('/api/display').set(header, secret).expect(200);
+          expect(response.text).not.toContain(secret);
+        }
+        expect(JSON.stringify(debug.mock.calls)).not.toContain(secret);
+        expect(JSON.stringify(debug.mock.calls)).not.toContain(secret.slice(0, 8));
+      } finally { debug.mockRestore(); }
+    });
     it('should return 422 without HTTP_ID header', async () => {
       const response = await request(app.getHttpServer())
         .get('/api/display')
@@ -94,6 +106,11 @@ describe('ApiController (e2e)', () => {
   });
 
   describe('GET /api/setup', () => {
+    it('preserves the explicit legacy setup credential response contract', async () => {
+      const response = await request(app.getHttpServer()).get('/api/setup').set('HTTP_ID', 'AA:BB:CC:DD:EE:FF').expect(200);
+      expect(response.body.api_key).toBe('test-api-key');
+      expect(response.body.friendly_id).toBe('test-device-1');
+    });
     it('should return 422 without HTTP_ID header', async () => {
       const response = await request(app.getHttpServer())
         .get('/api/setup')

@@ -136,14 +136,14 @@ export class DisplayService {
               },
             },
           });
-        } catch (err) {
-          this.logger.error(`Auto-provision failed for ${macAddressOrApiKey}: ${err.message}`);
+        } catch {
+          this.logger.error('Device auto-provision failed');
         }
       }
 
       // If still not found after auto-provision attempt, send reset
       if (!device) {
-        this.logger.log(`Device not found for key ${macAddressOrApiKey} - sending factory reset signal`);
+        this.logger.log('Device not found - sending factory reset signal');
         return {
           status: 0,
           image_url: '',

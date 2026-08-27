@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type { DeviceCapabilities, DeliveryMode, TransportMode } from '@inker/contracts';
+import type { DeviceCapabilities, DeliveryMode, TransportMode, DeliveryPolicy as PolicyContract } from '@inker/contracts';
 import type { DeliveryPolicy } from './device-extension.contracts';
 
 abstract class BaseDeliveryPolicy implements DeliveryPolicy {
@@ -17,18 +17,28 @@ abstract class BaseDeliveryPolicy implements DeliveryPolicy {
   }
 }
 
-@Injectable()
-export class SleepyDeliveryPolicy extends BaseDeliveryPolicy {
-  readonly mode = 'sleepy' as const;
-  readonly dispatchOnRefresh = false;
+abstract class PullDeliveryPolicy extends BaseDeliveryPolicy {
   protected readonly requiredTransport = 'http-pull';
+  readonly dispatchOnRefresh = false;
+
+  pullHints(capabilities: DeviceCapabilities, policy: PolicyContract) {
+    this.selectTransport(capabilities);
+    if (!policy.pollIntervalSeconds) throw new BadRequestException('Pull interval is required');
+    return {
+      refreshAfterSeconds: Math.max(policy.pollIntervalSeconds, capabilities.energy.recommendedMinRefreshSeconds ?? 1),
+      telemetryIntervalSeconds: Math.max(60, policy.telemetryIntervalSeconds),
+    };
+  }
 }
 
 @Injectable()
-export class ResponsivePullDeliveryPolicy extends BaseDeliveryPolicy {
+export class SleepyDeliveryPolicy extends PullDeliveryPolicy {
+  readonly mode = 'sleepy' as const;
+}
+
+@Injectable()
+export class ResponsivePullDeliveryPolicy extends PullDeliveryPolicy {
   readonly mode = 'responsive-pull' as const;
-  readonly dispatchOnRefresh = false;
-  protected readonly requiredTransport = 'http-pull';
 }
 
 @Injectable()

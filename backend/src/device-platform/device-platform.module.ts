@@ -13,11 +13,18 @@ import { WebDisplayAuthService } from './web-display-auth.service';
 import { WebDisplayGateway } from './web-display.gateway';
 import { WebDisplaysController } from './web-displays.controller';
 import { WebSocketTransportAdapter } from './websocket.transport-adapter';
+import { PullContentController } from './pull-content.controller';
+import { PullContentService } from './pull-content.service';
+import { PullDeviceAuthService } from './pull-device-auth.service';
+import { PullLastSeenService } from './pull-last-seen.service';
 
 @Module({
   imports: [PrismaModule, DiscoveryModule],
-  controllers: [WebDisplaysController],
+  controllers: [WebDisplaysController, PullContentController],
   providers: [
+    PullContentService,
+    PullDeviceAuthService,
+    PullLastSeenService,
     PresentationService,
     WebDisplayAuthService,
     WebDisplayGateway,

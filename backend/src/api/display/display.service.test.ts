@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, spyOn } from 'bun:test';
+import { Logger } from '@nestjs/common';
 import { DisplayService } from './display.service';
 import { createMockPrisma } from '../../test/mocks/prisma.mock';
 import { createMock } from '../../test/mocks/helpers';
@@ -52,6 +53,16 @@ describe('DisplayService', () => {
       mockSleepScreenService,
       mockScreenRendererService,
     );
+  });
+
+  it('does not log a rejected legacy device key', async () => {
+    mockPrisma.device.findFirst.mockResolvedValue(null);
+    const log = spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+    try {
+      const result = await service.getDisplayContent('rejected-device-key-secret');
+      expect(result.reset_firmware).toBe(true);
+      expect(JSON.stringify(log.mock.calls)).not.toContain('rejected-device-key-secret');
+    } finally { log.mockRestore(); }
   });
 
   describe('getCurrentScreen (private)', () => {

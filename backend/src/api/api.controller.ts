@@ -59,7 +59,8 @@ export class ApiController {
    * Sanitize headers for logging — remove sensitive values
    */
   private sanitizeHeaders(headers: Record<string, string>): string {
-    const sensitiveKeys = ['authorization', 'cookie', 'access-token', 'x-api-key'];
+    const sensitiveKeys = ['authorization', 'cookie', 'access-token', 'x-api-key',
+      'http_id', 'http-id', 'id', 'x-device-id', 'device-id', 'x-device-key'];
     const sanitized = { ...headers };
     for (const key of Object.keys(sanitized)) {
       if (sensitiveKeys.includes(key.toLowerCase())) {
@@ -221,7 +222,7 @@ export class ApiController {
     const refreshRateStr = this.extractHeader(headers, ['refresh-rate', 'Refresh-Rate', 'refresh_rate', 'http_refresh_rate']);
     const reportedRefreshRate = refreshRateStr ? parseInt(refreshRateStr, 10) : undefined;
 
-    this.logger.debug(`[DISPLAY] Extracted deviceApiKey: ${deviceApiKey}, battery: ${batteryVoltageStr}V → ${battery}%, wifi: ${wifi} dBm, fw: ${firmwareVersion}, model: ${modelName}, size: ${reportedWidth}x${reportedHeight}`);
+    this.logger.debug('[DISPLAY] Device request received');
 
     if (!deviceApiKey) {
       this.logger.error(`[DISPLAY] Missing HTTP_ID header. All headers: ${this.sanitizeHeaders(headers)}`);
@@ -254,7 +255,7 @@ export class ApiController {
         },
       );
 
-      this.logger.debug(`Display content served to device: ${deviceApiKey.slice(0, 8)}... (baseUrl: ${baseUrl})`);
+      this.logger.debug('Display content served');
       return result;
     } catch (error) {
       if (error instanceof NotFoundException) {
@@ -465,7 +466,7 @@ export class ApiController {
       'Access-Token',
     ]);
 
-    this.logger.debug(`[LOG] Extracted deviceApiKey: ${deviceApiKey}`);
+    this.logger.debug('[LOG] Device log request received');
 
     if (!deviceApiKey) {
       this.logger.error(`[LOG] Missing HTTP_ID header. All headers: ${this.sanitizeHeaders(headers)}`);
@@ -482,7 +483,7 @@ export class ApiController {
 
     const result = await this.logService.createLog(deviceApiKey, createLogDto);
 
-    this.logger.debug(`Log created for device: ${deviceApiKey.slice(0, 8)}...`);
+    this.logger.debug('Device log created');
     return result;
   }
 

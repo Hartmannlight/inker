@@ -11,6 +11,7 @@ import {
 export class HttpPullTransportAdapter implements TransportAdapter {
   readonly adapterId = 'http-pull';
   readonly transportMode = 'http-pull';
+  readonly pullProtocolVersion = '1.0' as const;
   readonly legacy = { deviceType: 'trmnl', transport: 'pull' } as const;
 
   prepareRegistration(input: { macAddress?: string }): TransportRegistration {

@@ -1327,13 +1327,13 @@ hinaus.
 
 **Aufgaben:**
 
-- [ ] Implementiere einen versionierten authentifizierten Device-Content-Endpunkt.
-- [ ] Wähle Ausgabe anhand effektiver Capabilities statt Gerätetyp-Switch.
-- [ ] Erzeuge stabiles `ETag` aus Inhaltsrevision und Artefakthash.
-- [ ] Antworte korrekt auf `If-None-Match` mit `304` ohne Body.
-- [ ] Liefere Refresh-Hinweise für `sleepy` und `responsive-pull`.
-- [ ] Aktualisiere Last-Seen gedrosselt statt pro unverändertem Poll synchron.
-- [ ] Bewahre die bestehende TRMNL-Kompatibilität über Adaptertests.
+- [x] Implementiere einen versionierten authentifizierten Device-Content-Endpunkt.
+- [x] Wähle Ausgabe anhand effektiver Capabilities statt Gerätetyp-Switch.
+- [x] Erzeuge stabiles `ETag` aus Inhaltsrevision und Artefakthash.
+- [x] Antworte korrekt auf `If-None-Match` mit `304` ohne Body.
+- [x] Liefere Refresh-Hinweise für `sleepy` und `responsive-pull`.
+- [x] Aktualisiere Last-Seen gedrosselt statt pro unverändertem Poll synchron.
+- [x] Bewahre die bestehende TRMNL-Kompatibilität über Adaptertests.
 
 **Abnahme:** Unveränderte Geräte laden kein Bild erneut; Batterie- und Netzmodus
 ändern nur Policy, nicht Geräteidentität oder Dashboard.
@@ -1342,6 +1342,132 @@ hinaus.
 
 **Handoff:** Firmwareannahmen und praktisch zu messende Refresh-Untergrenzen
 notieren.
+
+### Abschluss WP-14
+
+- Status: abgeschlossen am 2026-08-27. Voraussetzungen WP-07 (`528c568`) und
+  WP-13 (`79f14eb`) sowie WP-11 (`e1a7bee`) und WP-12 (`2052430`) sind im
+  Ausgangsstand enthalten. Aus dem Architekturplan wurden ausschließlich die
+  referenzierten Abschnitte 3, 6.3 und 6.4 verwendet; ADRs und Handoffs WP-04
+  bis WP-13 bleiben verbindlich.
+- Endpunkte: `GET /api/v1/device-content` liefert ein unverpacktes
+  `PresentationManifest` mit `protocolVersion: "1.0"`.
+  `GET /api/v1/device-content/artifacts/:sha256` liefert die referenzierten
+  Bildbytes. Beide authentisieren vor Inhaltsabfrage und Conditional GET.
+  `Authorization: Bearer <credential>` verwendet ausschließlich den bestehenden
+  `DeviceCredential`-Hash, prüft Widerruf, Ablauf und aktives Gerät und begrenzt
+  Zugriff auf dessen gewünschte Revision. Alternativ akzeptiert der Legacy-Pfad
+  den bestehenden TRMNL-API-Key in `HTTP_ID` oder `Access-Token`, niemals eine
+  MAC-Adresse. Mehrdeutige Credentials werden abgelehnt, fehlgeschlagene Bearer-
+  Authentisierung fällt nicht auf einen anderen Header zurück. Admin-Cookies,
+  Admin-Bearer und Queryparameter authentisieren kein Gerät; Browser-CSRF und
+  Adminsessions werden im Devicepfad nicht aufgerufen. Credentialausgabe,
+  Pairing, Rotation und Widerruf bleiben unverändert. HTTPS ist weiterhin die
+  sichere Betriebsannahme; der neue Readpfad erzeugt keinen HTTP-Pairing-Fallback.
+- Veröffentlichter Zustand und Scope: Maßgeblich ist ausschließlich
+  `DevicePublicationState.desiredRevision`, nicht die neueste Revision und nicht
+  ein Draft, eine Playlistrotation oder `presentationRevision`. GET verändert
+  weder Publications noch Soll-/Bestätigungszustand oder Outbox. Ohne gewünschte
+  Revision folgt `404`, bei inkompatibler Gerätekonfiguration/Ausgabe `406`, bei
+  fehlenden Fixture-Referenzen oder inkompatibler Publication-Version `503`.
+  Kompatible Minor-Versionen nutzen nur bekannte Felder. Als minimale interne
+  Übergabe dient `PublicationRevision.content.fixtureArtifacts`, eine Liste der
+  IDs `mono-800x480-white-bmp`, `mono-800x480-black-bmp` und/oder
+  `mono-800x480-white-png`. Der feste Katalog enthält ausschließlich diese echten
+  800×480-Monochrom-Fixtures mit SHA-256; es gibt keinen Renderer, Rendercache,
+  beliebigen Dateizugriff, Providerabruf oder externen Artefakt-URL-Passthrough.
+  Allgemeines Publishing/Rendering und zusätzliche Formate bleiben Folgearbeit.
+- Capability-/Adaptergrenze: `ProfileResolver` löst Profil und Overrides auf,
+  `DeliveryPolicy` liefert Transportauswahl und `pullHints`, und die vorhandene
+  Nest-Discovery liefert den Adapter mit `pullProtocolVersion`. Formatpräferenz,
+  MIME-Type, Dimensionen, Farbraum, Bit-Tiefe und Rotation bestimmen das passende
+  vorhandene Artefakt. Kein Gerätetyp-Switch und keine neue zentrale Transportliste
+  wurden eingeführt; ein zusätzlicher Testadapter funktioniert über Discovery.
+  `connected` ohne Pull-Policy ist hier nicht implementiert; WebDisplay behält
+  seine bestehenden HTTP-/WebSocket-Pfade.
+- ETag-/304-Vertrag: Das schwache Manifest-ETag `W/"<sha256>"` berücksichtigt
+  Protokoll, Publication, Inhaltsrevision, Profilvariante und Artefakthash;
+  `generatedAt` stammt aus `publishedAt`, nicht aus der Pollzeit. Änderungen an
+  Revision oder Artefakt ändern das ETag. Delivery-Hinweise sind bewusst nicht
+  Teil dieses Inhaltsvalidators. Artefakte haben ein starkes Hash-ETag und eine
+  relative, credentialfreie Hash-URL. `If-None-Match` verwendet schwachen
+  Vergleich, akzeptiert Taglisten, leere Listenelemente und `*`; unpassende oder
+  ungültige Tags liefern `200`. Die Listen-/Vergleichsregeln folgen
+  [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.2).
+  `304` hat keinen Body und behält ETag, `Cache-Control: private, no-cache`,
+  `Vary: Authorization, HTTP_ID, Access-Token` sowie Refresh-Header. Fehler sind
+  `no-store`. Auch ein passendes ETag umgeht keine Authentisierung. Ein Artefakt
+  ist nur für die aktuell gewünschte, kompatible Variante abrufbar.
+- Refresh-Policies: Die unveränderten Referenzpolicies liefern 900 Sekunden
+  (`sleepy`) bzw. 60 Sekunden (`responsive-pull`), jeweils mindestens die
+  effektive `recommendedMinRefreshSeconds`. Der Body enthält
+  `refresh.refreshAfterSeconds`; auf **jeder** erfolgreichen Antwort, auch `304`,
+  sind `X-Refresh-After-Seconds` und `X-Delivery-Mode` maßgeblich. Clients müssen
+  diese Hinweise auch ohne neuen Manifestbody übernehmen. Ein Policywechsel
+  erhält Profil, Geräte-ID, External-ID, Credential, Dashboardzuordnung,
+  gewünschte Publication und Artefakte; das Inhalts-ETag bleibt gleich.
+  Fixtures besitzen keine fachlichen Übergänge oder Interaktionen; entsprechende
+  optionale Zeitangaben werden nicht erfunden und `allowedActions` bleibt leer.
+- Last-Seen: Erfolgreich authentisierte Pulls beobachten Geräteaktivität ohne
+  auf den Write zu warten. Persistierte `lastSeenAt`-Zeitstempel drosseln auf
+  `telemetryIntervalSeconds` (Referenzen: 3600 bzw. 300 Sekunden; technische
+  Untergrenze 60 Sekunden). Pro Gerät wird gleichzeitig nur ein Write gehalten;
+  insgesamt höchstens 1024. Ein bedingtes Datenbankupdate schützt auch gegen
+  konkurrierende/veraltete Beobachtungen. Neustarts rekonstruieren die Drosselung
+  aus SQLite. Fehler verhindern keine Auslieferung und werden ohne Originalfehler
+  protokolliert. Nur Telemetrie darf bei einem abrupten Prozessende verloren gehen;
+  Authentisierung wird nicht gecacht und schreibt keine Credential-/Sessiondaten.
+  Last-Seen bleibt damit eine gedrosselte Aktivitätsanzeige, keine neue
+  Liveness-Garantie für die bestehende Online-/Offline-Anzeige.
+- Legacy/Sicherheit: `/api/setup`, `/api/display`, API-Key-Erzeugung und deren
+  bestehende Firmwareantworten bleiben erhalten. Gefundene Credential-/Prefix-
+  Debugausgaben und fehlende Headerredaction im Legacy-Pullpfad sind durch Tests
+  abgesichert und entfernt. Neue Antworten verwenden ausschließlich explizite
+  Felder; Tokens, Credential-Hashes, Instanzschlüssel und beliebige Snapshot-Metadaten werden
+  nicht übernommen. WP-08 bis WP-12 einschließlich Admin-Cookies/CSRF,
+  Startup-/Backupvertrag und Secret-Redaction bleiben unverändert.
+- Firmwareannahmen und offene Messungen: Für Downloadvermeidung muss Firmware
+  den versionierten Pfad, gewähltes Bildformat, Headerauthentisierung,
+  `If-None-Match`, `304` und Refresh-Header unterstützen und das letzte Bild lokal
+  behalten. Fehlt es lokal, muss sie ohne Validator neu laden. Bei einem
+  Publishwechsel zwischen Manifest- und Bildabruf kann die alte Hash-URL `404`
+  liefern; dann ist das Manifest neu abzurufen. Unveränderte Legacy-Firmware nutzt
+  weiter ihren bisherigen Pfad und erhält nicht automatisch diese Optimierung.
+  **900/60 Sekunden und alle Referenz-/Capability-Untergrenzen sind nicht
+  praktisch gemessene Firmwaregrenzen.** Insbesondere die zuverlässige minimale
+  Poll-/Refreshzeit der TRMNL-BYOD-Firmware im Netzbetrieb, Timer-Clamping,
+  Headerverarbeitung, Displayrefresh, WLAN-Wiederanlauf und Energiebedarf sind
+  an realer Hardware zu messen. Es wurde kein physischer Firmwaretest behauptet.
+- Validierung: 528 Backendtests (Baseline zuvor selbst mit 501 bestätigt),
+  23 Contracttests, 54 Frontendtests und 23 reale Integrationsfälle aus Publication,
+  Migration, Enrollment, Admin-Auth und Instanz-Secrets bestanden. Testgetriebene
+  Rotläufe belegten zunächst fehlenden Pullpfad, Legacy-Secretlogs und den
+  HTTP-Listenrandfall. SQLite-Tests bestätigen getrennten Sollzustand, unveränderte
+  Outbox/Bestätigung, genau einen Last-Seen-Write bei 20 unveränderten Polls und
+  Restart-/Policyverhalten. Backend-/Contract-/Frontend-Typechecks,
+  Prisma-Validierung, gezieltes Produktions- und Testlinting, Backend-Builder,
+  Produktionsimage und Compose-Prüfung bestanden. Testlinting verwendete wegen
+  der bekannten TSConfig-Testausschlüsse eine temporäre Parserkonfiguration;
+  Produktionslint meldet nur vier bestehende Legacy-Warnungen, keine Fehler.
+  Das bekannte repositoryweite Lint-Baselineproblem wurde nicht erweitert oder
+  paketfremd bereinigt.
+- Runtime-Smoke: Echter Nginx-/Nest-/SQLite-Pfad mit Adminlogin, CSRF-Abweisung,
+  Short-Code-Austausch, Pullmanifest/-artefakt, Auth vor `304`, Policywechsel,
+  Last-Seen, TRMNL-Setup/Display sowie WebDisplay-Pairing, HTTP und WebSocket
+  bestand. Secretwerte blieben im Testprozess im RAM; reguläre Anwendungslogs und
+  Antworten außerhalb expliziter Credentialverträge enthielten keinen davon.
+  Nach Containerneustart waren Geräte-ID, ETag und Key-ID identisch und Health
+  grün. Der Bun-`ws`-Testclient behandelte HTTP 101 als unerwartete Antwort;
+  derselbe Smoke bestand mit dem vorhandenen Node-Client. Die bekannte optionale
+  Runtime-Seed-Warnung wegen `device-configuration.catalog` ist unverändert und
+  verhindert Startup nicht. Auch die Prisma-7-Konfigurationswarnung bleibt
+  unverändert. Windows-Sandbox-EPERM und blockierte Prisma-Prüfsummenabrufe wurden
+  über freigegebene Wiederholungen erfolgreich geprüft.
+- Schema/Git: Keine Schemaänderung, keine neue Migration und keine Änderung
+  vorhandener Migrationen. Keine Implementierung von WP-15, WP-19 oder MQTT;
+  keine Änderung von Geräte-/Pairing-Lebenszyklen. Dokumentation ausschließlich
+  im WP-14-Status/Handoff ergänzt. Branch `codex/device-platform-spike`;
+  Bestandteil des auf Benutzerwunsch erstellten WP-14-Abschlusscommits. Kein Push.
 
 ## WP-15 – WebSocket und Telemetrie härten
 
