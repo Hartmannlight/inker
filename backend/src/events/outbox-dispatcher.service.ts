@@ -13,6 +13,7 @@ import { OUTBOX_POLICY as POLICY } from './outbox.types';
 import { DeviceUpdateCoordinator } from '../device-platform/device-update-coordinator.service';
 import { PlaybackService } from '../playback/playback.service';
 import { PLAYBACK_DUE } from '../playback/playback.events';
+import { RenderCacheService, RENDER_REQUESTED } from '../render-cache/render-cache.service';
 
 @Injectable()
 export class OutboxDispatcher
@@ -33,6 +34,7 @@ export class OutboxDispatcher
     private readonly consumer: DeviceUpdateCoordinator,
     private readonly cleanup: PublicationCleanupService,
     private readonly playback: PlaybackService,
+    private readonly renderCache: RenderCacheService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -60,6 +62,7 @@ export class OutboxDispatcher
     if (this.running || this.stopped) return;
     this.running = true;
     try {
+      await this.renderCache.reconcile();
       for (let i = 0; i < POLICY.batchSize && !this.stopped; i++) {
         // Bound queue wait below the lease even when four jobs hit their timeout.
         if (
@@ -76,7 +79,7 @@ export class OutboxDispatcher
             version: 1,
             eventId: event.eventId,
             claimToken: event.claimToken!,
-          });
+          }, event.eventType === RENDER_REQUESTED ? 'render' : 'delivery');
         } catch {
           await this.store.fail(event, 'OUTBOX_TRANSPORT_FAILED');
           this.logFailure(event.eventId, 'OUTBOX_REDIS_UNAVAILABLE');
@@ -107,6 +110,12 @@ export class OutboxDispatcher
       return;
     }
     try {
+      if (event.eventType === RENDER_REQUESTED) {
+        await this.renderCache.render(event);
+        if (await this.store.ack(event)) this.counts.delivered++;
+        else this.counts.stale++;
+        return;
+      }
       if (event.eventType === PLAYBACK_DUE) {
         await this.playback.advanceDue(event);
         if (await this.store.ack(event)) this.counts.delivered++;

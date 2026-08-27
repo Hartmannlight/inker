@@ -69,6 +69,7 @@ export {
 } from './validation';
 export {
   DEVICE_WEBSOCKET_LIMITS,
+  comparePresentationRevisions,
   parseDeviceClientMessage,
   parseDeviceServerMessage,
   type DeviceClientMessage,

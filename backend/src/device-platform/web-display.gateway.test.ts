@@ -37,6 +37,49 @@ function setup() {
 afterEach(async () => { for (const g of gateways.splice(0)) await g.onApplicationShutdown(); setSystemTime(); });
 
 describe('WebSocket gateway security and liveness', () => {
+  test('sends ready render at the same desired revision and rejects late fallback receipts', async () => {
+    const h = setup();
+    await h.authenticate();
+    const original = h.client.sent.find(message => message.type === 'presentation.changed').presentation;
+    h.presentations.getForDevice.mockResolvedValue({ ...original, renderRevision: 1, content: { ...original.content, url: '/assets/ready.png' } });
+    await h.gateway.pushPresentation(7);
+    const sent = () => h.client.sent.filter(message => message.type === 'presentation.changed');
+    expect(sent()).toHaveLength(2);
+    expect(sent()[1].presentation).toMatchObject({ revision: 1, renderRevision: 1, content: { url: '/assets/ready.png' } });
+    h.presentations.getForDevice.mockResolvedValue(original);
+    await h.gateway.pushPresentation(7);
+    expect(sent()).toHaveLength(2);
+    h.presentations.getForDevice.mockResolvedValue({ ...original, revision: 0, renderRevision: 999 });
+    await h.gateway.pushPresentation(7);
+    expect(sent()).toHaveLength(2);
+    h.presentations.getForDevice.mockResolvedValue({ ...original, revision: 2, renderRevision: 0 });
+    await h.gateway.pushPresentation(7);
+    expect(sent()).toHaveLength(3);
+    expect(sent()[2].presentation.revision).toBe(2);
+  });
+
+  test('late send callbacks cannot roll the connection generation back', async () => {
+    const h = setup();
+    await h.authenticate();
+    const original = h.client.sent.find(message => message.type === 'presentation.changed').presentation;
+    const callbacks: Array<() => void> = [];
+    h.client.send = (value, callback) => { h.client.sent.push(JSON.parse(value)); if (callback) callbacks.push(() => callback()); };
+    h.presentations.getForDevice.mockResolvedValue({ ...original, revision: 2, renderRevision: 0 });
+    const lower = h.gateway.pushPresentation(7, { deliveryId: 'lower', signal: new AbortController().signal });
+    await settle();
+    expect(callbacks).toHaveLength(1);
+    h.presentations.getForDevice.mockResolvedValue({ ...original, revision: 2, renderRevision: 1 });
+    const higher = h.gateway.pushPresentation(7, { deliveryId: 'higher', signal: new AbortController().signal });
+    await settle();
+    expect(callbacks).toHaveLength(2);
+    callbacks[1](); await higher;
+    callbacks[0](); await lower;
+    const sent = h.client.sent.length;
+    h.presentations.getForDevice.mockResolvedValue({ ...original, revision: 2, renderRevision: 0 });
+    await h.gateway.pushPresentation(7);
+    expect(h.client.sent).toHaveLength(sent);
+  });
+
   test('authenticates before content, projects versioned output and rejects cross-device messages', async () => {
     const h = setup();
     expect(h.presentations.getForDevice).not.toHaveBeenCalled();

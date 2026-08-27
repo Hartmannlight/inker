@@ -1,13 +1,13 @@
 // Explicit, isolated production-image smoke. Never targets an existing container.
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { randomBytes, randomUUID } = require('node:crypto');
+const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp18-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp19-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
-let cookie, csrf, playbackBeforeRestart, stage = 'start';
+let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, stage = 'start';
 const sockets = [];
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ADMIN_PIN: password } });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -26,6 +26,19 @@ async function request(path, { method = 'GET', data, admin = false, headers = {}
   try { body = JSON.parse(text); } catch { body = text; }
   return { response, text, body: body?.data ?? body };
 }
+async function renderedFor(deviceId) {
+  let binding;
+  await until(() => {
+    binding = db('console.log(JSON.stringify(await p.renderBinding.findFirst({where:{deviceId:input.deviceId},include:{ready:true,device:{include:{publicationState:true}}}})));', { deviceId });
+    return binding?.ready?.completedAt && binding.readyKey === binding.desiredKey &&
+      binding.ready.publicationRevisionId === binding.device.publicationState.desiredPublicationRevisionId;
+  });
+  return binding;
+}
+function renderQueue(paused) {
+  db(`const {Queue}=require('bullmq'); const q=new Queue('render',{prefix:'inker-wp16',connection:{host:'127.0.0.1',port:6379,password:process.env.REDIS_PASSWORD||'inker_redis'}});
+    try { await q.${paused ? 'pause' : 'resume'}(); console.log('true'); } finally {await q.close();}`);
+}
 function connect(device, token, options = {}) {
   const ws = new WebSocket(base.replace('http', 'ws') + '/api/device-connect', { origin: base, ...options }); sockets.push(ws);
   const state = { messages: [], pings: 0, code: undefined, ws };
@@ -42,7 +55,8 @@ async function main() {
   try {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
-      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', process.env.INKER_SMOKE_IMAGE || 'inker:wp18-test');
+      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets',
+      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp19-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
@@ -57,12 +71,28 @@ async function main() {
     const active = connect(device, token); await until(() => active.messages.some(m => m.type === 'presentation.changed'));
     {
       stage = 'explicit publish';
-      const publishInput = { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [device.id], draft: { fixtureArtifacts: ['mono-800x480-white-png'] } };
+      const deviceIds = [device.id];
+      for (let i = 1; i < 20; i++) {
+        const peer = await request('/api/devices', { method: 'POST', admin: true, data: { name: `WP19 peer ${i}`, deviceType: 'web-display' } });
+        assert.equal(peer.response.status, 201); deviceIds.push(peer.body.id); secrets.push(peer.body.pairingToken);
+      }
+      // Pause only our isolated queue to deterministically observe fallback then
+      // real render completion; no renderer is mocked or replaced.
+      renderQueue(true);
+      const publishInput = { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds, draft: { fixtureArtifacts: ['mono-800x480-white-png'] } };
       assert.equal((await request('/api/publications/browser/publish', { method: 'POST', headers: { Cookie: cookie }, data: publishInput })).response.status, 403);
       const publication = await request('/api/publications/browser/publish', { method: 'POST', admin: true, data: publishInput });
       assert.equal(publication.response.status, 201);
       assert.deepEqual((await request('/api/publications/browser/publish', { method: 'POST', admin: true, data: publishInput })).body, publication.body);
-      await until(() => active.messages.filter(m => m.type === 'presentation.changed').length === 2);
+      await until(() => active.messages.some(m => m.presentation?.revision === 1 && (m.presentation.renderRevision ?? 0) === 0));
+      await until(() => db('console.log(JSON.stringify(await p.renderBinding.count()));') === 20);
+      assert.equal(db('console.log(JSON.stringify(await p.renderRequest.count()));'), 1);
+      assert.equal(db("console.log(JSON.stringify(await p.outboxEvent.count({where:{eventType:'render.requested'}})));"), 1);
+      renderQueue(false);
+      const rendered = await renderedFor(device.id);
+      await until(() => active.messages.some(m => m.presentation?.revision === 1 && m.presentation.renderRevision === rendered.device.renderRevision));
+      assert.ok(rendered.device.renderRevision > 0);
+      assert.equal(db('console.log(JSON.stringify(await p.renderBinding.count({where:{readyKey:input.key}})));', { key: rendered.readyKey }), 20);
       const manifestPath = `/api/web-displays/${device.externalId}/presentation`;
       const auth = { Authorization: `Bearer ${token}` };
       const publishedManifest = await request(manifestPath, { headers: auth });
@@ -76,6 +106,14 @@ async function main() {
       assert.equal(db("console.log(JSON.stringify(await p.$queryRawUnsafe('SELECT n FROM wp17_writes')));")[0].n, 0);
       stage = 'browser artifact auth and conditional get';
       const image = await fetch(base + publishedManifest.body.content.url, { headers: auth }); assert.equal(image.status, 200);
+      const imageBytes = Buffer.from(await image.arrayBuffer());
+      assert.equal(createHash('sha256').update(imageBytes).digest('hex'), rendered.ready.artifactHash);
+      const dimensions = await require('sharp')(imageBytes).metadata();
+      assert.equal(dimensions.width, rendered.ready.target.width); assert.equal(dimensions.height, rendered.ready.target.height);
+      for (const path of [`/render-cache/${rendered.ready.artifactHash}`, `/uploads/${rendered.ready.artifactHash}`]) {
+        const exposed = await fetch(base + path);
+        assert.notEqual(createHash('sha256').update(Buffer.from(await exposed.arrayBuffer())).digest('hex'), rendered.ready.artifactHash);
+      }
       const unchanged = await fetch(base + publishedManifest.body.content.url, { headers: { ...auth, 'If-None-Match': image.headers.get('etag') } });
       assert.equal(unchanged.status, 304); assert.equal(await unchanged.text(), '');
       assert.equal((await fetch(base + publishedManifest.body.content.url, { headers: { 'If-None-Match': image.headers.get('etag') } })).status, 401);
@@ -88,6 +126,21 @@ async function main() {
       const outbox = JSON.stringify(db('console.log(JSON.stringify(await p.outboxEvent.findMany()));'));
       for (const value of secrets) assert.equal(outbox.includes(value), false);
       console.info('WP-17 publish/replay, 100 sequential + 100 parallel read-only manifests, authenticated artifacts and WP-16 durable refresh passed');
+      console.info('WP-19 real render queue: 20 devices, one request/job, atomic cache, private image hash/dimensions and ordered live WebSocket render update passed');
+    }
+    stage = 'production CommonJS snapshot normalization';
+    {
+      // Exercise the compiled Sharp import, not only fixture-only publishing or
+      // the TS source loader (whose module interop differs from webpack).
+      const screen = db("await require('sharp')({create:{width:32,height:24,channels:3,background:'#123456'}}).png().toFile('/app/uploads/screens/wp19-normalize.png'); console.log(JSON.stringify(await p.screen.create({data:{name:'WP19 normalization',imageUrl:'/uploads/screens/wp19-normalize.png'}}))); ");
+      const normalized = await request('/api/publications/normalized/publish', { method: 'POST', admin: true,
+        data: { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [], draft: { screenId: screen.id, expectedUpdatedAt: screen.updatedAt } } });
+      assert.equal(normalized.response.status, 201);
+      const snapshot = db('console.log(JSON.stringify(await p.publicationRevision.findUniqueOrThrow({where:{publicationRevisionId:input.id}})));', {id:normalized.body.publicationRevisionId});
+      const bytes = Buffer.from(snapshot.content.image.png, 'base64');
+      const metadata = await require('sharp')(bytes).metadata();
+      assert.equal(metadata.width,32); assert.equal(metadata.height,24);
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), snapshot.content.image.sha256);
     }
     stage = 'WP18 playlist publication and automatic transition';
     {
@@ -112,6 +165,7 @@ async function main() {
       playbackBeforeRestart = (await request(`/api/playback/devices/${device.id}`, { admin: true })).body.state;
       assert.equal(playbackBeforeRestart.currentItemId, fixture.playlist.items[1].id);
       assert.equal(playbackBeforeRestart.nextTransitionAt, null);
+      await renderedFor(device.id);
       const current = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: auth });
       assert.equal(current.body.revision, fixture.desired.desiredSequence + 1);
       assert.equal(current.body.nextTransitionAt, null);
@@ -136,6 +190,7 @@ async function main() {
     const fixture = await request('/api/publications/pull/publish', { method: 'POST', admin: true, data: { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [pull.id], draft: { fixtureArtifacts: ['mono-800x480-white-bmp', 'mono-800x480-white-png'] } } });
     assert.equal(fixture.response.status, 201);
     assert.ok(fixture.body.publicationId);
+    await renderedFor(pull.id);
     const headers = { HTTP_ID: pull.apiKey };
     stage = 'pull-manifest';
     const manifest = await request('/api/v1/device-content', { headers }); assert.equal(manifest.response.status, 200);
@@ -149,6 +204,7 @@ async function main() {
     const policy = await request('/api/v1/device-content', { headers: { ...headers, 'If-None-Match': etag } }); assert.equal(policy.response.status, 304); assert.equal(policy.response.headers.get('x-refresh-after-seconds'), '60');
     stage = 'trmnl-display'; const display = await request('/api/display', { headers }); assert.equal(display.response.status, 200);
     stage = 'restart';
+    renderBeforeRestart = (await renderedFor(device.id)).ready;
     const keyId = JSON.parse(docker('exec', name, 'cat', '/app/secrets/instance.json')).keyId;
     docker('restart', name);
     await until(async () => { try { return (await fetch(base + '/api/v1/device-content', { headers })).ok; } catch { return false; } }, 600);
@@ -159,6 +215,12 @@ async function main() {
     assert.equal(playbackAfterRestart.currentItemId, playbackBeforeRestart.currentItemId);
     assert.equal(playbackAfterRestart.anchorAt, playbackBeforeRestart.anchorAt);
     assert.equal(playbackAfterRestart.version, playbackBeforeRestart.version);
+    const renderedAfterRestart = (await renderedFor(device.id)).ready;
+    assert.equal(renderedAfterRestart.key, renderBeforeRestart.key);
+    assert.equal(renderedAfterRestart.artifactHash, renderBeforeRestart.artifactHash);
+    const restartedImage = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: { Authorization: `Bearer ${rotated}` } });
+    const restartedBytes = Buffer.from(await (await fetch(base + restartedImage.body.content.url, { headers: { Authorization: `Bearer ${rotated}` } })).arrayBuffer());
+    assert.equal(createHash('sha256').update(restartedBytes).digest('hex'), renderBeforeRestart.artifactHash);
     stage = 'secret-audit';
     const logs = docker('logs', name);
     const sessions = db('console.log(JSON.stringify(await p.adminSession.findMany()));');
@@ -173,7 +235,7 @@ async function main() {
       try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
     }
     try {
-      let errors = docker('logs', '--tail', '150', name).split('\n').filter(line => /ERROR|Error|error:/.test(line)).slice(-4).map(line => line.split(' - {')[0]).join('\n');
+      let errors = docker('logs', '--tail', '200', name).split('\n').filter(line => /ERROR|Error|error:|RENDER_/.test(line)).slice(-10).map(line => line.split(' - {')[0]).join('\n');
       for (const secret of secrets.filter(Boolean)) errors = errors.replaceAll(secret, '[REDACTED]');
       console.error(errors);
     } catch { /* Do not print docker's raw error object. */ }

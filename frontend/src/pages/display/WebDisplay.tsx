@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { config } from '../../config';
-import { parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
+import { comparePresentationRevisions, parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import {
   exchangeDeviceEnrollment,
   normalizePairingBaseUrl,
@@ -57,7 +57,8 @@ export function WebDisplay() {
   const [connectionApiUrl, setConnectionApiUrl] = useState(config.apiUrl);
   const [presentation, setPresentation] = useState<PresentationManifest | null>(null);
   const displayedBlob = useRef<string | null>(null);
-  const displayedRevision = useRef(-1);
+  const displayedRevision = useRef<Pick<WebDisplayManifest, 'revision' | 'renderRevision'>>({ revision: -1 });
+  const displayedIdentity = useRef<string | null>(null);
   useEffect(() => () => { if (displayedBlob.current) URL.revokeObjectURL(displayedBlob.current); }, []);
   const [state, setState] = useState<ConnectionState>(
     pairingToken || initialShortCode.current ? 'pairing' : credential ? 'connecting' : 'unpaired',
@@ -147,6 +148,16 @@ export function WebDisplay() {
 
   useEffect(() => {
     if (!credential || pairingToken || !activeExternalId || !storageKey) return;
+    const identity = `${new URL(connectionApiUrl, window.location.origin).toString()}|${activeExternalId}`;
+    // Credential rotation/reconnect preserves the same device's last image. A
+    // different device or server has its own revision namespace and private image.
+    if (displayedIdentity.current !== identity) {
+      displayedIdentity.current = identity;
+      displayedRevision.current = { revision: -1 };
+      if (displayedBlob.current) URL.revokeObjectURL(displayedBlob.current);
+      displayedBlob.current = null;
+      setPresentation(null);
+    }
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
@@ -230,6 +241,7 @@ export function WebDisplay() {
     };
 
     const preloadPresentation = async (next: PresentationManifest) => {
+      if (comparePresentationRevisions(next, displayedRevision.current) <= 0) return;
       let blobUrl: string | null = null;
       try {
         let url = new URL(next.content.url, window.location.origin).toString();
@@ -245,10 +257,10 @@ export function WebDisplay() {
         if (stopped) { if (blobUrl) URL.revokeObjectURL(blobUrl); return; }
         const image = new Image();
         image.onload = () => {
-          if (stopped || next.revision < displayedRevision.current) { if (blobUrl) URL.revokeObjectURL(blobUrl); return; }
+          if (stopped || comparePresentationRevisions(next, displayedRevision.current) <= 0) { if (blobUrl) URL.revokeObjectURL(blobUrl); return; }
           if (displayedBlob.current) URL.revokeObjectURL(displayedBlob.current);
           displayedBlob.current = blobUrl;
-          displayedRevision.current = next.revision;
+          displayedRevision.current = { revision: next.revision, renderRevision: next.renderRevision };
           setPresentation({ ...next, content: { ...next.content, url } });
         };
         image.onerror = () => {
@@ -293,7 +305,7 @@ export function WebDisplay() {
     <main className="fixed inset-0 overflow-auto" style={{ background: presentation?.content.background ?? '#050505' }}>
       {presentation && (
         <img
-          key={presentation.revision}
+          key={`${presentation.revision}:${presentation.renderRevision ?? 0}`}
           src={new URL(presentation.content.url, window.location.origin).toString()}
           alt={presentation.content.title}
           className="absolute inset-0 h-full w-full"

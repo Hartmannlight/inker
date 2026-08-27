@@ -30,7 +30,9 @@ test('real Redis and two Node adapter processes recover crashes and lost subscri
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const timeout = setTimeout(() => child.kill(), 150_000);
+    // Includes overlapping render/delivery crashes: two real 30s BullMQ
+    // stalled-lock cycles plus the fenced SQLite lease, not a mocked clock.
+    const timeout = setTimeout(() => child.kill(), 210_000);
     try {
       const [out, err, code] = await Promise.all([
         new Response(child.stdout).text(),
@@ -45,4 +47,4 @@ test('real Redis and two Node adapter processes recover crashes and lost subscri
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-}, 170_000);
+}, 230_000);

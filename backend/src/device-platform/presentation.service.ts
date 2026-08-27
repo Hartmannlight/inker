@@ -1,14 +1,15 @@
-import { Injectable, NotAcceptableException, NotFoundException } from '@nestjs/common';
+import { Injectable, NotAcceptableException, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveDeviceConfiguration } from './device-configuration';
 import type { DeliveryContext } from '../events/outbox.types';
 import { publicationArtifacts } from '../publications/publication-content';
+import { RenderCacheService } from '../render-cache/render-cache.service';
 
 @Injectable()
 export class PresentationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly cache?: RenderCacheService) {}
 
   async getForDevice(deviceId: number, context?: DeliveryContext): Promise<WebDisplayManifest> {
     if (!context) return this.build(deviceId, this.prisma);
@@ -43,8 +44,10 @@ export class PresentationService {
     } });
     if (!device || !device.externalId) throw new NotFoundException('Display device not found');
     const display = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride).capabilities.display;
-    const revision = device.publicationState?.desiredRevision;
-    const artifacts = revision ? publicationArtifacts(revision) : [];
+    const desired = device.publicationState?.desiredRevision;
+    const cached = desired ? await this.cache?.read(device, desired, database) : null;
+    const revision = cached?.revision ?? desired;
+    const artifacts = cached ? [cached.artifact] : revision ? publicationArtifacts(revision) : [];
     const artifact = display.renderFormats.flatMap(format => artifacts.filter(a => a.format === format && display.mimeTypes.includes(a.mimeType)))[0];
     // Browser scales an immutable image to its viewport. Pull continues to
     // require an exact hardware variant, including dimensions/depth/rotation.
@@ -59,6 +62,7 @@ export class PresentationService {
       // Pointer and assignment sequence come from the same state row/read.
       // Reading the immutable referenced content needs no interactive transaction.
       revision: device.publicationState?.desiredSequence ?? device.presentationRevision,
+      renderRevision: device.renderRevision,
       generatedAt: (revision?.publishedAt ?? device.createdAt).toISOString(),
       nextTransitionAt: null,
       content: { kind: 'image', fit: 'contain', background: '#ffffff',

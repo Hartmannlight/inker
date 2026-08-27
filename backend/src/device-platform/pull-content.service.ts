@@ -1,4 +1,4 @@
-import { Injectable, NotAcceptableException, NotFoundException } from '@nestjs/common';
+import { Injectable, NotAcceptableException, NotFoundException, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { type PresentationManifest } from '@inker/contracts';
 import type { Prisma } from '@prisma/client';
@@ -8,6 +8,7 @@ import { DeliveryPolicyRegistry } from './delivery-policy.registry';
 import { TransportAdapterRegistry } from './transport-adapter.registry';
 import { publicationArtifacts } from '../publications/publication-content';
 import { PullLastSeenService } from './pull-last-seen.service';
+import { RenderCacheService } from '../render-cache/render-cache.service';
 
 type PullDevice = Prisma.DeviceGetPayload<{ include: { profile: true; deliveryPolicy: true } }>;
 
@@ -19,6 +20,7 @@ export class PullContentService {
     private readonly policies: DeliveryPolicyRegistry,
     private readonly transports: TransportAdapterRegistry,
     private readonly lastSeen: PullLastSeenService,
+    @Optional() private readonly cache?: RenderCacheService,
   ) {}
 
   async read(device: PullDevice) {
@@ -26,10 +28,12 @@ export class PullContentService {
     const state = await this.prisma.devicePublicationState.findUnique({
       where: { deviceId: device.id }, include: { desiredRevision: true },
     });
-    const revision = state?.desiredRevision;
-    if (!revision) throw new NotFoundException('No published device content');
+    const desired = state?.desiredRevision;
+    if (!desired) throw new NotFoundException('No published device content');
+    const cached = await this.cache?.read(device, desired);
+    const revision = cached?.revision ?? desired;
     // Do not serialize arbitrary snapshot fields, DB entities, URLs or parser diagnostics.
-    const artifacts = publicationArtifacts(revision);
+    const artifacts = cached ? [cached.artifact] : publicationArtifacts(revision);
     const display = configuration.capabilities.display;
     const candidates = artifacts.filter((artifact) =>
       display.mimeTypes.includes(artifact.mimeType) && display.width === artifact.width && display.height === artifact.height &&
@@ -52,6 +56,11 @@ export class PullContentService {
         url: `/api/v1/device-content/artifacts/${artifact.sha256}`,
         mimeType: artifact.mimeType, sizeBytes: artifact.bytes.length, sha256: artifact.sha256, etag: artifactEtag }],
       refresh: { refreshAfterSeconds: hints.refreshAfterSeconds }, allowedActions: [],
+      ...(cached?.fallback ? { fallbackRevision: String(revision.revision) } : {}),
+      metadata: { desiredRevision: String(desired.revision), fallback: cached?.fallback ?? false,
+        ...(cached ? { rendererVersion: cached.rendererVersion } : {}),
+        ...(display.eInk ? { eInk: { fullRefreshRequired: true,
+          ...(display.eInk.fullRefreshAfterUpdates ? { fullRefreshAfterUpdates: display.eInk.fullRefreshAfterUpdates } : {}) } } : {}) },
     };
     this.lastSeen.observe(device, hints.telemetryIntervalSeconds);
     // A weak content validator deliberately excludes out-of-band delivery hints.

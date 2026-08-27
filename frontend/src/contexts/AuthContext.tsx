@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useReducer, type ReactNode, useEffect } from 'react';
 import type { AuthState } from '../types';
-import { authService } from '../services/api';
+import { authService, isPublicDisplayPath } from '../services/api';
 import { discardLegacyAdminToken } from '../services/admin-session';
 
 // Context for auth state and dispatch
@@ -84,6 +84,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Restore session on mount
   useEffect(() => {
     discardLegacyAdminToken();
+    if (isPublicDisplayPath(window.location.pathname)) {
+      dispatch({ type: 'LOGOUT' });
+      return;
+    }
     authService
       .validate()
       .then(() => dispatch({ type: 'RESTORE_SESSION' }))

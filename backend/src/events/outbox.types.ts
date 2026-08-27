@@ -69,6 +69,12 @@ export function parseOutboxEvent(event: EventInput): {
   )
     return invalid();
   const p = event.payload as Record<string, unknown>;
+  if (event.eventType === 'render.artifact.ready') {
+    if (event.aggregateType !== 'RenderRequest' || !event.aggregateRevision || !/^[a-zA-Z0-9-]{1,100}$/.test(event.aggregateRevision) ||
+      !/^[a-f0-9]{64}$/.test(event.aggregateId) || p.renderKey !== event.aggregateId ||
+      Object.keys(p).sort().join(',') !== 'deviceIds,renderKey' || !Array.isArray(p.deviceIds) || !p.deviceIds.every(positive)) return invalid();
+    return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, event.aggregateRevision), deviceIds: [...new Set(p.deviceIds as number[])] };
+  }
   if (event.eventType === PLAYBACK_CHANGED) {
     parsePlaybackEvent(event);
     return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, event.aggregateRevision!), deviceIds: [] };

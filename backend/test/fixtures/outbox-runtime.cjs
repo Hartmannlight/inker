@@ -17,6 +17,8 @@ const { DeviceUpdateCoordinator } = require('../../src/device-platform/device-up
 const { WebSocketTransportAdapter } = require('../../src/device-platform/websocket.transport-adapter');
 const { PublishService } = require('../../src/publications/publish.service');
 const { PlaybackService } = require('../../src/playback/playback.service');
+const { RenderCacheService } = require('../../src/render-cache/render-cache.service');
+const DESIRED_EVENT = 'device.publication.desired-revision.changed';
 
 async function main() {
   const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
@@ -27,6 +29,7 @@ async function main() {
   process.on('message', async ({ id, command, deviceId, designId }) => {
     try {
       if (command === 'notify') await app.get(EventsService).notifyDevicesRefresh([deviceId]);
+      if (command === 'reconcile') await app.get(RenderCacheService).reconcile();
       if (command === 'playback-start') {
         const playback = app.get(PlaybackService);
         const revisions = await p.publicationRevision.findMany({ orderBy: { revision: 'asc' }, take: 2 });
@@ -53,7 +56,12 @@ async function main() {
       if (command === 'fail-once') {
         const adapter = app.get(WebSocketTransportAdapter), original = adapter.dispatchRefresh.bind(adapter);
         let first = true;
-        adapter.dispatchRefresh = (...args) => { if (first) { first = false; throw new Error('credential-test-secret-do-not-log'); } return original(...args); };
+        adapter.dispatchRefresh = async (...args) => {
+          const delivery = first && args[1] && await p.outboxDelivery.findUnique({ where: { deliveryId: args[1].deliveryId }, include: { effect: true } });
+          const event = delivery && await p.outboxEvent.findUnique({ where: { eventId: delivery.effect.eventId } });
+          if (first && event?.eventType === DESIRED_EVENT) { first = false; throw new Error('credential-test-secret-do-not-log'); }
+          return original(...args);
+        };
       }
       if (command === 'crash-before-ack') {
         const store = app.get(OutboxStore), ack = store.ack.bind(store);
@@ -65,7 +73,12 @@ async function main() {
       if (command === 'lose-target-ack-once') {
         const store = app.get(OutboxStore), finish = store.finishTarget.bind(store);
         let first = true;
-        store.finishTarget = async (...args) => { if (first && args[3] && await p.outboxDelivery.count({ where: { effectKey: args[0] } })) { first = false; return false; } return finish(...args); };
+        store.finishTarget = async (...args) => {
+          const effect = first && args[3] && await p.outboxEffect.findUnique({ where: { key: args[0] } });
+          const event = effect && await p.outboxEvent.findUnique({ where: { eventId: effect.eventId } });
+          if (event?.eventType === DESIRED_EVENT && await p.outboxDelivery.count({ where: { effectKey: args[0] } })) { first = false; return false; }
+          return finish(...args);
+        };
       }
       if (command === 'stop') {
         await app.close(); await p.$disconnect(); process.send({ id }); process.exit(0);

@@ -19,7 +19,7 @@ describe('SQLite / Nest discovery / Node WebSocket integration', () => {
   }, 30_000);
   afterEach(() => { if (directory) rmSync(directory, { recursive: true, force: true }); });
 
-  for (const scenario of ['idle', 'rotation', 'auth', 'limits']) {
+  for (const scenario of ['idle', 'rotation', 'auth', 'limits', 'render-order']) {
     test(scenario, async () => {
       // Node hosts both ws and the HTTP listener. Bun's HTTP close callback hangs
       // after native ws upgrades, even when all sockets and listeners are gone.

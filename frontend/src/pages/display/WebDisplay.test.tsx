@@ -128,6 +128,50 @@ describe('WebDisplay credential lifecycle', () => {
     expect(revoke).toHaveBeenCalledWith('blob:published-image');
   });
 
+  it('keeps the ready render when an older same-revision image or receipt arrives late', async () => {
+    localStorage.setItem(STORAGE_KEY, 'valid-credential');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['image']) });
+    vi.stubGlobal('fetch', fetchMock);
+    let created = 0;
+    URL.createObjectURL = vi.fn(() => `blob:render-${++created}`);
+    URL.revokeObjectURL = vi.fn();
+    const images: Array<{ onload: (() => void) | null }> = [];
+    class PendingImage {
+      onload: (() => void) | null = null;
+      set src(_value: string) { images.push(this); }
+    }
+    vi.stubGlobal('Image', PendingImage);
+    renderDisplay(`/display/${DISPLAY_ID}`);
+    const socket = MockWebSocket.instances[0];
+    const send = (revision: number, renderRevision: number) => act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({
+      protocolVersion: '1.0', type: 'presentation.changed', presentation: {
+        deviceId: 7, externalId: DISPLAY_ID, revision, renderRevision, generatedAt: '2026-08-27T00:00:00.000Z', nextTransitionAt: null,
+        viewport: { width: 800, height: 480 }, content: { kind: 'image', title: 'Published content', fit: 'contain', background: '#ffffff',
+          url: `/api/web-displays/${DISPLAY_ID}/artifacts/${String(renderRevision).repeat(64)}` },
+      },
+    }) })));
+    send(1, 0);
+    await waitFor(() => expect(images).toHaveLength(1));
+    act(() => images[0].onload?.());
+    expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:render-1');
+    send(2, 0); // Fallback preload remains pending while the render finishes.
+    await waitFor(() => expect(images).toHaveLength(2));
+    send(2, 1);
+    await waitFor(() => expect(images).toHaveLength(3));
+    act(() => images[2].onload?.());
+    expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:render-3');
+    act(() => images[1].onload?.());
+    expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:render-3');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:render-2');
+    send(2, 0); // Late cached receipt cannot trigger another fetch or downgrade.
+    send(1, 9);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    send(3, 0); // Desired revision remains the primary ordering component.
+    await waitFor(() => expect(images).toHaveLength(4));
+    act(() => images[3].onload?.());
+    expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:render-4');
+  });
+
   it('stops on incompatible protocol without deleting credentials or reflecting errors', () => {
     vi.useFakeTimers();
     localStorage.setItem(STORAGE_KEY, 'valid-credential');
@@ -253,6 +297,45 @@ describe('WebDisplay credential lifecycle', () => {
     expect(screen.getByText('Connection lost. Reconnecting…')).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(1_000));
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it.each([
+    ['another-device', 'http://localhost:3002'],
+    [DISPLAY_ID, 'https://another-inker.example'],
+  ])('resets revision ordering when pairing to device %s on %s', async (externalId, baseUrl) => {
+    localStorage.setItem(STORAGE_KEY, 'old-credential');
+    const fetchMock = vi.fn().mockImplementation((url: string) => url.includes('/device-enrollments/exchange')
+      ? Promise.resolve(statusResponse(200, { data: { credential: 'new-credential', credentialId: 'new-id',
+        device: { id: 8, name: 'New display', externalId, profileId: 'browser-hd-1920x1080' } } }))
+      : Promise.resolve({ ok: true, blob: async () => new Blob(['image']) }));
+    vi.stubGlobal('fetch', fetchMock);
+    let created = 0;
+    URL.createObjectURL = vi.fn(() => `blob:identity-${++created}`);
+    URL.revokeObjectURL = vi.fn();
+    class PreloadedImage {
+      onload: (() => void) | null = null;
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    }
+    vi.stubGlobal('Image', PreloadedImage);
+    renderDisplay(`/display/${DISPLAY_ID}`);
+    const send = (socket: MockWebSocket, id: string, revision: number) => act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({
+      protocolVersion: '1.0', type: 'presentation.changed', presentation: { deviceId: 8, externalId: id, revision, renderRevision: revision,
+        generatedAt: '2026-08-27T00:00:00.000Z', nextTransitionAt: null, viewport: { width: 800, height: 480 },
+        content: { kind: 'image', url: `/api/web-displays/${id}/artifacts/${'a'.repeat(64)}`, title: 'Published content', fit: 'contain', background: '#ffffff' } },
+    }) })));
+    const old = MockWebSocket.instances[0];
+    send(old, DISPLAY_ID, 99);
+    await waitFor(() => expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:identity-1'));
+    act(() => old.serverClose(4401, 'Revoked'));
+    fireEvent.change(screen.getByLabelText('Basis-URL'), { target: { value: baseUrl } });
+    fireEvent.change(screen.getByLabelText('Kopplungscode'), { target: { value: 'ABCDE-FGHJK' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Koppeln' }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+    expect(screen.queryByAltText('Published content')).not.toBeInTheDocument();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:identity-1');
+    send(MockWebSocket.instances[1], externalId, 1);
+    await waitFor(() => expect(screen.getByAltText('Published content')).toHaveAttribute('src', 'blob:identity-2'));
+    expect(localStorage.getItem(`inker_display_${externalId}`)).toBe('new-credential');
   });
 
   it('normalizes manual keyboard input and atomically stores a first short-code exchange', async () => {

@@ -21,7 +21,9 @@ async function until(predicate, ms = 15_000) {
 }
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
 async function host() {
-  const child = fork(require.resolve('./outbox-runtime.cjs'), [], { env: { ...process.env, DATABASE_URL: url, OUTBOX_REDIS_PORT: String(port), REDIS_PASSWORD: '' }, silent: true });
+  const child = fork(require.resolve('./outbox-runtime.cjs'), [], { env: { ...process.env, DATABASE_URL: url,
+    INKER_RENDER_CACHE_PATH: require('node:path').join(require('node:path').dirname(process.argv[2]), 'render-cache'),
+    OUTBOX_REDIS_PORT: String(port), REDIS_PASSWORD: '' }, silent: true });
   hosts.push(child); child.stdout.on('data', b => { logs += b; }); child.stderr.on('data', b => { logs += b; });
   child.messages = []; child.on('message', m => child.messages.push(m));
   await until(() => child.messages.some(m => m.ready) || child.exitCode !== null);
@@ -44,11 +46,44 @@ async function connect(child, d) {
     if (m.type === 'presentation.changed') messages.push(m.presentation);
     if (m.type === 'ping') socket.send(JSON.stringify({ protocolVersion: '1.0', type: 'pong', nonce: m.nonce }));
   });
-  await until(() => messages.length === 1);
+  await until(() => messages.length >= 1);
   return { socket, messages };
 }
-async function latest() { return p.outboxEvent.findFirstOrThrow({ where: { eventType: { not: 'publication.revision.created' } }, orderBy: [{ occurredAt: 'desc' }, { eventId: 'desc' }] }); }
-async function delivered() { await until(async () => (await latest()).status === 'delivered'); return latest(); }
+const DESIRED_EVENT = 'device.publication.desired-revision.changed';
+async function latest(eventType = DESIRED_EVENT) {
+  return p.outboxEvent.findFirstOrThrow({ where: { eventType }, orderBy: [{ occurredAt: 'desc' }, { eventId: 'desc' }] });
+}
+async function delivered(eventType = DESIRED_EVENT) {
+  const event = await latest(eventType);
+  await until(async () => (await p.outboxEvent.findUniqueOrThrow({ where: { eventId: event.eventId } })).status === 'delivered');
+  return p.outboxEvent.findUniqueOrThrow({ where: { eventId: event.eventId } });
+}
+const sequences = client => [...new Set(client.messages.map(message => message.revision))];
+async function bothSequences(ca, cb, count) {
+  await until(() => sequences(ca).length === count && sequences(cb).length === count);
+  assert.deepEqual(sequences(ca), sequences(cb));
+  for (const client of [ca, cb]) for (let index = 1; index < client.messages.length; index++) {
+    const before = client.messages[index - 1], after = client.messages[index];
+    assert.ok(after.revision > before.revision || (after.revision === before.revision && (after.renderRevision ?? 0) > (before.renderRevision ?? 0)),
+      'Both adapters must deliver monotonically increasing desired/render versions');
+  }
+}
+async function drain(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  // Reconcile first so a transient gap before render-request creation is not
+  // mistaken for a drained outbox. No prior ready notification may consume a fault.
+  for (const child of hosts) if (child.exitCode === null && child.signalCode === null && child.connected) await command(child, 'reconcile');
+  try {
+    await until(async () => await p.outboxEvent.count({ where: { status: { in: ['pending', 'processing'] } } }) === 0 &&
+      await p.renderRequest.count({ where: { completedAt: null } }) === 0, Math.max(1, deadline - Date.now()));
+  } catch (error) {
+    const events = await p.outboxEvent.findMany({ where: { status: { not: 'delivered' } },
+      select: { eventType: true, status: true, attempts: true, availableAt: true, claimUntil: true } });
+    const unfinishedRenders = await p.renderRequest.count({ where: { completedAt: null } });
+    throw new Error(`${error.message}; drain diagnostics=${JSON.stringify({ events, unfinishedRenders })}`);
+  }
+  assert.equal(await p.outboxEvent.count({ where: { status: 'dead-letter' } }), 0);
+}
 async function main() {
   try {
     // Only this disposable fixture is reachable through Docker's bridge; the
@@ -68,37 +103,35 @@ async function main() {
     const design = await p.screenDesign.create({ data: { name: 'design' } });
     await p.deviceScreenAssignment.create({ data: { screenDesignId: design.id, deviceId: d.id } });
     await command(a, 'design', { designId: design.id });
-    const designEvent = await delivered();
+    const designEvent = await delivered('screen_design:updated');
     // Draft notifications are durable but cannot implicitly publish.
     assert.equal(ca.messages.length, 1); assert.equal(cb.messages.length, 1);
     assert.equal(await p.outboxEvent.count(), 1);
     await command(a, 'publish', { deviceId: d.id }); await delivered();
-    await until(() => ca.messages.length === 2 && cb.messages.length === 2);
-    assert.equal(ca.messages[1].revision, cb.messages[1].revision);
+    await bothSequences(ca, cb, 2); await drain();
     assert.equal(designEvent.eventType, 'screen_design:updated');
     progress('subscriber interruption');
     await command(b, 'subscriber-off');
     await command(a, 'publish', { deviceId: d.id }); await delivered();
-    await until(() => ca.messages.length === 3 && cb.messages.length === 3);
+    await bothSequences(ca, cb, 3); await drain();
     await command(b, 'subscriber-on');
     progress('retry');
+    await drain();
     await command(a, 'fail-once'); await command(a, 'publish', { deviceId: d.id });
     const retried = await delivered(); assert.equal(retried.attempts, 2);
-    await until(() => ca.messages.length === 4 && cb.messages.length === 4);
-    assert.equal(ca.messages[3].revision, cb.messages[3].revision);
+    await bothSequences(ca, cb, 4); await drain();
     progress('lost target ack');
     await command(a, 'lose-target-ack-once');
     await command(a, 'publish', { deviceId: d.id });
     const lostAck = await delivered(); assert.equal(lostAck.attempts, 2);
-    await until(() => ca.messages.length === 5 && cb.messages.length === 5);
-    assert.equal(ca.messages[4].revision, cb.messages[4].revision);
+    await bothSequences(ca, cb, 5); await drain();
     progress('Redis outage and empty restart');
     docker('stop', '-t', '1', name);
     await command(a, 'publish', { deviceId: d.id });
     await until(async () => (await latest()).attempts >= 1);
     assert.notEqual((await latest()).status, 'delivered');
     docker('start', name); await delivered();
-    await until(() => ca.messages.length === 6 && cb.messages.length === 6);
+    await bothSequences(ca, cb, 6); await drain();
     progress('crash after commit');
     await command(a, 'pause'); await command(b, 'pause');
     await command(a, 'publish', { deviceId: d.id });
@@ -107,17 +140,28 @@ async function main() {
     await until(() => a.exitCode !== null || a.signalCode !== null);
     a = await host(); await delivered();
     ca = await connect(a, d);
+    await drain();
     progress('crash after dispatch before ack');
     await command(a, 'crash-before-ack');
     await command(a, 'publish', { deviceId: d.id });
     await until(() => a.exitCode === 73);
     const crashed = await latest(); assert.equal(crashed.status, 'processing');
     const revision = (await p.device.findUniqueOrThrow({ where: { id: d.id } })).presentationRevision;
-    assert.equal(ca.messages.length, 2);
+    await until(() => sequences(ca).length === 2);
+    const recovering = await p.outboxEvent.findMany({ where: { status: { in: ['pending', 'processing'] } }, select: { eventId: true } });
+    const recoveryStart = Date.now(), recoveryDeadline = recoveryStart + 100_000;
     a = await host();
-    // Real wall-clock lease expiration, no synthetic time or manual DB recovery.
-    await until(async () => (await p.outboxEvent.findUniqueOrThrow({ where: { eventId: crashed.eventId } })).status === 'delivered', 40_000);
+    // Real wall-clock recovery only. A concurrently killed render has a 30s
+    // BullMQ lock plus stalled-check cycles and a separate 30s SQLite lease;
+    // measure their combined cost within one bounded 100s restart budget.
+    await until(async () => (await p.outboxEvent.findUniqueOrThrow({ where: { eventId: crashed.eventId } })).status === 'delivered', Math.max(1, recoveryDeadline - Date.now()));
     assert.equal((await p.device.findUniqueOrThrow({ where: { id: d.id } })).presentationRevision, revision);
+    progress('crash recovery draining renders');
+    await drain(Math.max(1, recoveryDeadline - Date.now()));
+    const recoveredEvents = await p.outboxEvent.findMany({ where: { eventId: { in: recovering.map(event => event.eventId) } },
+      select: { eventType: true, attempts: true, status: true } });
+    assert.ok(recoveredEvents.every(event => event.status === 'delivered'));
+    console.info(`WP-19 overlapping render/delivery crash recovery: ${Date.now() - recoveryStart} ms, ${JSON.stringify(recoveredEvents)}`);
     progress('throughput');
     const count = 100, start = Date.now();
     for (let i = 0; i < count; i++) await command(a, 'notify', { deviceId: d.id });

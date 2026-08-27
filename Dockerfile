@@ -187,6 +187,7 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production \
     PORT=3002 \
     DATABASE_URL=file:/app/uploads/inker.db \
+    INKER_RENDER_CACHE_PATH=/app/render-cache \
     CORS_ORIGINS=* \
     LOG_LEVEL=info
 
@@ -235,12 +236,12 @@ RUN chmod +x /etc/cont-init.d/* && \
 # Create required directories
 RUN mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets \
     /app/uploads/captures /app/uploads/drawings /app/logs \
-    /app/secrets /data
+    /app/secrets /app/render-cache /data
 
 # Create non-root user for backend process
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin inker && \
     chown -R inker:inker /app && \
-    chmod 700 /app/secrets
+    chmod 700 /app/secrets /app/render-cache
 
 EXPOSE 80
 

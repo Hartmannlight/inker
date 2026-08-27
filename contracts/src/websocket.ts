@@ -23,10 +23,23 @@ export interface WebDisplayManifest {
   deviceId: number;
   externalId: string;
   revision: number;
+  /** Monotone render completion generation; absent legacy values mean zero. */
+  renderRevision?: number;
   generatedAt: string;
   nextTransitionAt: string | null;
   content: { kind: 'image'; url: string; title: string; fit: 'contain' | 'cover' | 'fill'; background: string };
   viewport: { width: number; height: number };
+}
+
+/** Compare desired assignment first, then its render generation. */
+export function comparePresentationRevisions(
+  left: Pick<WebDisplayManifest, 'revision' | 'renderRevision'>,
+  right: Pick<WebDisplayManifest, 'revision' | 'renderRevision'>,
+): -1 | 0 | 1 {
+  if (left.revision !== right.revision) return left.revision < right.revision ? -1 : 1;
+  const leftRender = left.renderRevision ?? 0;
+  const rightRender = right.renderRevision ?? 0;
+  return leftRender < rightRender ? -1 : leftRender > rightRender ? 1 : 0;
 }
 
 interface Envelope { protocolVersion: ProtocolVersion }
@@ -86,6 +99,7 @@ function manifest(value: unknown): WebDisplayManifest {
   return {
     deviceId: integer(r.deviceId, 1), externalId: text(r.externalId, 128, /^[A-Za-z0-9_-]+$/),
     revision: integer(r.revision, 0), generatedAt: timestamp(r.generatedAt),
+    ...(r.renderRevision === undefined ? {} : { renderRevision: integer(r.renderRevision, 0) }),
     nextTransitionAt: r.nextTransitionAt === null ? null : timestamp(r.nextTransitionAt),
     content: { kind: 'image', url, title: text(content.title, 512), fit: fit as WebDisplayManifest['content']['fit'], background: text(content.background, 64) },
     viewport: { width: integer(viewport.width, 1, 16384), height: integer(viewport.height, 1, 16384) },

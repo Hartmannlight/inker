@@ -11,6 +11,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 }).outputText, filename);
 const { DevicePlatformModule } = require('../../src/device-platform/device-platform.module');
 const { WebDisplayGateway } = require('../../src/device-platform/web-display.gateway');
+const { PresentationService } = require('../../src/device-platform/presentation.service');
 const { WebSocketTelemetryService } = require('../../src/device-platform/websocket-telemetry.service');
 const { WebDisplayAuthService } = require('../../src/device-platform/web-display-auth.service');
 const { DeviceEnrollmentService } = require('../../src/device-enrollment/device-enrollment.service');
@@ -101,6 +102,29 @@ async function main() {
       await prisma.deviceCredential.updateMany({ where: { deviceId: d.id }, data: { revokedAt: null } });
       await prisma.device.update({ where: { id: d.id }, data: { isActive: false } });
       await assert.rejects(() => auth.authenticate(d.externalId, d.token)); assert.equal(writes, 0);
+    } else if (scenario === 'render-order') {
+      const d = await device('render-order');
+      const client = connect(d); await ready(client);
+      const presentations = () => client.messages.filter(message => message.type === 'presentation.changed');
+      const fallback = presentations()[0].presentation;
+      assert.equal(fallback.renderRevision, 0);
+      await prisma.device.update({ where: { id: d.id }, data: { renderRevision: { increment: 1 } } });
+      await gateway.pushPresentation(d.id);
+      await until(() => presentations().length === 2);
+      assert.equal(presentations()[1].presentation.revision, fallback.revision);
+      assert.equal(presentations()[1].presentation.renderRevision, 1);
+      const service = app.get(PresentationService);
+      const original = service.getForDevice.bind(service);
+      // Simulate a retry of an immutable outbox receipt captured before ready.
+      service.getForDevice = async () => fallback;
+      await gateway.pushPresentation(d.id);
+      await sleep(50);
+      assert.equal(presentations().length, 2);
+      service.getForDevice = original;
+      await gateway.pushPresentation(d.id);
+      await sleep(50);
+      assert.equal(presentations().length, 2);
+      assert.equal(gateway.isConnected(d.id), true);
     } else if (scenario === 'limits') {
       const d = await device('limits');
       for (const kind of ['unknown', 'binary', 'size', 'flood']) {

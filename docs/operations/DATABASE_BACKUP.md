@@ -11,6 +11,13 @@ permissive secret and a migration failure both keep `/ready` unavailable.
 Create and verify a backup before installing an image that contains new
 migrations.
 
+Since WP-19, also include the private `/app/render-cache` (`render_data`) volume
+in the stopped backup/restore set. Its hash files are referenced by SQLite and
+must match that snapshot. See [render-cache operations](RENDER_CACHE.md) for
+retention, corruption handling and the distinction between temporary files and
+successfully published artifacts. The separate database/secret trust boundary
+below is unchanged; the two original snapshots alone no longer include all pixels.
+
 1. Stop the Inker container so no database or upload is changing.
 2. Snapshot or archive the complete `/app/uploads` volume, not only `inker.db`.
 3. Separately snapshot `/app/secrets`, preserving owner-only file permissions.

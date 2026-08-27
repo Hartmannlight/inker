@@ -101,6 +101,35 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-19 preserves assigned state and adds empty immutable render storage', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp19-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
+    const latest = '20260830000000_render_cache';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath);
+    try {
+      database.exec(`INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,updated_at)
+        VALUES(10,'render-upgrade','render-upgrade','browser-hd-1920x1080','reference-connected-browser',42,CURRENT_TIMESTAMP);
+        INSERT INTO publications(publication_id,publication_key) VALUES('publication','render-upgrade');
+        INSERT INTO publication_revisions(publication_revision_id,publication_id,revision,protocol_version,content,content_hash)
+          VALUES('revision','publication',1,'1.0','{}','legacy-hash');
+        INSERT INTO device_publication_states(device_id,desired_publication_revision_id,desired_sequence,updated_at)
+          VALUES(10,'revision',42,CURRENT_TIMESTAMP);`);
+      const desired = database.query('SELECT * FROM device_publication_states').all();
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(database.query('SELECT * FROM device_publication_states').all()).toEqual(desired);
+      expect(database.query('SELECT presentation_revision, render_revision FROM devices').get()).toEqual({ presentation_revision: 42, render_revision: 0 });
+      expect(database.query('SELECT * FROM render_requests').all()).toEqual([]);
+      expect(database.query('SELECT * FROM render_bindings').all()).toEqual([]);
+      database.exec(`INSERT INTO render_requests(key,publication_revision_id,target,renderer_version) VALUES('${'a'.repeat(64)}','revision','{}','test');`);
+      expect(() => database.exec("UPDATE render_requests SET target = '{\"changed\":true}'")).toThrow('immutable');
+      expect(() => database.exec("UPDATE render_requests SET artifact_hash = 'bad'")).toThrow();
+      expect(() => database.exec(`UPDATE render_requests SET artifact_hash = '${'b'.repeat(64)}'`)).toThrow();
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
   test('WP-18 upgrades WP-17 without adopting drafts or changing desired state, credentials or outbox', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp18-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
@@ -127,6 +156,9 @@ describe("Prisma migration baseline", () => {
       expect(database.query('SELECT * FROM published_playlists').all()).toEqual([]);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
+    // Historical WP-18 assertions above remain against its exact migration.
+    // Compare the current schema only after subsequent forward migrations.
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -192,6 +224,7 @@ describe("Prisma migration baseline", () => {
         "20260827000000_outbox_dispatch",
         "20260828000000_explicit_publications",
         "20260829000000_playlist_playback",
+        "20260830000000_render_cache",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

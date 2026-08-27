@@ -9,7 +9,9 @@ const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
 }));
 
-vi.mock('../services/api', () => ({ authService: mocks }));
+vi.mock('../services/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/api')>(), authService: mocks,
+}));
 
 function Harness() {
   const auth = useAuth();
@@ -24,6 +26,7 @@ function Harness() {
 
 describe('AuthProvider cookie session lifecycle', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/devices');
     vi.clearAllMocks();
     mocks.validate.mockResolvedValue(undefined);
     mocks.login.mockResolvedValue(undefined);
@@ -37,6 +40,22 @@ describe('AuthProvider cookie session lifecycle', () => {
     await waitFor(() => expect(screen.getByText('authenticated')).toBeInTheDocument());
     expect(mocks.validate).toHaveBeenCalledOnce();
     expect(getItem).not.toHaveBeenCalledWith('inker_session');
+  });
+
+  test.each(['/display/pair', '/display/pair?code=ABCDE-FGHJK', '/display/device-7', '/display/device-7/', '/Display/PAIR', '/display/device-7//'])('does not require an admin session on public route %s', async path => {
+    window.history.replaceState({}, '', path);
+    mocks.validate.mockRejectedValue(new Error('Admin session absent'));
+    render(<AuthProvider><Harness /></AuthProvider>);
+    await waitFor(() => expect(screen.getByText('anonymous')).toBeInTheDocument());
+    expect(mocks.validate).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(path.split('?')[0]);
+  });
+
+  test.each(['/devices', '/settings', '/display-settings', '/display/device-7/admin'])('still validates admin state for %s', async path => {
+    window.history.replaceState({}, '', path);
+    render(<AuthProvider><Harness /></AuthProvider>);
+    await waitFor(() => expect(screen.getByText('authenticated')).toBeInTheDocument());
+    expect(mocks.validate).toHaveBeenCalledOnce();
   });
 
   test('login and logout update state without writing an admin token', async () => {

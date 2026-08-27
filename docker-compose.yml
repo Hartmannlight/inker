@@ -9,6 +9,7 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - secrets_data:/app/secrets
+      - render_data:/app/render-cache
     environment:
       TZ: ${TZ:-UTC}
       ADMIN_PIN: "${ADMIN_PIN:?Set ADMIN_PIN to a non-default value before starting Inker}"
@@ -30,4 +31,7 @@ volumes:
     driver: local
   # Versioned instance encryption keys. Back up with, but separately from, uploads_data.
   secrets_data:
+    driver: local
+  # Private immutable render files; include with the database in backups.
+  render_data:
     driver: local

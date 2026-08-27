@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import axios from 'axios';
+import './api';
+import { csrfHeadersFor, rememberCsrfFromHeaders, resetCsrfToken } from './admin-session';
 
 // Mock axios before importing api module
 vi.mock('axios', () => {
@@ -13,7 +16,8 @@ vi.mock('axios', () => {
     put: vi.fn(),
     patch: vi.fn(),
     delete: vi.fn(),
-    isAxiosError: (error: any) => error?.isAxiosError === true,
+    isAxiosError: (error: unknown) => typeof error === 'object' && error !== null
+      && 'isAxiosError' in error && error.isAxiosError === true,
   };
   return { default: mockAxios, AxiosError: Error };
 });
@@ -28,9 +32,13 @@ vi.mock('../config', () => ({
   },
 }));
 
+// Capture the actual registered interceptor before clearAllMocks resets calls.
+const rejectResponse = vi.mocked(axios.interceptors.response.use).mock.calls[0][1]!;
+
 describe('API service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCsrfToken();
     // Mock localStorage
     const store: Record<string, string> = {};
     vi.stubGlobal('localStorage', {
@@ -39,6 +47,7 @@ describe('API service', () => {
       removeItem: vi.fn((key: string) => { delete store[key]; }),
     });
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   describe('getErrorMessage pattern', () => {
     it('should extract error from axios error response', () => {
@@ -83,32 +92,38 @@ describe('API service', () => {
     });
   });
 
-  describe('401 redirect pattern', () => {
-    it('should clear browser auth state and redirect on 401', () => {
-      const status = 401;
-      const currentPath = '/devices';
-      let redirected = false;
-      let sessionCleared = false;
+  describe('registered response error interceptor', () => {
+    it.each(['/devices', '/settings', '/display-settings', '/display/device-7/admin'])('clears CSRF state and redirects unauthenticated admin route %s', async pathname => {
+      const location = { pathname, href: pathname };
+      vi.stubGlobal('window', { location });
+      rememberCsrfFromHeaders({ 'x-csrf-token': 'expired-session' });
+      const error = { response: { status: 401 } };
 
-      if (status === 401 && currentPath !== '/login') {
-        sessionCleared = true;
-        redirected = true;
-      }
+      await expect(rejectResponse(error)).rejects.toBe(error);
 
-      expect(sessionCleared).toBe(true);
-      expect(redirected).toBe(true);
+      expect(location.href).toBe('/login');
+      expect(csrfHeadersFor('post')).toEqual({});
     });
 
-    it('should not redirect when already on login page', () => {
-      const status = 401;
-      const currentPath = '/login';
-      let redirected = false;
+    it.each(['/display/pair', '/display/device-7', '/display/device-7/', '/Display/PAIR', '/display/device-7//', '/login'])('does not redirect public route %s on a late admin-session 401', async pathname => {
+      const location = { pathname, href: `${pathname}?code=ABCDE-FGHJK` };
+      vi.stubGlobal('window', { location });
+      // An admin request started before navigation can finish on a public route.
+      const error = { config: { url: '/auth/session' }, response: { status: 401 } };
 
-      if (status === 401 && currentPath !== '/login') {
-        redirected = true;
-      }
+      await expect(rejectResponse(error)).rejects.toBe(error);
 
-      expect(redirected).toBe(false);
+      expect(location.href).toBe(`${pathname}?code=ABCDE-FGHJK`);
+    });
+
+    it('still rejects non-authentication errors without redirecting', async () => {
+      const location = { pathname: '/devices', href: '/devices' };
+      vi.stubGlobal('window', { location });
+      const error = { response: { status: 503 } };
+
+      await expect(rejectResponse(error)).rejects.toBe(error);
+
+      expect(location.href).toBe('/devices');
     });
   });
 });

@@ -7,7 +7,9 @@ export INKER_INSTANCE_SECRET_PATH="${INKER_INSTANCE_SECRET_PATH:-${SECRET_DIR}/i
 
 # Create required directories and set ownership for the non-root backend user
 mkdir -p /app/uploads/screens /app/uploads/firmware /app/uploads/widgets /app/uploads/captures /app/uploads/drawings /app/logs "$SECRET_DIR" /tmp/inker-home
-chown -R inker:inker /app/uploads /app/logs "$SECRET_DIR" /tmp/inker-home
+mkdir -p /app/render-cache
+chown -R inker:inker /app/uploads /app/logs "$SECRET_DIR" /tmp/inker-home /app/render-cache
+chmod 700 /app/render-cache
 chmod 700 "$SECRET_DIR"
 
 # Set HOME for the inker user (Puppeteer needs a writable home for config)

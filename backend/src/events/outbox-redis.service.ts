@@ -15,6 +15,8 @@ export class OutboxRedisService implements OnModuleDestroy {
   private readonly logger = new Logger(OutboxRedisService.name);
   private queue?: Queue<OutboxJob>;
   private worker?: Worker<OutboxJob>;
+  private renderQueue?: Queue<OutboxJob>;
+  private renderWorker?: Worker<OutboxJob>;
   private subscriber?: Redis;
   private publisher?: Redis;
   private hint?: () => void;
@@ -46,9 +48,7 @@ export class OutboxRedisService implements OnModuleDestroy {
     this.queue.on('error', () => {
       this.ready = false;
     });
-    this.worker = new Worker<OutboxJob>(
-      'delivery',
-      async (job) => {
+    const processJob = async (job: { data: OutboxJob }) => {
         // Never interpolate arbitrary Redis job data into diagnostics.
         const value: unknown = job.data;
         if (
@@ -69,7 +69,9 @@ export class OutboxRedisService implements OnModuleDestroy {
         } catch {
           throw new Error('OUTBOX_JOB_FAILED');
         }
-      },
+      };
+    this.worker = new Worker<OutboxJob>(
+      'delivery', processJob,
       {
         prefix: 'inker-wp16',
         connection: { ...connection, maxRetriesPerRequest: null },
@@ -81,6 +83,14 @@ export class OutboxRedisService implements OnModuleDestroy {
     this.worker.on('error', () => {
       this.ready = false;
     });
+    this.renderQueue = new Queue<OutboxJob>('render', { prefix: 'inker-wp16', connection: this.publisher });
+    this.renderQueue.on('error', () => { this.ready = false; });
+    // One render across all workers, not one per API process. Queue loss is
+    // recovered from fenced SQLite outbox events, including completed-job loss.
+    this.renderWorker = new Worker<OutboxJob>('render', processJob, { prefix: 'inker-wp16',
+      connection: { ...connection, maxRetriesPerRequest: null }, concurrency: 1, lockDuration: 30_000 });
+    this.renderWorker.on('error', () => { this.ready = false; });
+    void this.renderQueue.setGlobalConcurrency(1).catch(() => { this.ready = false; });
     this.subscriber = new Redis({
       ...connection,
       maxRetriesPerRequest: 1,
@@ -107,10 +117,13 @@ export class OutboxRedisService implements OnModuleDestroy {
     this.ready = true;
   }
 
-  async enqueue(job: OutboxJob) {
+  async enqueue(job: OutboxJob, queueName: 'delivery' | 'render' = 'delivery') {
     if (!this.queue || this.publisher?.status !== 'ready')
       throw new Error('OUTBOX_REDIS_UNAVAILABLE');
-    await this.queue.add('dispatch-v1', job, {
+    const queue = queueName === 'render' ? this.renderQueue : this.queue;
+    if (!queue) throw new Error('OUTBOX_REDIS_UNAVAILABLE');
+    if (queueName === 'render') await queue.setGlobalConcurrency(1);
+    await queue.add('dispatch-v1', job, {
       jobId: `${job.eventId}-${job.claimToken}`,
       attempts: 1,
       removeOnComplete: true,
@@ -131,7 +144,7 @@ export class OutboxRedisService implements OnModuleDestroy {
   async onModuleDestroy() {
     // Force-close BullMQ on shutdown: fenced DB leases recover interrupted jobs.
     this.subscriber?.disconnect();
-    await Promise.allSettled([this.worker?.close(true), this.queue?.close()]);
+    await Promise.allSettled([this.worker?.close(true), this.queue?.close(), this.renderWorker?.close(true), this.renderQueue?.close()]);
     this.publisher?.disconnect();
     this.logger.debug('Outbox Redis connections closed');
   }

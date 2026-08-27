@@ -2,7 +2,9 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException, 
 import { Prisma } from '@prisma/client';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
-import sharp from 'sharp';
+import * as sharpModule from 'sharp';
+import type sharpFactory from 'sharp';
+const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 import { PrismaService } from '../prisma/prisma.service';
 import { PublicationPersistenceService } from './publication-persistence.service';
 import { canonicalJson, fixtureIds, publicationArtifacts, sha256, type PublicationContent } from './publication-content';

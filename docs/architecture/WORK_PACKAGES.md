@@ -74,7 +74,7 @@ müssen.
 | [x] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
 | [x] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
 | [x] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
-| [ ] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
+| [x] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
 | [ ] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
 | [ ] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
 | [ ] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
@@ -2490,15 +2490,15 @@ Fallback und Cacheinvalidierung.
 
 **Aufgaben:**
 
-- [ ] Definiere kanonischen Render-Key aus Publication, Profil, Snapshots und
+- [x] Definiere kanonischen Render-Key aus Publication, Profil, Snapshots und
   Renderer-Version.
-- [ ] Dedupliziere parallele identische Renderanforderungen.
-- [ ] Schreibe Artefakte temporär und veröffentliche sie atomar nach Validierung.
-- [ ] Persistiere Hash, MIME-Type, Größe, Renderer-Version und Erstellzeit.
-- [ ] Liefere während Renderfehlern das letzte gültige kompatible Artefakt.
-- [ ] Invalidiere nur bei relevanten Versionsänderungen.
-- [ ] Ergänze E-Ink-spezifische Format-/Refresh-Metadaten.
-- [ ] Teste 20 parallele Requests, fehlerhaften Renderer und Prozessabbruch.
+- [x] Dedupliziere parallele identische Renderanforderungen.
+- [x] Schreibe Artefakte temporär und veröffentliche sie atomar nach Validierung.
+- [x] Persistiere Hash, MIME-Type, Größe, Renderer-Version und Erstellzeit.
+- [x] Liefere während Renderfehlern das letzte gültige kompatible Artefakt.
+- [x] Invalidiere nur bei relevanten Versionsänderungen.
+- [x] Ergänze E-Ink-spezifische Format-/Refresh-Metadaten.
+- [x] Teste 20 parallele Requests, fehlerhaften Renderer und Prozessabbruch.
 
 **Abnahme:** 20 identische Requests erzeugen genau einen Renderjob; ein kaputter
 neuer Render entfernt das letzte gültige Artefakt nicht.
@@ -2506,6 +2506,74 @@ neuer Render entfernt das letzte gültige Artefakt nicht.
 **Validierung:** Concurrency-, Cache-, Atomicity- und Fault-Tests.
 
 **Handoff:** Cachepfade, Retention und beobachtbare Kennzahlen notieren.
+
+### Abschluss WP-19 (2026-08-28)
+
+- Status: implementiert, durch Hauptagent integriert und abgenommen. Zwei
+  Subagent-Reviews und gezielte unabhängige Testarbeit; keine offenen P1/P2-
+  Befunde im geprüften Paketumfang. Nächster Schritt im Goal: WP-20.
+
+- Kanonischer Schlüssel aus unveränderlicher Publication, effektivem Pixelprofil,
+  expliziten Snapshotversionen und Renderer-Version. Device-ID, Delivery Policy,
+  Telemetrie und Uhrzeit invalidieren keine Pixel. Renderer liest ausschließlich
+  persistierte Bildsnapshots/feste Fixtures; PNG, JPEG und BMP1 werden validiert.
+- Migration `20260830000000_render_cache`: RenderRequest, profilbezogene
+  RenderBinding und unabhängige Device.renderRevision. Unique-Key/Transaktion und
+  dauerhafte `render.requested`-Outbox vor BullMQ-Enqueue deduplizieren auch
+  parallele Prozesse. Begrenzte lokale Schreibwarteschlange entschärft SQLite-
+  Writerkonflikte, ersetzt jedoch weder DB-Unique-Key noch Lease-Fencing.
+- Private Dateien in `/app/render-cache` (`render_data`, lokal
+  `INKER_RENDER_CACHE_PATH`): temporär schreiben/fsync, Pixel/Hash/MIME/Größe
+  prüfen, atomarer Hardlink, danach DB-Ready-Commit mit gültiger Outbox-Lease.
+  Keine öffentlichen Uploadpfade, kein Metadaten-Ready vor vollständiger Datei.
+- Read-Pfade bleiben ohne SQL-Writes und ohne Enqueue. Fehler oder beschädigte
+  Dateien erhalten die letzte kompatible Ready-/Previous-Version. Fremde
+  Profilvarianten werden nie als Fallback akzeptiert. E-Ink-Hinweise bleiben
+  konservativ; keine unbelegten physischen Refresh-/Energieversprechen.
+- `render.artifact.ready` besitzt eigene deduplizierbare Effektidentität.
+  Gateway und Browser vergleichen gemeinsam `(desired sequence, render revision)`;
+  ein spätes altes Bild oder Sendecallback darf die neue Darstellung nicht
+  zurücksetzen. Ein neuer Geräte-/Serverkontext setzt den Bildcursor zurück.
+- Im Produktionsbuild gefundener Sharp-CJS-Interopfehler auch im bestehenden
+  Uploaded-Screen-Publishpfad korrigiert; echter Container-Smoke prüft zusätzlich
+  die Snapshot-Normalisierung statt nur Fixture-Veröffentlichungen.
+- Reviewkorrektur: Wird ein Gerät während des Renderns deaktiviert, übernimmt
+  die Reconciliation nach Reaktivierung den inzwischen fertigen gemeinsamen
+  RenderRequest in seine Ready-Bindung. Dadurch bleibt auch bei der nächsten
+  fehlerhaften Veröffentlichung ein dauerhaft gebundener Fallback erhalten.
+- Nachweise bis hier: 644 Backend-/bestehende Integrationsfälle, neun echte
+  Startup-/WebSocket-Fälle, zehn Cache- plus sieben Migrationstests, 29 Contracttests;
+  gezielte Produktionslint-/Typechecks. Reale Redis-/Zwei-Prozess-Prüfung:
+  Fanout, Subscriberverlust, zwei exakt zweifache Retry-/Ack-Fehler, leerer
+  Redis-Neustart, Commit-/Dispatch-Abbruch, Playback-Recovery ohne Deadletter.
+  Überlappende Render-/Delivery-Recovery 61,836 s (zwei/drei Versuche),
+  Durchsatz 100 Events in 6,149 s. Neue Crashprüfung zwischen Dateipublikation
+  und DB-Commit verhindert halbfertige Ready-Datensätze.
+- Produktionscontainer: 20 Geräte/ein Renderjob, 100 sequenzielle plus 100
+  parallele schreibfreie Manifeste, authentisierte Artefakte mit geprüftem
+  Hash/Auflösung, Render-Ready-Push, Credentialrotation, Pull/304/Policy,
+  Playlistübergang, Restart/Cache-/Schlüsselidentität und Secret-Audit bestanden.
+  Finaler Imagebuild und gesamter Container-Smoke nach allen Korrekturen erneut
+  erfolgreich. Nur eigene isolierte Container/Volumes verwendet und entfernt.
+- Browser-Regression behoben: Öffentliche Pairing-/Displayrouten starten keine
+  Admin-Sessionvalidierung; auch ein verspätetes Admin-401 leitet sie nicht um.
+  Bestehende Adminpfade bleiben geschützt. Vollständige Frontendsuite mit
+  tatsächlichem Axios-Interceptor und Geräte-/Serverwechsel: 80 Tests bestanden,
+  Typecheck und Produktionsbuild erfolgreich. Acht bereits vorhandene `any`-
+  Lintbefunde im übrigen `api.ts` sind unverändert; kein global grünes Lint behauptet.
+- Echter In-App-Browser am finalen Produktionsimage: Kurzcode-Pairing ohne
+  Adminsession, zunächst 800×480-PNG bei pausierter Queue, danach Live-Wechsel
+  auf 1920×1080 ohne Reload. Während zweiter Veröffentlichung blieb weißer
+  kompatibler Fallback sichtbar; nach Queuefreigabe erschien das schwarze
+  1920×1080-Bild mit korrektem Contain-Rand. DOM-Auflösung und Screenshots geprüft,
+  keine Browserwarnungen/-fehler. Keine Platzhalter als Rendernachweis verwendet.
+- Betrieb: [`RENDER_CACHE.md`](../operations/RENDER_CACHE.md), ergänztes
+  Backup-Runbook. Konservative Retention behält Renderinputs/Artefakte; keine
+  ungetestete automatische Bereinigung. Metriken: Hits/Misses/Fallbacks,
+  Renders/Fehler plus persistente Outboxzustände. WP-20 übernimmt Prozessgrenze,
+  gemeinsame Queue-Policies/Shutdown; WP-28 den gemeinsamen Metrikendpunkt.
+- Offen außerhalb dieses Pakets: reale TRMNL-/ESP32-Hardwaremessungen. Keine
+  zusätzlichen Widgets, produktiven Sources, MQTT- oder Firmwareänderungen.
 
 ## WP-20 – Worker-Bootstrap und Queue-Policies vereinheitlichen
 

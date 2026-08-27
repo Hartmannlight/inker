@@ -35,6 +35,11 @@ import {
 // Use dynamic API URL from config
 const API_URL = config.apiUrl;
 
+/** Public pairing/device routes do not participate in admin cookie sessions. */
+export function isPublicDisplayPath(pathname: string): boolean {
+  return /^\/display\/[^/]+\/*$/i.test(pathname);
+}
+
 // Create axios instance with default config
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_URL,
@@ -63,11 +68,11 @@ apiClient.interceptors.response.use(
     return response;
   },
   (error: AxiosError) => {
-    // Handle 401 errors by clearing auth and redirecting to login
-    // Only redirect if not already on login page to avoid loops
+    // Public device displays use enrollment credentials, not admin sessions.
+    // A late admin response must not navigate them away from their display.
     if (error.response?.status === 401) {
       const currentPath = window.location.pathname;
-      if (currentPath !== '/login') {
+      if (currentPath !== '/login' && !isPublicDisplayPath(currentPath)) {
         resetCsrfToken();
         window.location.href = '/login';
       }

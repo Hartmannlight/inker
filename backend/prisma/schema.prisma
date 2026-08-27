@@ -30,6 +30,7 @@ model Device {
   pairingExpiresAt     DateTime? @map("pairing_expires_at")
   lastConnectedAt      DateTime? @map("last_connected_at")
   presentationRevision Int       @default(0) @map("presentation_revision")
+  renderRevision       Int       @default(0) @map("render_revision")
   firmwareVersion      String?   @map("firmware_version")
   modelId              Int?      @map("model_id")
   playlistId           Int?      @map("playlist_id")
@@ -62,6 +63,7 @@ model Device {
   deliveryPolicy    DeliveryPolicy           @relation(fields: [deliveryPolicyId], references: [policyId])
   publicationState  DevicePublicationState?
   playbackState     PlaybackState?
+  renderBindings    RenderBinding[]
 
   @@map("devices")
 }
@@ -230,10 +232,48 @@ model PublicationRevision {
   desiredByDevices      DevicePublicationState[] @relation("DesiredPublicationRevision")
   acknowledgedByDevices DevicePublicationState[] @relation("AcknowledgedPublicationRevision")
   playlistEntries       PublishedPlaylistEntry[]
+  renderRequests        RenderRequest[]
 
   @@unique([publicationId, revision])
   @@index([publicationId, publishedAt])
   @@map("publication_revisions")
+}
+
+// Durable render intent. Outbox and BullMQ transport references; never image bytes.
+model RenderRequest {
+  key                   String   @id
+  publicationRevisionId String   @map("publication_revision_id")
+  target                Json
+  rendererVersion       String   @map("renderer_version")
+  artifactHash          String?  @map("artifact_hash")
+  mimeType              String?  @map("mime_type")
+  sizeBytes             Int?     @map("size_bytes")
+  createdAt             DateTime @default(now()) @map("created_at")
+  completedAt           DateTime? @map("completed_at")
+
+  revision PublicationRevision @relation(fields: [publicationRevisionId], references: [publicationRevisionId], onDelete: Restrict)
+  desiredBindings RenderBinding[] @relation("RenderDesired")
+  readyBindings RenderBinding[] @relation("RenderReady")
+  previousBindings RenderBinding[] @relation("RenderPrevious")
+
+  @@index([publicationRevisionId])
+  @@map("render_requests")
+}
+
+// Per-device authorization and compatible fallback survive assignment and restart.
+model RenderBinding {
+  deviceId   Int    @map("device_id")
+  variant    String
+  desiredKey String @map("desired_key")
+  readyKey   String? @map("ready_key")
+  previousKey String? @map("previous_key")
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  desired RenderRequest @relation("RenderDesired", fields: [desiredKey], references: [key], onDelete: Restrict)
+  ready RenderRequest? @relation("RenderReady", fields: [readyKey], references: [key], onDelete: Restrict)
+  previous RenderRequest? @relation("RenderPrevious", fields: [previousKey], references: [key], onDelete: Restrict)
+
+  @@id([deviceId, variant])
+  @@map("render_bindings")
 }
 
 // Delivery intent and observed device state deliberately use different foreign

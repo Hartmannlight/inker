@@ -57,3 +57,4 @@ coverage/
 *.tmp
 *.bak
 *.orig
+.render-cache/

@@ -18,9 +18,10 @@ import { PullContentService } from './pull-content.service';
 import { PullDeviceAuthService } from './pull-device-auth.service';
 import { PullLastSeenService } from './pull-last-seen.service';
 import { WebSocketTelemetryService } from './websocket-telemetry.service';
+import { RenderCacheModule } from '../render-cache/render-cache.module';
 
 @Module({
-  imports: [PrismaModule, DiscoveryModule],
+  imports: [PrismaModule, DiscoveryModule, RenderCacheModule],
   controllers: [WebDisplaysController, PullContentController],
   providers: [
     PullContentService,

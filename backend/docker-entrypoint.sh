@@ -9,6 +9,8 @@ mkdir -p /app/uploads/captures
 mkdir -p /app/uploads/drawings
 mkdir -p /app/logs
 mkdir -p /app/secrets
+mkdir -p /app/render-cache
+chmod 700 /app/render-cache
 chmod 700 /app/secrets
 
 : "${INKER_INSTANCE_SECRET_PATH:=/app/secrets/instance.json}"

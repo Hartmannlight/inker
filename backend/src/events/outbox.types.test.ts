@@ -48,4 +48,17 @@ describe('outbox version and secret boundary', () => {
     ]);
     expect(retryDelay(100, () => 1)).toBe(72_000);
   });
+  test('render-ready events authorize only explicit devices and keep cache reuse effects distinct', () => {
+    const ready = { eventId: 'ready', eventType: 'render.artifact.ready', aggregateType: 'RenderRequest',
+      aggregateId: 'a'.repeat(64), aggregateRevision: '10-1', payloadVersion: 1,
+      payload: { renderKey: 'a'.repeat(64), deviceIds: [10, 10] } };
+    expect(parseOutboxEvent(ready).deviceIds).toEqual([10]);
+    expect(parseOutboxEvent({ ...ready, aggregateRevision: '11-1' }).key).not.toBe(parseOutboxEvent(ready).key);
+    for (const patch of [{ payloadVersion: 2 }, { aggregateRevision: '' },
+      { payload: { ...ready.payload, credential: 'synthetic-secret' } },
+      { payload: { ...ready.payload, renderKey: 'b'.repeat(64) } },
+      { payload: { ...ready.payload, deviceIds: ['10'] } }]) {
+      expect(() => parseOutboxEvent({ ...ready, ...patch })).toThrow('OUTBOX_INVALID_PAYLOAD');
+    }
+  });
 });

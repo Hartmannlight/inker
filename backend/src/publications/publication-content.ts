@@ -9,7 +9,7 @@ export interface PublishedArtifact {
   mimeType: string;
   width: number;
   height: number;
-  colorSpace: 'monochrome' | 'rgb';
+  colorSpace: 'monochrome' | 'grayscale' | 'rgb';
   bitDepth: number;
   rotation: number;
   bytes: Buffer;

@@ -36,11 +36,42 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Nächste Schritte
 
-1. WP-11-Korrektur und WP-11/WP-14-Index/Handoffs verifiziert; lokalen Commit
-   erstellen (Commit-Skill gelesen). WP-14 nicht erneut implementiert.
-2. WP-19 integrieren: kanonischer Render-Key, Snapshotrenderer, atomarer
-   Artefaktstore, persistente Deduplizierung/Fallback, Queue-/Crash-Nachweise.
-3. Danach WP-20 bis WP-29 in Indexreihenfolge; vor jedem Paket vollständige
-   Anforderungen und Referenzen lesen. Keine unerfüllten Gates überspringen.
+1. WP-11-Korrektur und WP-11/WP-14-Index/Handoffs in `6b6139f` lokal committed.
+   WP-14 nicht erneut implementiert.
+2. WP-19 abgenommen: Render-Key/Sharp-Renderer, atomarer privater Artefaktstore,
+   SQLite-RenderRequest/RenderBinding, Outbox→BullMQ-render-Queue und Fallback
+   implementiert. Zehn neue Integrationen nach P1008-/Reaktivierungsfix grün.
+   Neu: persistente `Device.renderRevision` plus
+   gemeinsamer Vertragsvergleich gegen verspätete WebSocket-/HTTP-Antworten.
+   Verifiziert: 644 Backend-/bestehende Integrationstests, neun echte
+   Startup-/WebSocket-Prüfungen, zehn Cache-/sieben Migrationstests,
+   29 Vertragstests und zuletzt 80 Frontendtests. Keine übersprungenen Tests.
+   Reale Redis-Integration grün: überlappender Render-/Delivery-Abbruch nach
+   61,836 s vollständig recovered (Delivery zwei, Render drei Versuche),
+   100 Events in 6,149 s, keine Deadletters. Budget folgt echten BullMQ-
+   Stalled-/SQLite-Leasezyklen; keine manuelle Datenbank-Recovery.
+   Produktionscontainer einschließlich 20 Geräten/einem Renderjob, 200
+   schreibfreien Manifestlesevorgängen, Snapshot-Normalisierung, Artefakthash,
+   WebSocket-Reihenfolge, Restart und Secret-Audit erfolgreich.
+   Dabei gefunden/behoben: synthetischer Sharp-Defaultimport funktioniert im
+   Bun-Quelltest, nicht im externisierten CommonJS-Bundle. Typisierte Namespace-
+   Kompatibilität nun in Renderer/PublishService, Typechecks/Lint grün.
+   Echter Browser zeigte Admin-401-Weiterleitung auf öffentlicher Displayroute:
+   AuthContext/API samt Tests korrigiert. Finales Image erneut vollständig
+   geprüft; Browserpairing, 800×480-Fallback -> 1920×1080-Live-Update,
+   weißer Fallback bei zweiter wartender Veröffentlichung -> schwarzer Render
+   ohne Reload erfolgreich. DOM-Auflösung/Screenshots geprüft, keine Warnungen.
+   Alle eigenen Testcontainer/Volumes entfernt. Review ohne weitere P1/P2.
+   Historische Migrationstestannahmen ergänzt, ohne historische
+   Datenintegritätsprüfungen zu entfernen; neue WP-19-Constraints geprüft.
+3. Jetzt WP-20: vollständige Anforderungen sowie Architektur 1/5/8/Phase6/11/12
+   und ADR-001/002/006/010 gelesen. Read-only Subagent-Vorbereitung bestätigt:
+   Coordinator/WS bleiben API, Dispatcher/Render/Timer/Maintenance werden Worker;
+   Core-Module controllerfrei trennen. Nest onModuleDestroy läuft VOR
+   beforeApplicationShutdown, daher explizit vor app.close drainen.
+   Aktive doppelte Log-Cleanup-Wege vereinheitlichen, inaktiven externen
+   Model-Poller nicht reaktivieren. Queue-/Worker-Degraded darf Read-API nicht
+   unready machen. Noch keine WP-20-Implementierung.
+4. Danach bis WP-29 in Indexreihenfolge; keine unerfüllten Gates überspringen.
 
-Kein Foundation-Abschluss behauptet. WP-19 bis WP-29 sind noch offen.
+Kein Foundation-Abschluss behauptet. WP-20 bis WP-29 sind noch offen.

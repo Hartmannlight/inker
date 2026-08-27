@@ -4,7 +4,7 @@ import { IncomingMessage, Server as HttpServer } from 'http';
 import { Socket } from 'net';
 import { randomBytes } from 'node:crypto';
 import { RawData, WebSocket, WebSocketServer } from 'ws';
-import { DEVICE_WEBSOCKET_LIMITS as LIMITS, parseDeviceClientMessage, parseDeviceServerMessage, type DeviceClientMessage, type DeviceServerMessage } from '@inker/contracts';
+import { DEVICE_WEBSOCKET_LIMITS as LIMITS, comparePresentationRevisions, parseDeviceClientMessage, parseDeviceServerMessage, type DeviceClientMessage, type DeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import { PresentationService } from './presentation.service';
 import { WebDisplayAuthService, type DeviceConnectionSession } from './web-display-auth.service';
 import { WebSocketTelemetryService } from './websocket-telemetry.service';
@@ -22,7 +22,7 @@ interface Connection {
   queue: DeviceClientMessage[];
   draining: boolean;
   closed: boolean;
-  lastRevision?: number;
+  lastRevision?: Pick<WebDisplayManifest, 'revision' | 'renderRevision'>;
   tokens: number;
   tokenTime: number;
   onMessage: (raw: RawData, binary: boolean) => void;
@@ -117,10 +117,13 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
       // Recheck after asynchronous work, including rotation during rendering.
       for (const state of authorized) if (await this.check(state)) {
         context?.signal.throwIfAborted();
-        if (state.lastRevision !== undefined && presentation.revision <= state.lastRevision) continue;
+        if (state.lastRevision && comparePresentationRevisions(presentation, state.lastRevision) <= 0) continue;
         if (context) await this.operation(state, () => this.sendConfirmed(state, { protocolVersion: '1.0', type: 'presentation.changed', presentation }));
         else this.send(state, { protocolVersion: '1.0', type: 'presentation.changed', presentation });
-        state.lastRevision = presentation.revision;
+        // A slower send callback must not roll back a newer concurrent delivery.
+        if (!state.lastRevision || comparePresentationRevisions(presentation, state.lastRevision) > 0) {
+          state.lastRevision = { revision: presentation.revision, renderRevision: presentation.renderRevision };
+        }
       }
       this.scheduleTransition(deviceId, presentation.nextTransitionAt);
     } catch {
