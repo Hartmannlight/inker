@@ -70,7 +70,7 @@ müssen.
 | [x] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
 | [x] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
 | [ ] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
-| [ ] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
+| [x] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
 | [ ] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
 | [ ] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
 | [ ] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
@@ -1484,14 +1484,14 @@ Telemetriepuffer. Dauerhafte Events folgen WP-16.
 
 **Aufgaben:**
 
-- [ ] Verwende versionierte Contracts für Auth, Ping/Pong, Manifest und Telemetrie.
-- [ ] Implementiere echte Liveness-Erkennung mit Frist und sauberem Disconnect.
-- [ ] Begrenze Nachrichtengröße, Frequenz und erlaubte Message-Typen.
-- [ ] Normalisiere Origin-/Host-Prüfung für Proxybetrieb.
-- [ ] Puffere/dedupliziere Telemetrie und schreibe sie höchstens in definierten
+- [x] Verwende versionierte Contracts für Auth, Ping/Pong, Manifest und Telemetrie.
+- [x] Implementiere echte Liveness-Erkennung mit Frist und sauberem Disconnect.
+- [x] Begrenze Nachrichtengröße, Frequenz und erlaubte Message-Typen.
+- [x] Normalisiere Origin-/Host-Prüfung für Proxybetrieb.
+- [x] Puffere/dedupliziere Telemetrie und schreibe sie höchstens in definierten
   Intervallen.
-- [ ] Definiere Reconnect, Credential-Widerruf und Serverneustart eindeutig.
-- [ ] Fange alle asynchronen Handlerfehler ab und redigiere Tokens aus Logs.
+- [x] Definiere Reconnect, Credential-Widerruf und Serverneustart eindeutig.
+- [x] Fange alle asynchronen Handlerfehler ab und redigiere Tokens aus Logs.
 
 **Abnahme:** 20 simulierte Idle-Verbindungen verursachen keine permanenten
 DB-Writes; tote Clients werden entfernt und ungültige Payloads geschlossen.
@@ -1499,6 +1499,186 @@ DB-Writes; tote Clients werden entfernt und ungültige Payloads geschlossen.
 **Validierung:** Gateway-, Flood-, Liveness- und 20-Client-Smoke-Test.
 
 **Handoff:** Connection-Metriken und Eventhooks für WP-16/WP-28 notieren.
+
+### Abschluss WP-15
+
+- Status: abgeschlossen am 2026-08-27. Sauberer Ausgangsstand `2f3ff2b` auf
+  `codex/device-platform-spike`; WP-08 (`480b958`), WP-13 (`79f14eb`) und
+  alle genannten Vorgänger sind enthalten. ADRs und Handoffs wurden geprüft.
+  Kein pauschales Nachladen des Architekturplans und keine Änderung anderer
+  Paketstatus oder Handoffs.
+- Contracts: `contracts/src/websocket.ts` exportiert frameworkunabhängige Parser,
+  Nachrichtentypen, `DeviceTelemetry`, `WebDisplayManifest` und
+  `DEVICE_WEBSOCKET_LIMITS`. Alle Nachrichten tragen `protocolVersion: "1.0"`.
+  Neuere kompatible `1.x` verwenden ausschließlich bekannte Felder; andere
+  Major-Versionen, fehlende oder fehlerhafte Versionen werden abgelehnt. Parser
+  projizieren explizite Felder und geben keine Eingabewerte in Diagnosen aus.
+
+  | Richtung | Form zusätzlich zu `protocolVersion` |
+  |---|---|
+  | Client → Server | `{type:"authenticate", externalId, token, viewport?:DeviceTelemetry}` |
+  | Server → Client | `{type:"connected", deviceId, heartbeatInterval:30000, pongTimeout:10000, telemetryInterval}`; Intervalle in ms |
+  | Server → Client | `{type:"ping", nonce, timestamp}`; Serverzeit in Unix-ms |
+  | Client → Server | `{type:"pong", nonce}`; exakt die ausstehende Nonce |
+  | Client → Server | `{type:"telemetry", payload:DeviceTelemetry}` |
+  | Server → Client | `{type:"presentation.changed", presentation:WebDisplayManifest}` |
+
+- Manifest-Kompatibilität: Der gemeinsame `WebDisplayManifest`-Typ enthält die
+  bestehenden Felder `deviceId`, `externalId`, numerische `revision`,
+  `generatedAt`, `nextTransitionAt`, `content` und `viewport`. Er ist
+  ausdrücklich der Browser-Kompatibilitätsvertrag, nicht das Publication-
+  `PresentationManifest` von WP-04/WP-14. Lokale Upload-, Asset- und Renderpfade
+  mit `mode`, `t` und `deviceName` bleiben nutzbar; fremde Origins,
+  URL-Userinfo, Traversal und beliebige Queryparameter werden nicht ausgegeben.
+  Das bestehende HTTP-Präsentationsformat bleibt erhalten. Alte unversionierte
+  Browser-Tabs benötigen nach Deployment einen Reload; kein stiller
+  unversionierter Fallback.
+- Authentisierung: `/api/device-connect` akzeptiert ausschließlich die erste
+  versionierte Auth-Nachricht. URL-Queryparameter, Admin-Cookies, Adminsessions
+  und CSRF authentisieren kein Gerät. Der bestehende Hash-Lookup prüft
+  External-ID, aktives Gerät, Widerruf und Ablauf einschließlich Ablaufgrenze.
+  Revalidierung liest den aktuellen DB-Zustand über die stabile Credential-ID.
+  `ProfileResolver` löst effektive Capabilities auf, `DeliveryPolicy` wählt
+  den durch bestehende Nest-Discovery registrierten Adapter; dessen
+  `webSocketProtocolVersion` kennzeichnet Unterstützung. Keine neue zentrale
+  Profil-/Gerätetyp-/Transportliste. Langes Pairing, Kurzcode-Austausch,
+  Credentialausgabe, Hashspeicherung und atomare Rotation bleiben erhalten.
+  Authentisierung schreibt keine `lastUsedAt`-/`lastConnectedAt`- oder
+  Adminsessiondaten mehr; Presence wird getrennt gepuffert.
+- Liveness/Widerruf: Authfrist zehn Sekunden; Ping alle 30 Sekunden; passender
+  Anwendungs-Pong binnen zehn Sekunden. Control-Pongs oder sonstiger Traffic
+  ersetzen ihn nicht. Ein gemeinsamer Einsekunden-Takt prüft Fristen, mit
+  höchstens einer zusätzlichen Sekunde Erkennungsverzögerung. Revalidierung
+  erfolgt alle zehn Sekunden im Leerlauf sowie vor Telemetrie und vor/nach
+  asynchroner Manifestbeschaffung. DB-/Transportoperationen haben fünf Sekunden
+  Timeout. Widerruf wirkt im Leerlauf damit spätestens nach ungefähr 16 Sekunden
+  bei laufendem Eventloop; DB-Fehler schließen die Verbindung. Bereits versandte
+  oder lokal gespeicherte Inhalte lassen sich nicht zurückrufen.
+- Limits: 8192 UTF-8-Bytes pro Nachricht, ausschließlich JSON-Text und die
+  genannten Typen, keine Kompression. Token-Bucket mit 20 Nachrichten Burst und
+  zwei Nachrichten/Sekunde pro Verbindung; zusätzlich höchstens acht wartende
+  Nachrichten. Maximal 1024 Verbindungen einschließlich auslaufender Close-
+  Handshakes, vier pro Gerät und 256 KiB ausgehender Rückstau. Maximal 1024
+  offene Gatewayoperationen; nicht abbrechbare DB-Aufrufe behalten ihren Slot
+  nach Timeout bis zum tatsächlichen Abschluss. Parallele Pushes werden pro
+  Gerät zusammengeführt; zwischenzeitliche Aktualisierungen/neue Verbindungen
+  erhalten einen weiteren Durchlauf.
+- Close/Reconnect: `4400` = ungültiges/inkompatibles Protokoll, unbekannter Typ
+  oder unerwarteter Pong; `4401` = verweigerte Geräteautorisierung; `4408` =
+  Auth-/Pongfrist; `4429` = Frequenz-/Verbindungslimit; `1009` = Übergröße;
+  `1011` = Betriebsfehler/Operationstimeout. Nur feste, geheimnisfreie
+  Closegründe, keine Rohfehler oder frei befüllbaren Fehlernachrichten.
+  Presence, Warteschlangen, Timer und Anwendungslistener werden sofort
+  bereinigt; nicht abgeschlossene Close-Handshakes nach einer Sekunde terminiert.
+  Shutdown schließt auch unauthentisierte Clients vor Nests HTTP-Disposal
+  bestmöglich mit `1001`; abrupte Abbrüche können clientseitig `1006` ergeben.
+  Nach Restart ist die Presence-Map leer; jeder Client authentisiert erneut.
+  Der Browser behält Credentials bei Netz-/Serverfehlern und verwendet
+  1/2/4/…/30 Sekunden Backoff, zurückgesetzt erst durch `connected`.
+  `4401` erhält WP-08s wertgenaue Storagebereinigung; `4400` stoppt mit
+  Reloadhinweis ohne Credentiallöschung. Server-Watchdog 45 Sekunden,
+  Resize-Telemetrie um 750 ms entprellt.
+- Telemetrie: Nichtleeres Objekt mit optionalen ganzzahligen `width`/`height`
+  (1–16384), `batteryPercent` (0–100), `rssi` (−127–0), `uptimeSeconds`
+  (0–4294967295). Unbekannte Telemetriefelder, freie Texte und User-Agent werden
+  auch bei kompatibler Minor-Version abgelehnt. Partielle Samples ergänzen die
+  letzten validierten Werte, auch nach Reconnect. Keine Änderung von Profil,
+  Dimensionen oder Capability-Overrides durch Telemetrie.
+  `WebSocketTelemetryService` hält maximal 1024 Gerätepuffer und einen
+  laufenden Write pro Gerät. Intervall aus der Policy, mindestens 60 Sekunden;
+  beide bestehenden Connected-Referenzpolicies verwenden 60 Sekunden. Ohne
+  Last-Seen ist ein initialer Write erlaubt. Danach schützt zusätzlich ein
+  bedingtes DB-Update anhand von `lastSeenAt` gegen vorzeitige/konkurrierende
+  Writes. Identische Samples schreiben keinen neuen Telemetrieinhalt.
+  `lastSeenAt` ist der gedrosselte Flush-/Presence-Zeitpunkt, kein genauer
+  Pong-/Disconnectzeitpunkt; `telemetry.updatedAt` referenziert die beobachtete
+  Aktivität. Restart rekonstruiert die Schreibgrenze aus `lastSeenAt`.
+  Fehler verwenden denselben Retryabstand, einschließlich Close/Reconnect.
+  Geschlossene Puffer verfallen nach ausstehendem Flush/Cooldown. Shutdown
+  erzwingt keinen Write, wartet höchstens fünf Sekunden auf laufende Writes
+  und darf ungeflushte Telemetrie verlieren, keinen Fachzustand.
+- Origin/Proxy: Normalisierung von Groß-/Kleinschreibung, Defaultports,
+  DNS-Abschlusspunkt und IPv6. Fehlender/ungültiger Host, `Origin: null`,
+  Userinfo, Pfade und mehrdeutige Autoritäten werden abgelehnt. Originlose
+  Embedded-Geräte benötigen dieselbe Credentialauthentisierung. Browser
+  benötigen Same-Origin oder einen expliziten Eintrag in `CORS_ORIGINS`;
+  `*` umgeht die WebSocket-Prüfung nicht mehr.
+  `DEVICE_WS_ALLOWED_HOSTS` begrenzt optional die öffentlichen Host-Autoritäten
+  als kommaseparierte Liste. Forwarding-Header werden standardmäßig ignoriert.
+  `DEVICE_WS_TRUSTED_PROXIES` enthält explizite IP-Adressen unmittelbarer
+  Proxies, keine Wildcards/Hop-Anzahl. Nur von diesen Peers werden einzelne
+  `X-Forwarded-Host`/`X-Forwarded-Proto` übernommen; Listen und unzulässige
+  Schemes werden abgelehnt. Proxies müssen Header überschreiben, der Backendport
+  darf nicht anderweitig exponiert sein. `Forwarded`/`X-Forwarded-For`
+  begründen kein Vertrauen. Das mitgelieferte Nginx überschreibt Host/Proto
+  für diesen Pfad mit beobachtetem Host und `$scheme`, statt fremdes
+  `X-Forwarded-Proto` durchzureichen. Bei TLS vor diesem HTTP-Nginx ist die
+  öffentliche HTTPS-Origin explizit in `CORS_ORIGINS` einzutragen oder die
+  äußere Proxygrenze separat sicher zu konfigurieren. Kein Access-Log mit
+  potenziell geheimem Referer auf dem WebSocket-Pfad. HTTPS/WSS bleibt die
+  sichere Annahme; WP-09s explizite lokale HTTP-Pairingausnahme bleibt unverändert.
+- Metriken/Eventhooks: `WebDisplayGateway.metrics()` liefert numerische
+  `accepted`, `authenticated`, `authRejected`, `protocolRejected`,
+  `rateLimited`, `livenessTimeouts`, `operationErrors`, `closed`, `pongs`,
+  `telemetryMessages`, `connections`, `authenticatedConnections`, `devices`.
+  Telemetrie liefert `bufferedDevices`, `writes`, `failures`. Keine
+  Credential-/Geräte-ID-Labels und kein neuer Diagnoseendpunkt.
+  Für WP-16 bleibt `TransportAdapter.dispatchRefresh(deviceId)` →
+  `pushPresentation(deviceId)` der Delivery-Einstieg. Für WP-28 sind
+  erfolgreiche Authentisierung, Closegrund, Liveness-Timeout, Sendefehler und
+  Flushabschluss die vorgesehenen Instrumentierungsstellen. Keine neuen
+  dauerhaften Events, Eventbus-Verträge, Outbox-Dispatcher oder
+  Zustellbestätigungen implementiert. Der bestehende RxJS-Coordinator fängt
+  jetzt asynchrone DB-/Adapterfehler seines Callbacks ab.
+- Validierung: Rotläufe für fehlende Contracts/Gateway/Telemetrie,
+  Credentialablauf, drei Browserfälle und zwei Telemetrie-Reconnectrandfälle.
+  Abschließend **550 Backendtests, 27 Contracttests, 57 Frontendtests,
+  23 bestehende und vier neue Integrationsfälle** bestanden.
+  Der echte SQLite-/Nest-Discovery-/Node-ws-Smoke mit 20 Clients misst bei
+  expliziter 300-Sekunden-Testpolicy neun Heartbeats ohne Telemetrie-Writes,
+  danach 20 Writes für 20 Geräte, insgesamt 200 passende Pongs und anschließend
+  Entfernung aller 20 nicht mehr antwortenden Clients. Weitere Fälle prüfen
+  Rotation/Widerruf/Restart, Ablauf, Cookieabgrenzung, Gerätebindung, native
+  Größenlimits/Floods und Origins. Backend-/Frontend-/Contract-Typechecks,
+  zusätzlicher WP-15-Test-Typecheck, gezieltes Produktions-/Testlint,
+  Prisma-Validierung, alle Produktionsbuilds, Compose und Produktionsimage grün.
+- Produktions-Smoke: `node test/websocket-container-smoke.cjs` aus `backend/`
+  prüft `inker:wp15-test` in einem eigenen Container auf Loopback-Port 18715
+  mit anonymen Testvolumes und entfernt diese danach. Bestanden:
+  Adminlogin/CSRF-Abweisung, langes Pairing/Kurzcode-Rotation, HTTP-Präsentation,
+  WebSocket/echter Heartbeat, Leerlaufwiderruf/Reconnect, Pull-Manifeste/Artefakte,
+  ETag-Listen/Body-freies `304`/Auth vor `304`, Refresh-Header nach
+  Policywechsel, TRMNL-Setup/Display und Containerneustart mit unveränderter
+  Key-ID und Pull-ETag. Testsecrets bleiben im Prozess-RAM; reguläre Logs,
+  WebSocketantworten, Adminsessiondaten und Telemetrie wurden dagegen geprüft.
+  Bestehender produktiver `inker`-Container unverändert; kein physischer
+  ESP32-/TRMNL-Test behauptet.
+- Reproduzierbarkeit/Baseline: Neue Integration mit
+  `bun test ./test/websocket.integration.ts`; Node-Hilfsprozess lädt aktuelle
+  TypeScriptquellen mit vorhandenem Compiler und Nest-Metadaten. Zusätzlich zum
+  bekannten Bun-ws-Clientproblem wurde unter Windows ein hängender
+  Bun-HTTP-Close-Callback nach ws-Upgrades beobachtet; Node als Testhost schließt
+  vollständig. Repositoryweites Lint bleibt wegen bestehender Regeln und
+  TSConfig-Testausschlüsse rot; WP-15-Dateien mit temporär passender
+  Parser-/TSConfig separat grün geprüft. Optionale Runtime-Seed-Warnung
+  `device-configuration.catalog`, Prisma-7-Warnung und Browserslist-Alter bleiben.
+  Ein anfänglicher Puppeteer-DNS-Fehler wurde durch die bestehende
+  `|| true`-Kette der Docker-Installationsstufe maskiert und hinterließ einen
+  uninitialisierten Prisma-Client im Cache. Neubau mit
+  `docker build --no-cache-filter backend-install --target production -t inker:wp15-test .`
+  erzeugte den Client korrekt; das endgültige Image bestand zusätzlich
+  Prisma-Initialisierung und Runtime-Smoke. Dockerfile unverändert; der
+  maskierende Fehlerpfad bleibt eine dokumentierte Packaging-Schuld.
+- Scope/Git: Keine Schemaänderung, keine neue oder veränderte Migration.
+  WP-14s Pullpfad sowie WP-11/WP-12 erhalten. Bestehende
+  `PresentationService`-Revisionserhöhung/Playlistlogik und RAM-Transitiontimer
+  bleiben unverändert; Publication-/Rendercache-Umbau ist Folgearbeit.
+  Kein WP-16, MQTT oder anderes Folgepaket begonnen. Kernpfade:
+  `contracts/src/websocket.ts`, `backend/src/device-platform/`, zugehörige
+  Tests/Smokes, `frontend/src/pages/display/WebDisplay*` und nur die
+  WebSocket-Location in `docker/nginx.conf`. Dokumentation ausschließlich
+  WP-15-Status/Handoff. Commit und Push wurden nach Abschluss vom Benutzer
+  ausdrücklich beauftragt.
 
 ## WP-16 – Transaktions-Outbox und Event-Dispatcher anschließen
 

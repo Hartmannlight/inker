@@ -12,6 +12,7 @@ import {
 export class WebSocketTransportAdapter implements TransportAdapter {
   readonly adapterId = 'websocket';
   readonly transportMode = 'websocket';
+  readonly webSocketProtocolVersion = '1.0';
   readonly legacy = { deviceType: 'web-display', transport: 'websocket' } as const;
 
   constructor(private readonly gateway: WebDisplayGateway) {}

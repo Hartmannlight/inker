@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { config } from '../../config';
+import { parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import {
   exchangeDeviceEnrollment,
   normalizePairingBaseUrl,
@@ -8,12 +9,7 @@ import {
   PairingExchangeError,
 } from './pairing';
 
-interface PresentationManifest {
-  revision: number;
-  nextTransitionAt: string | null;
-  content: { kind: 'image'; url: string; title: string; fit: 'contain' | 'cover' | 'fill'; background: string };
-  viewport: { width: number; height: number };
-}
+type PresentationManifest = WebDisplayManifest;
 
 type ConnectionState = 'pairing' | 'connecting' | 'connected' | 'offline' | 'unpaired' | 'error';
 
@@ -150,8 +146,15 @@ export function WebDisplay() {
     if (!credential || pairingToken || !activeExternalId || !storageKey) return;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    let authenticated = false;
     let stopped = false;
     let attempt = 0;
+    const armWatchdog = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(() => socket?.close(4408, 'Server heartbeat timeout'), 45_000);
+    };
 
     const connect = () => {
       if (stopped) return;
@@ -163,33 +166,46 @@ export function WebDisplay() {
       socket = new WebSocket(apiUrl.toString());
 
       socket.onopen = () => {
-        attempt = 0;
+        armWatchdog();
         socket?.send(JSON.stringify({
+          protocolVersion: '1.0',
           type: 'authenticate',
           externalId: activeExternalId,
           token: credential,
-          viewport: { width: window.innerWidth, height: window.innerHeight, userAgent: navigator.userAgent },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
         }));
       };
       socket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
+          const parsed = parseDeviceServerMessage(JSON.parse(event.data));
+          if (!parsed.success) throw new Error();
+          const data = parsed.data;
           if (data.type === 'connected') {
+            attempt = 0;
+            authenticated = true;
+            armWatchdog();
             setState('connected');
             setMessage('Connected');
           } else if (data.type === 'presentation.changed') {
             preloadPresentation(data.presentation);
           } else if (data.type === 'ping') {
-            socket?.send(JSON.stringify({ type: 'pong', timestamp: data.timestamp }));
-          } else if (data.type === 'error') {
-            setMessage(data.message || 'Display connection failed');
+            armWatchdog();
+            socket?.send(JSON.stringify({ protocolVersion: '1.0', type: 'pong', nonce: data.nonce }));
           }
         } catch {
-          setMessage('Received an invalid display update');
+          socket?.close(4400, 'Unsupported device protocol');
         }
       };
       socket.onclose = (event) => {
+        authenticated = false;
+        if (watchdog) clearTimeout(watchdog);
         if (stopped) return;
+        if (event.code === 4400) {
+          stopped = true;
+          setState('error');
+          setMessage('Display protocol is incompatible. Reload or update this display.');
+          return;
+        }
         if (event.code === 4401) {
           const storedCredential = localStorage.getItem(storageKey);
           if (storedCredential === credential) {
@@ -212,21 +228,26 @@ export function WebDisplay() {
 
     const preloadPresentation = (next: PresentationManifest) => {
       const image = new Image();
-      image.onload = () => setPresentation((current) => !current || next.revision >= current.revision ? next : current);
+      image.onload = () => { if (!stopped) setPresentation((current) => !current || next.revision >= current.revision ? next : current); };
       image.onerror = () => setMessage('The next screen could not be loaded. Waiting for another update…');
       image.src = new URL(next.content.url, window.location.origin).toString();
     };
 
     connect();
     const reportViewport = () => {
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'telemetry', payload: { width: window.innerWidth, height: window.innerHeight, userAgent: navigator.userAgent } }));
-      }
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (authenticated && socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ protocolVersion: '1.0', type: 'telemetry', payload: { width: window.innerWidth, height: window.innerHeight } }));
+        }
+      }, 750);
     };
     window.addEventListener('resize', reportViewport);
     return () => {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (watchdog) clearTimeout(watchdog);
+      if (resizeTimer) clearTimeout(resizeTimer);
       window.removeEventListener('resize', reportViewport);
       socket?.close(1000, 'Display closed');
     };

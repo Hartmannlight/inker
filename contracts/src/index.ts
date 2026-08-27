@@ -67,3 +67,12 @@ export {
   type ValidationIssue,
   type ValidationSeverity,
 } from './validation';
+export {
+  DEVICE_WEBSOCKET_LIMITS,
+  parseDeviceClientMessage,
+  parseDeviceServerMessage,
+  type DeviceClientMessage,
+  type DeviceServerMessage,
+  type DeviceTelemetry,
+  type WebDisplayManifest,
+} from './websocket';

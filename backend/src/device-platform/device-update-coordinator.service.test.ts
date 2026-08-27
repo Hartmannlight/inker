@@ -62,4 +62,24 @@ describe('DeviceUpdateCoordinator extension dispatch', () => {
     expect(findMany.calls[0][0].where).toEqual({ id: { in: [4, 7] }, isActive: true });
     coordinator.onModuleDestroy();
   });
+
+  it('contains asynchronous DB and adapter failures from event callbacks and unsubscribes', async () => {
+    for (const failAt of ['db', 'transport']) {
+      const stream = new Subject<any>();
+      const findMany = createMock().mockImplementation(async () => {
+        if (failAt === 'db') throw new Error('db-secret');
+        return [{ id: 1 }];
+      });
+      const coordinator = new DeviceUpdateCoordinator(
+        { getEventStream: () => stream } as any, { device: { findMany } } as any,
+        { resolvePersisted: () => configured('connected') } as any,
+        { get: () => ({ dispatchOnRefresh: true, selectTransport: () => 'test' }) } as any,
+        { get: () => ({ dispatchRefresh: async () => { throw new Error('transport-secret'); } }) } as any,
+      );
+      coordinator.onModuleInit(); stream.next({ payload: { deviceIds: [1] } });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      coordinator.onModuleDestroy(); stream.next({ payload: { deviceIds: [1] } });
+      expect(findMany.calls).toHaveLength(1);
+    }
+  });
 });

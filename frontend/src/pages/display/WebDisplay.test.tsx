@@ -82,6 +82,44 @@ describe('WebDisplay credential lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
+  it('sends versioned auth without user-agent and answers correlated pings', () => {
+    localStorage.setItem(STORAGE_KEY, 'valid-credential');
+    renderDisplay(`/display/${DISPLAY_ID}`);
+    const socket = MockWebSocket.instances[0];
+    act(() => socket.open());
+    expect(JSON.parse(socket.send.mock.calls[0][0])).toMatchObject({ protocolVersion: '1.0', type: 'authenticate' });
+    expect(socket.send.mock.calls[0][0]).not.toContain('userAgent');
+    act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ protocolVersion: '1.0', type: 'ping', nonce: 'abc', timestamp: 1 }) })));
+    expect(JSON.parse(socket.send.mock.calls.at(-1)![0])).toEqual({ protocolVersion: '1.0', type: 'pong', nonce: 'abc' });
+  });
+
+  it('stops on incompatible protocol without deleting credentials or reflecting errors', () => {
+    vi.useFakeTimers();
+    localStorage.setItem(STORAGE_KEY, 'valid-credential');
+    renderDisplay(`/display/${DISPLAY_ID}`);
+    const socket = MockWebSocket.instances[0];
+    act(() => socket.open());
+    act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ protocolVersion: '2.0', type: 'error', message: 'secret-output' }) })));
+    expect(screen.queryByText('secret-output')).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('valid-credential');
+  });
+
+  it('debounces resize telemetry and reconnects when server heartbeats disappear', () => {
+    vi.useFakeTimers();
+    localStorage.setItem(STORAGE_KEY, 'valid-credential');
+    renderDisplay(`/display/${DISPLAY_ID}`);
+    const socket = MockWebSocket.instances[0];
+    act(() => socket.open());
+    act(() => socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ protocolVersion: '1.0', type: 'connected', deviceId: 7, heartbeatInterval: 30000, pongTimeout: 10000, telemetryInterval: 300000 }) })));
+    act(() => { for (let i = 0; i < 100; i++) window.dispatchEvent(new Event('resize')); vi.advanceTimersByTime(1000); });
+    expect(socket.send.mock.calls.filter(([value]) => JSON.parse(value).type === 'telemetry')).toHaveLength(1);
+    act(() => vi.advanceTimersByTime(46_000));
+    expect(MockWebSocket.instances.length).toBeGreaterThan(1);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('valid-credential');
+  });
+
   it('prioritizes an explicit pairing token and replaces an existing credential only after pairing succeeds', async () => {
     localStorage.setItem(STORAGE_KEY, 'old-credential');
     let finishPairing!: (value: Response) => void;

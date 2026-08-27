@@ -17,6 +17,7 @@ import { PullContentController } from './pull-content.controller';
 import { PullContentService } from './pull-content.service';
 import { PullDeviceAuthService } from './pull-device-auth.service';
 import { PullLastSeenService } from './pull-last-seen.service';
+import { WebSocketTelemetryService } from './websocket-telemetry.service';
 
 @Module({
   imports: [PrismaModule, DiscoveryModule],
@@ -25,6 +26,7 @@ import { PullLastSeenService } from './pull-last-seen.service';
     PullContentService,
     PullDeviceAuthService,
     PullLastSeenService,
+    WebSocketTelemetryService,
     PresentationService,
     WebDisplayAuthService,
     WebDisplayGateway,

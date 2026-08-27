@@ -22,7 +22,9 @@ export class DeviceUpdateCoordinator implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     this.subscription = this.events.getEventStream().subscribe((event) => {
       const deviceIds = event.payload.deviceIds ?? [];
-      if (deviceIds.length) void this.refreshDevices(deviceIds);
+      if (deviceIds.length) void this.refreshDevices(deviceIds).catch(() => {
+        this.logger.warn('Device update dispatch failed');
+      });
     });
   }
 

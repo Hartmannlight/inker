@@ -32,6 +32,7 @@ export interface TransportAdapter {
   readonly transportMode: string;
   /** Implemented pull wire contract, independent of legacy device identity. */
   readonly pullProtocolVersion?: ProtocolVersion;
+  readonly webSocketProtocolVersion?: ProtocolVersion;
   readonly legacy: {
     deviceType: LegacyDeviceType;
     transport: LegacyTransport;
