@@ -71,7 +71,7 @@ müssen.
 | [x] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
 | [ ] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
 | [x] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
-| [ ] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
+| [x] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
 | [ ] | WP-17 | Unveränderliche Publications und read-only PresentationManifest | WP-07 |
 | [ ] | WP-18 | Deterministische Playlist-/Rotationszustandsmaschine | WP-17 |
 | [ ] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
@@ -1695,13 +1695,13 @@ Tests. Keine Source-Jobs.
 
 **Aufgaben:**
 
-- [ ] Ersetze relevante direkte In-Memory-Emits durch atomare Outbox-Einträge.
-- [ ] Implementiere Claim/Dispatch/Ack/Retry mit begrenzten Versuchen.
-- [ ] Dedupliziere Ereignisse nach Fachobjekt und Revision.
-- [ ] Verteile Delivery-Hinweise über Redis an verbundene Adapterprozesse.
-- [ ] Protokolliere Fehler mit Correlation-ID und ohne Payload-Secrets.
-- [ ] Entferne doppelte Screen-Design-Pushes.
-- [ ] Ergänze Crash-zwischen-Commit-und-Dispatch- sowie Redis-Ausfalltests.
+- [x] Ersetze relevante direkte In-Memory-Emits durch atomare Outbox-Einträge.
+- [x] Implementiere Claim/Dispatch/Ack/Retry mit begrenzten Versuchen.
+- [x] Dedupliziere Ereignisse nach Fachobjekt und Revision.
+- [x] Verteile Delivery-Hinweise über Redis an verbundene Adapterprozesse.
+- [x] Protokolliere Fehler mit Correlation-ID und ohne Payload-Secrets.
+- [x] Entferne doppelte Screen-Design-Pushes.
+- [x] Ergänze Crash-zwischen-Commit-und-Dispatch- sowie Redis-Ausfalltests.
 
 **Abnahme:** Ein Event geht bei Prozess-/Redis-Unterbrechung nicht verloren und
 führt pro Revision höchstens zu einem logischen Update.
@@ -1709,6 +1709,222 @@ führt pro Revision höchstens zu einem logischen Update.
 **Validierung:** Integrations-, Restart-, Retry- und Deduplizierungstests.
 
 **Handoff:** Outbox-Durchsatz, Retention und Monitoringanforderungen notieren.
+
+### Abschluss WP-16
+
+- Status: abgeschlossen am 2026-08-27. Ausgangspunkt war der saubere Commit
+  `201ad1d` auf `codex/device-platform-spike`. WP-07 (`528c568`),
+  WP-13 (`79f14eb`) und die genannten WP-09–WP-15-Vorgänger sind enthalten.
+  Keine zusätzlichen AGENTS-Anweisungen gefunden. Verbindliche ADRs und die
+  Handoffs WP-04, WP-07 und WP-13–WP-15 wurden gelesen, nicht der gesamte
+  Architekturplan. Die alte Kontextaussage zum fehlenden RxJS-Catch ist durch
+  WP-15 bereits überholt; WP-16 entfernt den RxJS-Delivery-Subscriber vollständig.
+  Der lokale Upstream-Trackingstand meldete sechs vorausliegende Commits; ohne
+  Fetch wurde daraus keine Aussage über den tatsächlichen Remote-Stand abgeleitet.
+  Ein lokaler WP-16-Commit wurde anschließend ausdrücklich beauftragt; ein Push
+  ist nicht beauftragt.
+
+- Producer und Atomarität: Screen-Updates sowie Screen-Löschung mit betroffenen
+  Playlists; Playlist-Änderung/Ersetzung der Items, erzwungene Löschung,
+  Item-Add/Update/Remove/Reorder; Geräte-Playlistwechsel, Unassign und expliziter
+  Refresh; Screen-Design-Update einschließlich Widgetersetzung sowie
+  Widget-Add/Update/Remove; Custom-Widget-Löschung mit betroffenen Designs.
+  Diese bisherigen Notification-Pfade speichern Fachänderung, `refreshPending`,
+  Aggregatrevision und Outbox gemeinsam in einer Prisma-Transaktion.
+  Explizite `events/notify`-/Design-Refresh-Aufrufe erzeugen ebenfalls dauerhafte
+  Refreshabsichten. Mehrgeräte-Refresh erzeugt einen Auftrag/Revisionszähler je
+  tatsächlichem Gerät; eine leere Geräteliste erzeugt keinen Auftrag.
+  Dateien eines gelöschten Screens werden erst nach dem DB-Commit bereinigt.
+  Screen-Design-Updates erzeugen nur noch `screen_design:updated`, keinen
+  zusätzlichen `device:refresh`. Überlappende direkte/Playlist-Zuordnungen werden
+  auf eine Geräte-ID reduziert. Der SSE-Stream bleibt eine flüchtige
+  Adminbenachrichtigung nach erfolgreicher Consumer-Verarbeitung und ist keine
+  Quelle für Geräte-Delivery mehr.
+
+- Event-/Versionsvertrag: Bestehende Typen `screen:updated`,
+  `playlist:updated`, `screen_design:updated`, `device:refresh` bleiben erhalten;
+  die vorhandenen `*:deleted`-Typen werden vom Parser weiterhin verstanden.
+  Payload-Version ist `1`, mit IDs, betroffenen Geräte-IDs und Zeitstempel,
+  ohne Fachinhalt, URL oder Credential. `aggregateRevision` ist eine separate,
+  neue Outbox-Spalte. Die unveränderten atomaren WP-07-Operationen erzeugen
+  weiterhin `publication.revision.created`,
+  `device.publication.desired-revision.changed` und
+  `device.publication.revision.acknowledged` mit ihren bisherigen Version-1-
+  Payloads. Die gewünschte Publication-Revision löst einen Delivery-Hinweis aus;
+  Erzeugung/Bestätigung einer Revision erzeugen keine weitere Pushschleife.
+  Unbekannte Typen/Versionen, unerwartete Felder und fehlerhafte Payloads erreichen
+  `dead-letter` mit festem Fehlercode. Ungültige Notification-IDs werden bereits
+  vor DB-Zugriff abgewiesen.
+
+- Persistenz/Migration: Ausschließlich neue Vorwärtsmigration
+  `20260827000000_outbox_dispatch`; keine ältere Migration verändert.
+  `OutboxEvent` erhält Claim-Owner, zufälliges Claim-Token, Ablauf,
+  Aggregatrevision und Recovery-Index. `OutboxAggregate` hält atomare
+  Revisionszähler; `OutboxEffect` den eindeutigen fachlichen Deduplizierungsbeleg;
+  `OutboxDelivery` eine Zustellidentität je Effekt/Gerät samt optionalem
+  Browser-Retry-Snapshot; `OutboxConsumer` und `OutboxTarget` die
+  Prozess-Leases und deren dauerhaften Fan-out-Fortschritt.
+  Publication-Identitäten, unveränderliche Revisionen und getrennte
+  Soll-/Bestätigungszustände aus WP-07 bleiben unverändert.
+
+- Claim/Dispatch/Ack/Recovery: DB-Poll alle 500 ms, höchstens 16 Claims pro Tick,
+  zusätzliche Begrenzung bei acht noch gültigen Processing-Claims.
+  Compare-and-swap beansprucht genau eine verfügbare Zeile und erhöht
+  `attempts`; Owner/Token gelten 30 Sekunden. Konkurrierende Claims haben nur
+  einen Gewinner. Verwaiste `processing`-Zeilen mit fehlendem/abgelaufenem
+  Claim werden erneut beansprucht, auch nach Restart und verlorenen Queue-Jobs.
+  Vorbereitung der logischen Effekte sowie Event-/Consumer-Acks sind gegen
+  Token, Owner und Ablauf abgesichert. Alte Queue-Jobs und verspätete Acks
+  können keinen neueren Claim abschließen.
+  BullMQ-Queue `delivery`, Prefix `inker-wp16`, Job `dispatch-v1`:
+  `{version:1,eventId,claimToken}`, Job-ID aus Event-ID plus Claim-Token.
+  Vier Workeroperationen je Prozess, höchstens 32 Starts/s, einmalige
+  Queue-Ausführung je DB-Versuch; DB-Retry ist maßgeblich. Erfolgreiche Queue-Jobs
+  verschwinden, fehlgeschlagene werden technisch auf 100/24 Stunden begrenzt.
+  Der Dispatcher wartet höchstens acht Sekunden auf Consumer-Acks, Adapter
+  erhalten nach sieben Sekunden ein Abortsignal. Nicht abgeschlossene
+  Adapteroperationen behalten einen von maximal vier lokalen Slots bis zu ihrem
+  tatsächlichen Ende. Shutdown stoppt Polling, bricht laufende Adapterkontexte
+  ab und gibt die Prozess-Lease erst nach dem Schließen der Verbindungen auf.
+  Es gibt keinen separaten Worker-Bootstrap.
+
+- Retry/Fehler: Höchstens fünf DB-Versuche, Backoff 1/2/4/8 Sekunden zuzüglich
+  0–20 % Jitter. Bei einem Crash wartet Recovery stattdessen auf den Claimablauf.
+  Nach ausgeschöpften Versuchen, einschließlich Crash im letzten Versuch,
+  bleibt ein persistenter `dead-letter`-Datensatz mit `processedAt`,
+  Attemptzahl und geheimnisfreiem `lastError` erhalten. Ein Redis-Ausfall
+  verbraucht ebenfalls Versuche; nach dem Limit ist bewusster administrativer
+  Eingriff am ursprünglichen Auftrag nötig, kein unbegrenzter automatischer
+  Neustart der Versuche. Noch nicht erschöpfte Arbeit läuft nach Wiederherstellung
+  weiter. Bestehende `listOutboxEvents`/`getOutboxStatusCounts` machen diese
+  Zustände abfragbar; neue Admin-UI, Alarmierung und Redrive-Endpunkte sind nicht
+  Bestandteil dieses Pakets.
+
+- Deduplizierung/logisches Update: Der eindeutige SHA-256-Schlüssel berücksichtigt
+  Eventtyp, Fachobjekttyp, Fachobjekt-ID und Revision. Für WP-07 wird die
+  PublicationRevision-ID verwendet, damit gleiche numerische Revisionen
+  verschiedener Publications nicht kollidieren. Derselbe Effekt erzeugt nur
+  einmal Zustellzeilen; Duplikat-Events erzeugen keine neuen logischen Updates.
+  `TransportAdapter.dispatchRefresh(deviceId, context?)` bleibt der Einstieg
+  und reicht beim WebSocket an `pushPresentation` weiter. Der neue optionale
+  Kontext enthält nur Zustell-ID und Abortsignal. Die erste Browserzustellung
+  erstellt vorhandenes Manifest, Revisionsinkrement und Retry-Snapshot atomar;
+  andere Prozesse/Wiederholungen lesen genau diesen Snapshot. URL-/Wire-Validierung
+  geschieht vor dessen Speicherung. Eine Verbindung sendet keine bereits
+  gesendete oder ältere Präsentationsrevision erneut.
+  Getrennte Verbindungen erhalten dieselbe logische Revision. Ein verlorener
+  Transport-/Event-Ack erzeugt keine zweite Revision. Dies ist keine Garantie
+  genau eines physischen Pakets oder eines tatsächlich gerenderten Frames:
+  `delivered` bestätigt Transportübergabe bzw. Offline/Pull-Fallback, nicht eine
+  neue Device-Renderbestätigung. Bestehende Reconnect-/GET-/Transition-Aufrufe
+  ohne Outbox-Kontext behalten ihre bisherige Legacy-Revisions-/Playlistlogik.
+
+- Redis/Fan-out: Jeder Adapterprozess registriert eine 15-Sekunden-Lease und
+  erneuert sie alle fünf Sekunden. Die Vorbereitung speichert Ziele für die
+  aktuell lebenden Prozesse in SQLite. Redis Pub/Sub sendet ausschließlich
+  `{version:1}` auf `inker:delivery-hints:v1`; der Hinweis weckt DB-Abfragen,
+  er enthält weder Payload noch Credential. Consumer pollen zusätzlich alle
+  500 ms und verarbeiten ausstehende Ziele auch bei verlorener Subscription.
+  Reconnect resubscribiert; Redis ist niemals die einzige dauerhafte Quelle.
+  Abgelaufene Prozess-Leases blockieren den Abschluss nicht. Ein pausierter
+  Prozess schließt nach Leaseablauf seine Verbindungen vor Wiederanmeldung;
+  auch DB-/Consumerfehler schließen diese vorsorglich. Neue Geräteverbindungen
+  lesen wie bisher den aktuellen DB-Zustand. Profil, Policy und Adapter werden
+  ausschließlich über WP-13-Resolver/Registry/Nest-Discovery ausgewählt.
+  Keine neue Gerätetyp-/Transportliste.
+  Verbindung zum bestehenden lokalen Redis über Loopback,
+  `OUTBOX_REDIS_PORT` standardmäßig 6379, `REDIS_PASSWORD` mit demselben
+  Fallback wie `docker/services.d/redis/run`, auch bei leerem Umgebungswert.
+  `ioredis@5.11.1` ist nun eine direkte, im Bun-Lockfile fixierte Abhängigkeit;
+  vorher war dieselbe Version bereits transitiv installiert.
+
+- Retention/Sicherheit: WP-07 bleibt maßgeblich: `delivered` 30 Tage,
+  `dead-letter` 90 Tage; `pending` und `processing` niemals allein wegen
+  Alters löschen. Zielzeilen und Retry-Snapshots werden mit der terminalen
+  Event-Retention entfernt; abgelaufene Prozessregistrierungen sind flüchtiger
+  Koordinationszustand und werden bereinigt. Die kleinen Deduplizierungsbelege
+  und Aggregatzähler bleiben dauerhaft, damit Cleanup kein Replay erlaubt.
+  Das bestehende Publication-Cleanup läuft beim Dispatcherstart und stündlich;
+  Referenz-/Latest-Schutz und 90-Tage-Regel für PublicationRevision bleiben.
+  Fehlerpfade protokollieren feste Codes und Event-ID als Correlation-ID,
+  Infrastrukturfehler eine Prozess-ID, keine Rohfehler/Payloads.
+  Geräte-, Pairing-, Admin- und Redis-Credentials gehen nicht in
+  Event-/Job-/Hint-Payloads oder fachliche Diagnosewerte ein.
+  Instanzschlüssel, Backup, Sessions/CSRF, Credentialrotation/Widerruf,
+  Origin-/Proxygrenzen, Telemetrieintervalle und Pull-/304-/TRMNL-Verträge bleiben.
+
+- Validierung: **553 Backendtests, 27 Contracttests, 57 Frontendtests,
+  27 bestehende Integrationsfälle, 13 neue SQLite-Outbox-Fälle und eine echte
+  Redis-/Mehrprozess-Systemtestsuite** bestanden. Neue Rotläufe belegten fehlende
+  Parser-/Store-Grenzen; Tests decken atomaren Rollback verschiedener Producer,
+  Crash vor Dispatch, konkurrierende Claims, Lease-Recovery, veraltete Event-
+  und Consumer-Acks, Retryabstände/Limits/Dead Letter, Aggregat-/Publication-
+  Deduplizierung, doppelte Designzuordnungen, Retention und fehlerhafte IDs/URLs ab.
+  Der Node-Systemtest startet zwei tatsächliche Nest-/Adapterprozesse und einen
+  eigenen Redis-8.0.2-Container: getrennte verbundene Clients, Subscriber-Unterbrechung,
+  Adapterfehler mit Secretmarker, verlorener Ack nach echtem WebSocket-Send,
+  Redis-Stopp/Restart ohne AOF/RDB, Prozessabbruch nach Commit sowie nach
+  Dispatch vor Event-Ack. Claim-Recovery wartet echte 30 Sekunden statt die
+  Produktuhr vorzusetzen. Der vorhandene WP-15-20-Client-/200-Pong-Smoke ist grün.
+  Backend-, Frontend-, Contract- und separater Outbox-Test-Typecheck,
+  Prisma-Validierung, vier Migrationstests mit Datamodel-Diff, Produktionsbuilds,
+  Compose-Validierung und `git diff --check` bestanden.
+  Gezieltes Produktions-/Outbox-Testlint: keine Fehler; bestehende Unused-Warnungen.
+
+- Produktions-/Toolchainprüfung: `inker:wp16-test` wurde neu gebaut,
+  der generierte Prisma-Client im Image ausdrücklich initialisiert und der
+  erweiterte `websocket-container-smoke.cjs` mit
+  `INKER_SMOKE_IMAGE=inker:wp16-test` ausgeführt. Eigener Container und anonyme
+  Testvolumes: echte Outbox-Zustellung und persistenter Ack, Admin/CSRF, Pairing,
+  Heartbeat/Widerruf, Reconnect, Pull/ETag/bodyfreies 304/Auth vor 304,
+  Refresh-Policy, Artefakte, TRMNL und Restart bei stabiler Schlüssel-ID/ETag;
+  Testsecrets nicht in Logs, Outbox, Sessions oder Telemetrie.
+  Bestehende produktive Container und Volumes wurden nicht verändert.
+  Die optional fehlende Runtime-Seed-Datei `device-configuration.catalog`,
+  Prisma-7-/Browserslist-Warnung sowie vorhandene Lint-/TSConfig-Befunde bleiben:
+  vollständiges Backend-Lint 76 Fehler/41 Warnungen einschließlich ausgeschlossener
+  neuer Testdateien; Frontend-Lint unverändert 85 Fehler/9 Warnungen.
+  Neue Dateien wurden separat mit passender Test-TSConfig geprüft.
+  Reproduktion aus backend/: `bun test ./test/outbox.integration.ts`,
+  `bun test ./test/outbox-redis.integration.ts` und
+  `node node_modules/typescript/bin/tsc -p test/tsconfig.outbox.json`.
+  Der Redis-Systemtest benötigt Docker, das bestehende Image `inker:wp15-test`
+  als Redis-8.0.2-Binaryquelle und freien Loopback-Port 18716; der
+  Produktions-Smoke nutzt Port 18715. Beide erstellen nur eigene Container.
+  Lokales Bun 1.3.14, Node-Testhost 24.14.0; Produktionsimage mit Node 22.22.3.
+  Bun meldete bei der lokalen Contracts-Kopie wiederholt Windows-EPERM;
+  vorhandene Contracts-Artefakte wurden in die lokale Dependency-Kopie
+  zurückkopiert. Frozen-Install im Docker-Build und Runtime-Smoke bestanden.
+  Der erste Frontend-Aufruf mit `bun test` war der falsche Runner; maßgeblich
+  ist der erfolgreiche `bun run test`-Vitest-Lauf.
+  Der bekannte maskierende Docker-`|| true`-Pfad wurde nicht umgebaut;
+  Client-Initialisierung und echter Runtime-Smoke schließen einen solchen
+  Cachefehler für das ausgelieferte Testimage aus.
+
+- Messung/Monitoring: Finaler authentisierter Systemlauf: **100 Events in
+  5930 ms = 16,9 Events/s** bei SQLite/Redis/BullMQ und offline geschaltetem
+  Geräteadapter; Producer-IPC-Roundtrips sind in der Zeit enthalten.
+  Vorläufe lagen bei 14,6–16,0 Events/s. Kein Kapazitäts- oder Hardware-SLA.
+  `OutboxDispatcher.metrics()` liefert `claimed`, `delivered`, `failed`,
+  `stale`, `redisReady`; die DB bleibt die Quelle der Statuszähler.
+  Für WP-28 beobachten: ältestes fälliges Pending-Event, gültige/abgelaufene
+  Claims, Dead-Letter-Anzahl und -Alter, Attempts/Retryrate, Claim-/Dispatch-/
+  Ack-Latenz, Consumer-Leases, verlorene Subscriptions, Adaptertimeouts,
+  SQLite-Busy/Write-Latenz sowie Größe der permanenten Deduplizierungstabellen.
+  Dead Letter muss alarmieren; reine Queue-Leere ist kein Erfolgsnachweis.
+
+- Grenzen/Folgearbeit: Kein physischer TRMNL-/ESP32-Test und keine Aussage über
+  Netzunterbrechungen oder Renderbestätigungen echter Hardware.
+  Bestehende Manifeste bleiben bei Redis-Ausfall lesbar; fünf erschöpfte Versuche
+  brauchen administrative Behandlung statt stiller Eventlöschung.
+  Fremde Connected-Adapter müssen Zustell-ID/Abort-/Lease-Verträge einhalten.
+  Dauerhafte Deduplizierungsbelege wachsen bewusst; spätere Kompaktierung braucht
+  einen nachweislich replay-sicheren Vertrag.
+  Publication-/Manifest-/Publish-Umbau bleibt WP-17, getrennte Bootstrap-/
+  Queue-Policies WP-20, weitergehende Metriken/Alarmierung WP-28. Keine Source-Jobs,
+  neue Playlistzustandsmaschine, Rendercache-Erweiterung, Interaction-Pipeline
+  oder MQTT implementiert. Keine angeforderte automatisierte Prüfung blieb
+  unausgeführt; die genannten globalen Lintbefunde sind ausdrücklich kein grünes Gate.
 
 ## WP-17 – Unveränderliche Publications und read-only Manifeste
 

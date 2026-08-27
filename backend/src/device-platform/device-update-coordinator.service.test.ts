@@ -37,6 +37,7 @@ describe('DeviceUpdateCoordinator extension dispatch', () => {
         }),
       } as any,
       { get: () => ({ dispatchRefresh }) } as any,
+      {} as any,
     );
 
     await coordinator.refreshDevices([1, 2]);
@@ -44,42 +45,21 @@ describe('DeviceUpdateCoordinator extension dispatch', () => {
     expect(dispatchRefresh.calls).toEqual([[1]]);
   });
 
-  it('uses event device IDs without embedding transport-specific branches', async () => {
+  it('does not subscribe to transient SSE events for device delivery', () => {
     const stream = new Subject<any>();
     const findMany = createMock().mockResolvedValue([]);
-    const coordinator = new DeviceUpdateCoordinator(
-      { getEventStream: () => stream } as any,
-      { device: { findMany } } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
-    coordinator.onModuleInit();
-
+    new DeviceUpdateCoordinator({ getEventStream: () => stream } as any,
+      { device: { findMany } } as any, {} as any, {} as any, {} as any, {} as any);
     stream.next({ payload: { deviceIds: [4, 7] } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(findMany.calls[0][0].where).toEqual({ id: { in: [4, 7] }, isActive: true });
-    coordinator.onModuleDestroy();
+    expect(findMany.calls).toHaveLength(0);
   });
 
-  it('contains asynchronous DB and adapter failures from event callbacks and unsubscribes', async () => {
-    for (const failAt of ['db', 'transport']) {
-      const stream = new Subject<any>();
-      const findMany = createMock().mockImplementation(async () => {
-        if (failAt === 'db') throw new Error('db-secret');
-        return [{ id: 1 }];
-      });
-      const coordinator = new DeviceUpdateCoordinator(
-        { getEventStream: () => stream } as any, { device: { findMany } } as any,
-        { resolvePersisted: () => configured('connected') } as any,
-        { get: () => ({ dispatchOnRefresh: true, selectTransport: () => 'test' }) } as any,
-        { get: () => ({ dispatchRefresh: async () => { throw new Error('transport-secret'); } }) } as any,
-      );
-      coordinator.onModuleInit(); stream.next({ payload: { deviceIds: [1] } });
-      await new Promise(resolve => setTimeout(resolve, 0));
-      coordinator.onModuleDestroy(); stream.next({ payload: { deviceIds: [1] } });
-      expect(findMany.calls).toHaveLength(1);
-    }
+  it('propagates adapter failures to the durable retry owner', async () => {
+    const coordinator = new DeviceUpdateCoordinator({} as any,
+      { device: { findMany: async () => [{ id: 1 }] } } as any,
+      { resolvePersisted: () => configured('connected') } as any,
+      { get: () => ({ dispatchOnRefresh: true, selectTransport: () => 'dummy' }) } as any,
+      { get: () => ({ dispatchRefresh: async () => { throw new Error('transport-error'); } }) } as any, {} as any);
+    await expect(coordinator.refreshDevices([1])).rejects.toThrow('transport-error');
   });
 });

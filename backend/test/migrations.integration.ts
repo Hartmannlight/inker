@@ -126,6 +126,7 @@ describe("Prisma migration baseline", () => {
         "20260824003000_publication_outbox_state",
         "20260824004000_device_enrollments",
         "20260825000000_admin_credentials_sessions",
+        "20260827000000_outbox_dispatch",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

@@ -41,7 +41,7 @@ function connect(device, token, options = {}) {
 async function main() {
   try {
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
-      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', 'inker:wp15-test');
+      '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets', process.env.INKER_SMOKE_IMAGE || 'inker:wp15-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
@@ -54,6 +54,18 @@ async function main() {
     const token = pair.body.credential; secrets.push(token);
     const http = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: { Authorization: `Bearer ${token}` } }); assert.equal(http.response.status, 200);
     const active = connect(device, token); await until(() => active.messages.some(m => m.type === 'presentation.changed'));
+    if (process.env.INKER_SMOKE_IMAGE === 'inker:wp16-test') {
+      stage = 'outbox refresh';
+      const before = active.messages.filter(m => m.type === 'presentation.changed').length;
+      assert.equal((await request(`/api/devices/${device.id}/refresh`, { method: 'POST', admin: true })).response.status, 201);
+      stage = 'outbox websocket delivery';
+      await until(() => active.messages.filter(m => m.type === 'presentation.changed').length === before + 1);
+      stage = 'outbox durable ack';
+      await until(() => db("console.log(JSON.stringify(await p.outboxEvent.count({where:{eventType:'device:refresh',status:'delivered'}})));") === 1);
+      const outbox = JSON.stringify(db('console.log(JSON.stringify(await p.outboxEvent.findMany()));'));
+      for (const value of secrets) assert.equal(outbox.includes(value), false);
+      console.info('WP-16 container outbox refresh and secret audit passed');
+    }
     stage = 'heartbeat'; await until(() => active.pings >= 1, 450); assert.equal(active.code, undefined);
     stage = 'rotation';
     const enrollment = await request(`/api/devices/${device.id}/enrollments`, { method: 'POST', admin: true }); assert.equal(enrollment.response.status, 201); secrets.push(enrollment.body.code);
@@ -98,6 +110,9 @@ async function main() {
     if (logs.includes('device-configuration.catalog')) console.info('Known optional runtime seed warning observed.');
   } catch {
     console.error(`WP-15 production smoke failed at ${stage}`); process.exitCode = 1;
+    if (process.env.INKER_SMOKE_IMAGE === 'inker:wp16-test') {
+      try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
+    }
     try {
       let errors = docker('logs', '--tail', '150', name).split('\n').filter(line => /ERROR|Error|error:/.test(line)).slice(-4).map(line => line.split(' - {')[0]).join('\n');
       for (const secret of secrets.filter(Boolean)) errors = errors.replaceAll(secret, '[REDACTED]');

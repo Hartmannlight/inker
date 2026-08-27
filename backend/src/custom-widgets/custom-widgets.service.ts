@@ -158,51 +158,53 @@ export class CustomWidgetsService {
    * Delete custom widget
    */
   async remove(id: number) {
-    const customWidget = await this.prisma.customWidget.findUnique({
-      where: { id },
-    });
-
-    if (!customWidget) {
-      throw new NotFoundException('Custom widget not found');
-    }
-
-    // Find all screen widget instances that reference this custom widget.
-    // The reference lives in the JSON `config.customWidgetId`. SQLite doesn't support Prisma
-    // JSON-path filtering, so fetch the (few) custom-widget-base instances and filter in JS.
-    const candidateWidgets = await this.prisma.screenWidget.findMany({
-      where: {
-        template: { name: 'custom-widget-base' },
-      },
-      select: { id: true, screenDesignId: true, config: true },
-    });
-    const orphanedWidgets = candidateWidgets.filter(
-      (w) => (w.config as { customWidgetId?: number } | null)?.customWidgetId === id,
-    );
-
-    // Delete orphaned screen widget instances
-    if (orphanedWidgets.length > 0) {
-      const widgetIds = orphanedWidgets.map(w => w.id);
-      await this.prisma.screenWidget.deleteMany({
-        where: { id: { in: widgetIds } },
+    return this.prisma.$transaction(async (tx) => {
+      const customWidget = await tx.customWidget.findUnique({
+        where: { id },
       });
-      this.logger.log(
-        `Removed ${orphanedWidgets.length} widget instance(s) from screen designs`,
+
+      if (!customWidget) {
+        throw new NotFoundException('Custom widget not found');
+      }
+
+      // Find all screen widget instances that reference this custom widget.
+      // The reference lives in the JSON `config.customWidgetId`. SQLite doesn't support Prisma
+      // JSON-path filtering, so fetch the (few) custom-widget-base instances and filter in JS.
+      const candidateWidgets = await tx.screenWidget.findMany({
+        where: {
+          template: { name: 'custom-widget-base' },
+        },
+        select: { id: true, screenDesignId: true, config: true },
+      });
+      const orphanedWidgets = candidateWidgets.filter(
+        (w) => (w.config as { customWidgetId?: number } | null)?.customWidgetId === id,
       );
 
-      // Notify affected screen designs to refresh devices
-      const screenDesignIds = [...new Set(orphanedWidgets.map(w => w.screenDesignId))];
-      for (const designId of screenDesignIds) {
-        await this.eventsService.notifyScreenDesignUpdate(designId);
+      // Delete orphaned screen widget instances
+      if (orphanedWidgets.length > 0) {
+        const widgetIds = orphanedWidgets.map(w => w.id);
+        await tx.screenWidget.deleteMany({
+          where: { id: { in: widgetIds } },
+        });
+        this.logger.log(
+          `Removed ${orphanedWidgets.length} widget instance(s) from screen designs`,
+        );
+
+        // Notify affected screen designs to refresh devices
+        const screenDesignIds = [...new Set(orphanedWidgets.map(w => w.screenDesignId))];
+        for (const designId of screenDesignIds) {
+          await this.eventsService.notifyScreenDesignUpdate(designId, tx);
+        }
       }
-    }
 
-    await this.prisma.customWidget.delete({
-      where: { id },
+      await tx.customWidget.delete({
+        where: { id },
+      });
+
+      this.logger.log(`Custom widget deleted: ${customWidget.name}`);
+
+      return { message: 'Custom widget deleted successfully' };
     });
-
-    this.logger.log(`Custom widget deleted: ${customWidget.name}`);
-
-    return { message: 'Custom widget deleted successfully' };
   }
 
   /**

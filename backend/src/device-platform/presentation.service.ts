@@ -2,13 +2,39 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresentationManifest } from './presentation.types';
 import { resolveDeviceConfiguration } from './device-configuration';
+import { Prisma } from '@prisma/client';
+import type { DeliveryContext } from '../events/outbox.types';
+import { parseDeviceServerMessage } from '@inker/contracts';
 
 @Injectable()
 export class PresentationService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getForDevice(deviceId: number): Promise<PresentationManifest> {
-    const device = await this.prisma.device.findUnique({
+  async getForDevice(deviceId: number, context?: DeliveryContext): Promise<PresentationManifest> {
+    if (!context) return this.build(deviceId, this.prisma);
+    context.signal.throwIfAborted();
+    return this.prisma.$transaction(async tx => {
+      // Acquire the SQLite writer lock before reading; simultaneous adapter
+      // processes prepare exactly one revision/snapshot for this delivery.
+      await tx.outboxDelivery.update({ where: { deliveryId: context.deliveryId, deviceId }, data: { deviceId } });
+      const receipt = await tx.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: context.deliveryId } });
+      if (receipt.deviceId !== deviceId) throw new Error('OUTBOX_DEVICE_MISMATCH');
+      if (receipt.presentation) return receipt.presentation as unknown as PresentationManifest;
+      const presentation = await this.build(deviceId, tx);
+      // Validate URL/field secrecy before persisting a retry snapshot, not only
+      // at the later WebSocket boundary.
+      if (!parseDeviceServerMessage({ protocolVersion: '1.0', type: 'presentation.changed', presentation }).success) {
+        throw new Error('OUTBOX_INVALID_PRESENTATION');
+      }
+      context.signal.throwIfAborted();
+      await tx.outboxDelivery.update({ where: { deliveryId: receipt.deliveryId },
+        data: { presentation: presentation as unknown as Prisma.InputJsonValue } });
+      return presentation;
+    });
+  }
+
+  private async build(deviceId: number, database: Prisma.TransactionClient): Promise<PresentationManifest> {
+    const device = await database.device.findUnique({
       where: { id: deviceId },
       include: {
         profile: true,
@@ -56,7 +82,7 @@ export class PresentationService {
     }
 
     const currentId = item ? this.itemId(item) : null;
-    const updated = await this.prisma.device.update({
+    const updated = await database.device.update({
       where: { id: device.id },
       data: {
         lastScreenId: currentId,

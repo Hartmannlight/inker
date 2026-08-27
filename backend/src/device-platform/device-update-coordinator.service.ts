@@ -1,15 +1,28 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Subscription } from 'rxjs';
+import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { EventsService } from '../events/events.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { OutboxStore } from '../events/outbox.store';
+import {
+  OUTBOX_POLICY as POLICY,
+  parseOutboxEvent,
+  type DeliveryContext,
+} from '../events/outbox.types';
 import { DeliveryPolicyRegistry } from './delivery-policy.registry';
 import { ProfileResolverService } from './profile-resolver.service';
 import { TransportAdapterRegistry } from './transport-adapter.registry';
 
 @Injectable()
-export class DeviceUpdateCoordinator implements OnModuleInit, OnModuleDestroy {
+export class DeviceUpdateCoordinator {
   private readonly logger = new Logger(DeviceUpdateCoordinator.name);
-  private subscription?: Subscription;
+  readonly consumerId = randomUUID();
+  private timer?: ReturnType<typeof setInterval>;
+  private active = false;
+  private running?: Promise<void>;
+  private leaseUntil = 0;
+  private renewAt = 0;
+  private readonly inFlight = new Set<Promise<void>>();
+  private readonly aborts = new Set<AbortController>();
 
   constructor(
     private readonly events: EventsService,
@@ -17,35 +30,144 @@ export class DeviceUpdateCoordinator implements OnModuleInit, OnModuleDestroy {
     private readonly profiles: ProfileResolverService,
     private readonly deliveryPolicies: DeliveryPolicyRegistry,
     private readonly transports: TransportAdapterRegistry,
+    private readonly store: OutboxStore,
   ) {}
 
-  onModuleInit() {
-    this.subscription = this.events.getEventStream().subscribe((event) => {
-      const deviceIds = event.payload.deviceIds ?? [];
-      if (deviceIds.length) void this.refreshDevices(deviceIds).catch(() => {
-        this.logger.warn('Device update dispatch failed');
+  async start() {
+    await this.store.register(this.consumerId);
+    this.active = true;
+    this.leaseUntil = Date.now() + POLICY.consumerLeaseMs;
+    this.renewAt = Date.now() + 5000;
+    this.timer = setInterval(() => this.wake(), POLICY.pollMs);
+    this.timer.unref?.();
+  }
+
+  async stop() {
+    this.active = false;
+    if (this.timer) clearInterval(this.timer);
+    // Close sockets before relinquishing durable ownership of delivery targets.
+    this.expireConnections();
+    for (const abort of this.aborts) abort.abort();
+    await this.running;
+    await this.store.unregister(this.consumerId);
+  }
+
+  wake() {
+    if (this.active && Date.now() >= this.leaseUntil) this.expireConnections();
+    if (!this.active || this.running) return;
+    this.running = this.poll()
+      .catch(() => {
+        this.logger.warn({
+          code: 'OUTBOX_CONSUMER_FAILED',
+          correlationId: this.consumerId,
+        });
+        this.expireConnections();
+      })
+      .finally(() => {
+        this.running = undefined;
       });
-    });
   }
 
-  onModuleDestroy() {
-    this.subscription?.unsubscribe();
+  private expireConnections() {
+    for (const adapter of this.transports.list())
+      adapter.deliveryLeaseExpired?.();
   }
 
-  async refreshDevices(deviceIds: number[]) {
+  async poll() {
+    if (Date.now() >= this.leaseUntil) this.expireConnections();
+    if (Date.now() >= this.renewAt) {
+      await this.store.register(this.consumerId);
+      this.leaseUntil = Date.now() + POLICY.consumerLeaseMs;
+      this.renewAt = Date.now() + 5000;
+    }
+    for (const target of await this.store.pendingTargets(this.consumerId)) {
+      if (!this.active) break;
+      const event = await this.prisma.outboxEvent.findUnique({
+        where: { eventId: target.effect.eventId },
+      });
+      if (
+        !event ||
+        !(await this.store.beginTarget(
+          target.effectKey,
+          this.consumerId,
+          event,
+        ))
+      )
+        continue;
+      const abort = new AbortController();
+      this.aborts.add(abort);
+      const timer = setTimeout(
+        () => abort.abort(),
+        POLICY.dispatchTimeoutMs - 1000,
+      );
+      try {
+        const parsed = parseOutboxEvent(event);
+        for (const delivery of target.effect.deliveries) {
+          abort.signal.throwIfAborted();
+          await this.refreshDevices([delivery.deviceId], {
+            deliveryId: delivery.deliveryId,
+            signal: abort.signal,
+          });
+        }
+        abort.signal.throwIfAborted();
+        if (
+          await this.store.finishTarget(
+            target.effectKey,
+            this.consumerId,
+            event,
+            true,
+          )
+        ) {
+          if (parsed.notification) this.events.emit(parsed.notification);
+        }
+      } catch {
+        await this.store.finishTarget(
+          target.effectKey,
+          this.consumerId,
+          event,
+          false,
+        );
+        this.logger.warn({
+          code: 'OUTBOX_ADAPTER_FAILED',
+          correlationId: event.eventId,
+        });
+      } finally {
+        clearTimeout(timer);
+        this.aborts.delete(abort);
+      }
+    }
+  }
+
+  async refreshDevices(deviceIds: number[], context?: DeliveryContext) {
     const devices = await this.prisma.device.findMany({
       where: { id: { in: deviceIds }, isActive: true },
       include: { profile: true, deliveryPolicy: true },
     });
-    let dispatched = 0;
-    await Promise.all(devices.map(async (device) => {
+    for (const device of devices) {
       const configuration = this.profiles.resolvePersisted(device);
-      const policy = this.deliveryPolicies.get(configuration.deliveryPolicy.mode);
-      if (!policy.dispatchOnRefresh) return;
-      const adapter = this.transports.get(policy.selectTransport(configuration.capabilities));
-      await adapter.dispatchRefresh(device.id);
-      dispatched += 1;
-    }));
-    this.logger.debug(`Dispatched update to ${dispatched} device transports`);
+      const policy = this.deliveryPolicies.get(
+        configuration.deliveryPolicy.mode,
+      );
+      if (!policy.dispatchOnRefresh) continue;
+      const adapter = this.transports.get(
+        policy.selectTransport(configuration.capabilities),
+      );
+      if (context) {
+        context.signal.throwIfAborted();
+        if (this.inFlight.size >= 4) throw new Error('OUTBOX_ADAPTER_LIMIT');
+        const operation = adapter.dispatchRefresh(device.id, context);
+        this.inFlight.add(operation);
+        void operation
+          .finally(() => this.inFlight.delete(operation))
+          .catch(() => {});
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(new Error('OUTBOX_ADAPTER_TIMEOUT'));
+          context.signal.addEventListener('abort', abort, { once: true });
+          operation
+            .then(resolve, reject)
+            .finally(() => context.signal.removeEventListener('abort', abort));
+        });
+      } else await adapter.dispatchRefresh(device.id);
+    }
   }
 }

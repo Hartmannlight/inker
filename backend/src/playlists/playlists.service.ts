@@ -318,188 +318,43 @@ export class PlaylistsService {
    * Update playlist
    */
   async update(id: number, updatePlaylistDto: UpdatePlaylistDto) {
-    const playlist = await this.prisma.playlist.findUnique({
-      where: { id },
-      include: {
-        _count: {
-          select: { devices: true },
-        },
-      },
-    });
-
-    if (!playlist) {
-      throw new NotFoundException('Playlist not found');
-    }
-
-    // Prevent deactivating a playlist that has devices assigned
-    if (updatePlaylistDto.isActive === false && playlist._count.devices > 0) {
-      throw new BadRequestException(
-        `Cannot deactivate playlist - it is assigned to ${playlist._count.devices} device(s). Unassign all devices first.`,
-      );
-    }
-
-    // Extract screens for separate handling
-    const { screens, ...playlistData } = updatePlaylistDto;
-
-    // Update playlist basic data
-    const updatedPlaylist = await this.prisma.playlist.update({
-      where: { id },
-      data: {
-        name: playlistData.name,
-        description: playlistData.description,
-        isActive: playlistData.isActive,
-        advanceOnTap: playlistData.advanceOnTap,
-      },
-      include: {
-        items: {
-          include: {
-            screen: true,
-          },
-          orderBy: {
-            order: 'asc',
+    return this.prisma.$transaction(async (tx) => {
+      const playlist = await tx.playlist.findUnique({
+        where: { id },
+        include: {
+          _count: {
+            select: { devices: true },
           },
         },
-      },
-    });
-
-    // Handle screens update if provided
-    if (screens !== undefined) {
-      // Delete all existing items
-      await this.prisma.playlistItem.deleteMany({
-        where: { playlistId: id },
       });
 
-      // Add new items using batch approach to avoid N+1 queries
-      if (screens.length > 0) {
-        // Parse and categorize screen IDs
-        const designIds: number[] = [];
-        const regularIds: number[] = [];
-        const pluginIds: number[] = [];
-        const screenMap = new Map<string, { type: 'design' | 'regular' | 'plugin'; id: number; order: number; duration: number }>();
-
-        screens.forEach((screenData, i) => {
-          if (typeof screenData.screenId === 'string' && screenData.screenId.startsWith('design-')) {
-            const designId = parseInt(screenData.screenId.replace('design-', ''), 10);
-            if (!isNaN(designId)) {
-              designIds.push(designId);
-              screenMap.set(screenData.screenId, {
-                type: 'design',
-                id: designId,
-                order: screenData.order ?? i,
-                duration: screenData.duration ?? 60,
-              });
-            } else {
-              this.logger.warn(`Invalid screen design ID: ${screenData.screenId}`);
-            }
-          } else if (typeof screenData.screenId === 'string' && screenData.screenId.startsWith('plugin-')) {
-            const pluginId = parseInt(screenData.screenId.replace('plugin-', ''), 10);
-            if (!isNaN(pluginId)) {
-              pluginIds.push(pluginId);
-              screenMap.set(screenData.screenId, {
-                type: 'plugin',
-                id: pluginId,
-                order: screenData.order ?? i,
-                duration: screenData.duration ?? 60,
-              });
-            } else {
-              this.logger.warn(`Invalid plugin instance ID: ${screenData.screenId}`);
-            }
-          } else {
-            const screenId = typeof screenData.screenId === 'string'
-              ? parseInt(screenData.screenId, 10)
-              : screenData.screenId as unknown as number;
-            if (!isNaN(screenId)) {
-              regularIds.push(screenId);
-              screenMap.set(String(screenId), {
-                type: 'regular',
-                id: screenId,
-                order: screenData.order ?? i,
-                duration: screenData.duration ?? 60,
-              });
-            } else {
-              this.logger.warn(`Invalid screenId: ${screenData.screenId}`);
-            }
-          }
-        });
-
-        // Batch verify existence of all screens/designs/plugins
-        const [existingDesigns, existingScreens, existingPlugins] = await Promise.all([
-          designIds.length > 0
-            ? this.prisma.screenDesign.findMany({ where: { id: { in: designIds } }, select: { id: true } })
-            : Promise.resolve([]),
-          regularIds.length > 0
-            ? this.prisma.screen.findMany({ where: { id: { in: regularIds } }, select: { id: true } })
-            : Promise.resolve([]),
-          pluginIds.length > 0
-            ? this.prisma.pluginInstance.findMany({ where: { id: { in: pluginIds } }, select: { id: true } })
-            : Promise.resolve([]),
-        ]);
-
-        const existingDesignIds = new Set(existingDesigns.map((d) => d.id));
-        const existingScreenIds = new Set(existingScreens.map((s) => s.id));
-        const existingPluginIds = new Set(existingPlugins.map((p) => p.id));
-
-        // Build playlist items in a single batch
-        const itemsToCreate = screens
-          .map((screenData, i) => {
-            const sid = screenData.screenId;
-            const key = typeof sid === 'string' && (sid.startsWith('design-') || sid.startsWith('plugin-'))
-              ? sid
-              : String(typeof sid === 'string' ? parseInt(sid, 10) : sid);
-            const mapped = screenMap.get(key);
-            if (!mapped) return null;
-
-            if (mapped.type === 'design') {
-              if (!existingDesignIds.has(mapped.id)) {
-                this.logger.warn(`Screen design not found: ${mapped.id}`);
-                return null;
-              }
-              return {
-                playlistId: id,
-                screenDesignId: mapped.id,
-                order: mapped.order,
-                duration: mapped.duration,
-              };
-            } else if (mapped.type === 'plugin') {
-              if (!existingPluginIds.has(mapped.id)) {
-                this.logger.warn(`Plugin instance not found: ${mapped.id}`);
-                return null;
-              }
-              return {
-                playlistId: id,
-                pluginInstanceId: mapped.id,
-                order: mapped.order,
-                duration: mapped.duration,
-              };
-            } else {
-              if (!existingScreenIds.has(mapped.id)) {
-                this.logger.warn(`Screen not found: ${mapped.id}`);
-                return null;
-              }
-              return {
-                playlistId: id,
-                screenId: mapped.id,
-                order: mapped.order,
-                duration: mapped.duration,
-              };
-            }
-          })
-          .filter((item): item is NonNullable<typeof item> => item !== null);
-
-        if (itemsToCreate.length > 0) {
-          await this.prisma.playlistItem.createMany({ data: itemsToCreate });
-        }
+      if (!playlist) {
+        throw new NotFoundException('Playlist not found');
       }
 
-      // Refetch playlist with updated items and transform to screens array
-      const updatedPlaylistWithItems = await this.prisma.playlist.findUnique({
+      // Prevent deactivating a playlist that has devices assigned
+      if (updatePlaylistDto.isActive === false && playlist._count.devices > 0) {
+        throw new BadRequestException(
+          `Cannot deactivate playlist - it is assigned to ${playlist._count.devices} device(s). Unassign all devices first.`,
+        );
+      }
+
+      // Extract screens for separate handling
+      const { screens, ...playlistData } = updatePlaylistDto;
+
+      // Update playlist basic data
+      const updatedPlaylist = await tx.playlist.update({
         where: { id },
+        data: {
+          name: playlistData.name,
+          description: playlistData.description,
+          isActive: playlistData.isActive,
+          advanceOnTap: playlistData.advanceOnTap,
+        },
         include: {
           items: {
             include: {
               screen: true,
-              screenDesign: true,
-              pluginInstance: { include: { plugin: true } },
             },
             orderBy: {
               order: 'asc',
@@ -508,72 +363,219 @@ export class PlaylistsService {
         },
       });
 
-      if (!updatedPlaylistWithItems) {
-        throw new NotFoundException('Playlist not found after update');
+      // Handle screens update if provided
+      if (screens !== undefined) {
+        // Delete all existing items
+        await tx.playlistItem.deleteMany({
+          where: { playlistId: id },
+        });
+
+        // Add new items using batch approach to avoid N+1 queries
+        if (screens.length > 0) {
+          // Parse and categorize screen IDs
+          const designIds: number[] = [];
+          const regularIds: number[] = [];
+          const pluginIds: number[] = [];
+          const screenMap = new Map<string, { type: 'design' | 'regular' | 'plugin'; id: number; order: number; duration: number }>();
+
+          screens.forEach((screenData, i) => {
+            if (typeof screenData.screenId === 'string' && screenData.screenId.startsWith('design-')) {
+              const designId = parseInt(screenData.screenId.replace('design-', ''), 10);
+              if (!isNaN(designId)) {
+                designIds.push(designId);
+                screenMap.set(screenData.screenId, {
+                  type: 'design',
+                  id: designId,
+                  order: screenData.order ?? i,
+                  duration: screenData.duration ?? 60,
+                });
+              } else {
+                this.logger.warn(`Invalid screen design ID: ${screenData.screenId}`);
+              }
+            } else if (typeof screenData.screenId === 'string' && screenData.screenId.startsWith('plugin-')) {
+              const pluginId = parseInt(screenData.screenId.replace('plugin-', ''), 10);
+              if (!isNaN(pluginId)) {
+                pluginIds.push(pluginId);
+                screenMap.set(screenData.screenId, {
+                  type: 'plugin',
+                  id: pluginId,
+                  order: screenData.order ?? i,
+                  duration: screenData.duration ?? 60,
+                });
+              } else {
+                this.logger.warn(`Invalid plugin instance ID: ${screenData.screenId}`);
+              }
+            } else {
+              const screenId = typeof screenData.screenId === 'string'
+                ? parseInt(screenData.screenId, 10)
+                : screenData.screenId as unknown as number;
+              if (!isNaN(screenId)) {
+                regularIds.push(screenId);
+                screenMap.set(String(screenId), {
+                  type: 'regular',
+                  id: screenId,
+                  order: screenData.order ?? i,
+                  duration: screenData.duration ?? 60,
+                });
+              } else {
+                this.logger.warn(`Invalid screenId: ${screenData.screenId}`);
+              }
+            }
+          });
+
+          // Batch verify existence of all screens/designs/plugins
+          const [existingDesigns, existingScreens, existingPlugins] = await Promise.all([
+            designIds.length > 0
+              ? tx.screenDesign.findMany({ where: { id: { in: designIds } }, select: { id: true } })
+              : Promise.resolve([]),
+            regularIds.length > 0
+              ? tx.screen.findMany({ where: { id: { in: regularIds } }, select: { id: true } })
+              : Promise.resolve([]),
+            pluginIds.length > 0
+              ? tx.pluginInstance.findMany({ where: { id: { in: pluginIds } }, select: { id: true } })
+              : Promise.resolve([]),
+          ]);
+
+          const existingDesignIds = new Set(existingDesigns.map((d) => d.id));
+          const existingScreenIds = new Set(existingScreens.map((s) => s.id));
+          const existingPluginIds = new Set(existingPlugins.map((p) => p.id));
+
+          // Build playlist items in a single batch
+          const itemsToCreate = screens
+            .map((screenData, i) => {
+              const sid = screenData.screenId;
+              const key = typeof sid === 'string' && (sid.startsWith('design-') || sid.startsWith('plugin-'))
+                ? sid
+                : String(typeof sid === 'string' ? parseInt(sid, 10) : sid);
+              const mapped = screenMap.get(key);
+              if (!mapped) return null;
+
+              if (mapped.type === 'design') {
+                if (!existingDesignIds.has(mapped.id)) {
+                  this.logger.warn(`Screen design not found: ${mapped.id}`);
+                  return null;
+                }
+                return {
+                  playlistId: id,
+                  screenDesignId: mapped.id,
+                  order: mapped.order,
+                  duration: mapped.duration,
+                };
+              } else if (mapped.type === 'plugin') {
+                if (!existingPluginIds.has(mapped.id)) {
+                  this.logger.warn(`Plugin instance not found: ${mapped.id}`);
+                  return null;
+                }
+                return {
+                  playlistId: id,
+                  pluginInstanceId: mapped.id,
+                  order: mapped.order,
+                  duration: mapped.duration,
+                };
+              } else {
+                if (!existingScreenIds.has(mapped.id)) {
+                  this.logger.warn(`Screen not found: ${mapped.id}`);
+                  return null;
+                }
+                return {
+                  playlistId: id,
+                  screenId: mapped.id,
+                  order: mapped.order,
+                  duration: mapped.duration,
+                };
+              }
+            })
+            .filter((item): item is NonNullable<typeof item> => item !== null);
+
+          if (itemsToCreate.length > 0) {
+            await tx.playlistItem.createMany({ data: itemsToCreate });
+          }
+        }
+
+        // Refetch playlist with updated items and transform to screens array
+        const updatedPlaylistWithItems = await tx.playlist.findUnique({
+          where: { id },
+          include: {
+            items: {
+              include: {
+                screen: true,
+                screenDesign: true,
+                pluginInstance: { include: { plugin: true } },
+              },
+              orderBy: {
+                order: 'asc',
+              },
+            },
+          },
+        });
+
+        if (!updatedPlaylistWithItems) {
+          throw new NotFoundException('Playlist not found after update');
+        }
+
+        // Transform items to screens array
+        const transformedScreens = updatedPlaylistWithItems.items.map((item: any) => {
+          if (item.pluginInstance) {
+            const previewUrl = `/api/plugins/instances/${item.pluginInstance.id}/render?mode=preview`;
+            return {
+              id: `plugin-${item.pluginInstance.id}`,
+              screenId: `plugin-${item.pluginInstance.id}`,
+              name: item.pluginInstance.name || item.pluginInstance.plugin?.name || 'Plugin',
+              description: item.pluginInstance.plugin?.description,
+              thumbnailUrl: previewUrl,
+              imageUrl: previewUrl,
+              duration: item.duration,
+              order: item.order,
+              isDesigned: false,
+              isPlugin: true,
+              width: Number(item.pluginInstance.settings?.screen_width) || 800,
+              height: Number(item.pluginInstance.settings?.screen_height) || 480,
+            };
+          } else if (item.screenDesign) {
+            const previewUrl = `/api/device-images/design/${item.screenDesign.id}?preview=true`;
+            return {
+              id: `design-${item.screenDesign.id}`,
+              screenId: `design-${item.screenDesign.id}`,
+              name: item.screenDesign.name,
+              description: item.screenDesign.description,
+              thumbnailUrl: previewUrl,
+              imageUrl: previewUrl,
+              duration: item.duration,
+              order: item.order,
+              isDesigned: true,
+            };
+          } else if (item.screen) {
+            return {
+              id: item.screen.id,
+              screenId: String(item.screen.id),
+              name: item.screen.name,
+              description: item.screen.description,
+              thumbnailUrl: item.screen.thumbnailUrl,
+              imageUrl: item.screen.imageUrl,
+              duration: item.duration,
+              order: item.order,
+              isDesigned: false,
+            };
+          }
+          return null;
+        }).filter(Boolean);
+
+        // Notify devices that use this playlist to refresh
+        await this.eventsService.notifyPlaylistUpdate(id, tx);
+
+        return {
+          ...updatedPlaylistWithItems,
+          screens: transformedScreens,
+        };
       }
 
-      // Transform items to screens array
-      const transformedScreens = updatedPlaylistWithItems.items.map((item: any) => {
-        if (item.pluginInstance) {
-          const previewUrl = `/api/plugins/instances/${item.pluginInstance.id}/render?mode=preview`;
-          return {
-            id: `plugin-${item.pluginInstance.id}`,
-            screenId: `plugin-${item.pluginInstance.id}`,
-            name: item.pluginInstance.name || item.pluginInstance.plugin?.name || 'Plugin',
-            description: item.pluginInstance.plugin?.description,
-            thumbnailUrl: previewUrl,
-            imageUrl: previewUrl,
-            duration: item.duration,
-            order: item.order,
-            isDesigned: false,
-            isPlugin: true,
-            width: Number(item.pluginInstance.settings?.screen_width) || 800,
-            height: Number(item.pluginInstance.settings?.screen_height) || 480,
-          };
-        } else if (item.screenDesign) {
-          const previewUrl = `/api/device-images/design/${item.screenDesign.id}?preview=true`;
-          return {
-            id: `design-${item.screenDesign.id}`,
-            screenId: `design-${item.screenDesign.id}`,
-            name: item.screenDesign.name,
-            description: item.screenDesign.description,
-            thumbnailUrl: previewUrl,
-            imageUrl: previewUrl,
-            duration: item.duration,
-            order: item.order,
-            isDesigned: true,
-          };
-        } else if (item.screen) {
-          return {
-            id: item.screen.id,
-            screenId: String(item.screen.id),
-            name: item.screen.name,
-            description: item.screen.description,
-            thumbnailUrl: item.screen.thumbnailUrl,
-            imageUrl: item.screen.imageUrl,
-            duration: item.duration,
-            order: item.order,
-            isDesigned: false,
-          };
-        }
-        return null;
-      }).filter(Boolean);
+      this.logger.log(`Playlist updated: ${updatedPlaylist.name}`);
 
       // Notify devices that use this playlist to refresh
-      await this.eventsService.notifyPlaylistUpdate(id);
+      await this.eventsService.notifyPlaylistUpdate(id, tx);
 
-      return {
-        ...updatedPlaylistWithItems,
-        screens: transformedScreens,
-      };
-    }
-
-    this.logger.log(`Playlist updated: ${updatedPlaylist.name}`);
-
-    // Notify devices that use this playlist to refresh
-    await this.eventsService.notifyPlaylistUpdate(id);
-
-    return updatedPlaylist;
+      return updatedPlaylist;
+    });
   }
 
   /**
@@ -581,128 +583,132 @@ export class PlaylistsService {
    * @param force - If true, unassign all devices first and then delete
    */
   async remove(id: number, force = false) {
-    const playlist = await this.prisma.playlist.findUnique({
-      where: { id },
-      include: {
-        devices: {
-          select: { id: true },
-        },
-        _count: {
-          select: {
-            devices: true,
+    return this.prisma.$transaction(async (tx) => {
+      const playlist = await tx.playlist.findUnique({
+        where: { id },
+        include: {
+          devices: {
+            select: { id: true },
+          },
+          _count: {
+            select: {
+              devices: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!playlist) {
-      throw new NotFoundException('Playlist not found');
-    }
-
-    // Check if playlist is in use
-    if (playlist._count.devices > 0) {
-      if (force) {
-        // Unassign all devices first
-        const deviceIds = playlist.devices.map((d) => d.id);
-        await this.prisma.device.updateMany({
-          where: { playlistId: id },
-          data: {
-            playlistId: null,
-            refreshPending: true, // Trigger refresh to show default screen
-          },
-        });
-        this.logger.log(
-          `Force delete: Unassigned ${deviceIds.length} device(s) from playlist ${playlist.name}`,
-        );
-
-        // Notify devices to refresh
-        await this.eventsService.notifyDevicesRefresh(deviceIds);
-      } else {
-        throw new BadRequestException(
-          `Cannot delete playlist - it is assigned to ${playlist._count.devices} device(s). Use force=true to unassign devices and delete.`,
-        );
+      if (!playlist) {
+        throw new NotFoundException('Playlist not found');
       }
-    }
 
-    await this.prisma.playlist.delete({
-      where: { id },
+      // Check if playlist is in use
+      if (playlist._count.devices > 0) {
+        if (force) {
+          // Unassign all devices first
+          const deviceIds = playlist.devices.map((d) => d.id);
+          await tx.device.updateMany({
+            where: { playlistId: id },
+            data: {
+              playlistId: null,
+              refreshPending: true, // Trigger refresh to show default screen
+            },
+          });
+          this.logger.log(
+            `Force delete: Unassigned ${deviceIds.length} device(s) from playlist ${playlist.name}`,
+          );
+
+          // Notify devices to refresh
+          await this.eventsService.notifyDevicesRefresh(deviceIds, tx);
+        } else {
+          throw new BadRequestException(
+            `Cannot delete playlist - it is assigned to ${playlist._count.devices} device(s). Use force=true to unassign devices and delete.`,
+          );
+        }
+      }
+
+      await tx.playlist.delete({
+        where: { id },
+      });
+
+      this.logger.log(`Playlist deleted: ${playlist.name}`);
+
+      return {
+        message: 'Playlist deleted successfully',
+        unassignedDevices: force ? playlist._count.devices : 0,
+      };
     });
-
-    this.logger.log(`Playlist deleted: ${playlist.name}`);
-
-    return {
-      message: 'Playlist deleted successfully',
-      unassignedDevices: force ? playlist._count.devices : 0,
-    };
   }
 
   /**
    * Add item to playlist
    */
   async addItem(playlistId: number, addItemDto: AddPlaylistItemDto) {
-    const playlist = await this.prisma.playlist.findUnique({
-      where: { id: playlistId },
-      include: {
-        items: true,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const playlist = await tx.playlist.findUnique({
+        where: { id: playlistId },
+        include: {
+          items: true,
+        },
+      });
 
-    if (!playlist) {
-      throw new NotFoundException('Playlist not found');
-    }
+      if (!playlist) {
+        throw new NotFoundException('Playlist not found');
+      }
 
-    // Check if screen exists
-    const screen = await this.prisma.screen.findUnique({
-      where: { id: addItemDto.screenId },
-    });
+      // Check if screen exists
+      const screen = await tx.screen.findUnique({
+        where: { id: addItemDto.screenId },
+      });
 
-    if (!screen) {
-      throw new NotFoundException('Screen not found');
-    }
+      if (!screen) {
+        throw new NotFoundException('Screen not found');
+      }
 
-    // Check if item already exists in playlist
-    const existingItem = await this.prisma.playlistItem.findFirst({
-      where: {
-        playlistId,
-        screenId: addItemDto.screenId,
-      },
-    });
+      // Check if item already exists in playlist
+      const existingItem = await tx.playlistItem.findFirst({
+        where: {
+          playlistId,
+          screenId: addItemDto.screenId,
+        },
+      });
 
-    if (existingItem) {
-      throw new BadRequestException('Screen already in playlist');
-    }
+      if (existingItem) {
+        throw new BadRequestException('Screen already in playlist');
+      }
 
-    // Determine order (append to end if not specified)
-    const order =
-      addItemDto.order !== undefined
-        ? addItemDto.order
-        : playlist.items.length;
+      // Determine order (append to end if not specified)
+      const order =
+        addItemDto.order !== undefined
+          ? addItemDto.order
+          : playlist.items.length;
 
-    // Create playlist item
-    const item = await this.prisma.playlistItem.create({
-      data: {
-        playlistId,
-        screenId: addItemDto.screenId,
-        order,
-        duration: addItemDto.duration || 60,
-      },
-      include: {
-        screen: {
-          include: {
-            model: true,
+      // Create playlist item
+      const item = await tx.playlistItem.create({
+        data: {
+          playlistId,
+          screenId: addItemDto.screenId,
+          order,
+          duration: addItemDto.duration || 60,
+        },
+        include: {
+          screen: {
+            include: {
+              model: true,
+            },
           },
         },
-      },
+      });
+
+      this.logger.log(
+        `Screen ${screen.name} added to playlist ${playlist.name}`,
+      );
+
+      // Notify devices that use this playlist to refresh
+      await this.eventsService.notifyPlaylistUpdate(playlistId, tx);
+
+      return item;
     });
-
-    this.logger.log(
-      `Screen ${screen.name} added to playlist ${playlist.name}`,
-    );
-
-    // Notify devices that use this playlist to refresh
-    await this.eventsService.notifyPlaylistUpdate(playlistId);
-
-    return item;
   }
 
   /**
@@ -713,79 +719,83 @@ export class PlaylistsService {
     itemId: number,
     updateItemDto: UpdatePlaylistItemDto,
   ) {
-    const playlist = await this.prisma.playlist.findUnique({
-      where: { id: playlistId },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const playlist = await tx.playlist.findUnique({
+        where: { id: playlistId },
+      });
 
-    if (!playlist) {
-      throw new NotFoundException('Playlist not found');
-    }
+      if (!playlist) {
+        throw new NotFoundException('Playlist not found');
+      }
 
-    // Check if item exists
-    const item = await this.prisma.playlistItem.findUnique({
-      where: { id: itemId },
-    });
+      // Check if item exists
+      const item = await tx.playlistItem.findUnique({
+        where: { id: itemId },
+      });
 
-    if (!item || item.playlistId !== playlistId) {
-      throw new NotFoundException('Playlist item not found');
-    }
+      if (!item || item.playlistId !== playlistId) {
+        throw new NotFoundException('Playlist item not found');
+      }
 
-    // Update item
-    const updatedItem = await this.prisma.playlistItem.update({
-      where: { id: itemId },
-      data: {
-        order: updateItemDto.order,
-        duration: updateItemDto.duration,
-      },
-      include: {
-        screen: {
-          include: {
-            model: true,
+      // Update item
+      const updatedItem = await tx.playlistItem.update({
+        where: { id: itemId },
+        data: {
+          order: updateItemDto.order,
+          duration: updateItemDto.duration,
+        },
+        include: {
+          screen: {
+            include: {
+              model: true,
+            },
           },
         },
-      },
+      });
+
+      this.logger.log(`Playlist item ${itemId} updated`);
+
+      // Notify devices that use this playlist to refresh
+      await this.eventsService.notifyPlaylistUpdate(playlistId, tx);
+
+      return updatedItem;
     });
-
-    this.logger.log(`Playlist item ${itemId} updated`);
-
-    // Notify devices that use this playlist to refresh
-    await this.eventsService.notifyPlaylistUpdate(playlistId);
-
-    return updatedItem;
   }
 
   /**
    * Remove item from playlist
    */
   async removeItem(playlistId: number, itemId: number) {
-    const playlist = await this.prisma.playlist.findUnique({
-      where: { id: playlistId },
+    return this.prisma.$transaction(async (tx) => {
+      const playlist = await tx.playlist.findUnique({
+        where: { id: playlistId },
+      });
+
+      if (!playlist) {
+        throw new NotFoundException('Playlist not found');
+      }
+
+      // Check if item exists
+      const item = await tx.playlistItem.findUnique({
+        where: { id: itemId },
+      });
+
+      if (!item || item.playlistId !== playlistId) {
+        throw new NotFoundException('Playlist item not found');
+      }
+
+      // Delete item
+      await tx.playlistItem.delete({
+        where: { id: itemId },
+      });
+
+      this.logger.log(`Playlist item ${itemId} removed from playlist ${playlistId}`);
+
+      // Notify devices that use this playlist to refresh
+      await this.eventsService.notifyPlaylistUpdate(playlistId, tx);
+
+      return { message: 'Playlist item removed successfully' };
     });
-
-    if (!playlist) {
-      throw new NotFoundException('Playlist not found');
-    }
-
-    // Check if item exists
-    const item = await this.prisma.playlistItem.findUnique({
-      where: { id: itemId },
-    });
-
-    if (!item || item.playlistId !== playlistId) {
-      throw new NotFoundException('Playlist item not found');
-    }
-
-    // Delete item
-    await this.prisma.playlistItem.delete({
-      where: { id: itemId },
-    });
-
-    this.logger.log(`Playlist item ${itemId} removed from playlist ${playlistId}`);
-
-    // Notify devices that use this playlist to refresh
-    await this.eventsService.notifyPlaylistUpdate(playlistId);
-
-    return { message: 'Playlist item removed successfully' };
   }
 
   /**
@@ -795,29 +805,31 @@ export class PlaylistsService {
     playlistId: number,
     itemOrders: { id: number; order: number }[],
   ) {
-    const playlist = await this.prisma.playlist.findUnique({
-      where: { id: playlistId },
+    return this.prisma.$transaction(async (tx) => {
+      const playlist = await tx.playlist.findUnique({
+        where: { id: playlistId },
+      });
+
+      if (!playlist) {
+        throw new NotFoundException('Playlist not found');
+      }
+
+      // Update orders in transaction
+      await Promise.all(
+        itemOrders.map(({ id, order }) =>
+          tx.playlistItem.update({
+            where: { id },
+            data: { order },
+          }),
+        ),
+      );
+
+      this.logger.log(`Playlist ${playlistId} items reordered`);
+
+      // Notify devices that use this playlist to refresh
+      await this.eventsService.notifyPlaylistUpdate(playlistId, tx);
+
+      return { message: 'Playlist items reordered successfully' };
     });
-
-    if (!playlist) {
-      throw new NotFoundException('Playlist not found');
-    }
-
-    // Update orders in transaction
-    await this.prisma.$transaction(
-      itemOrders.map(({ id, order }) =>
-        this.prisma.playlistItem.update({
-          where: { id },
-          data: { order },
-        }),
-      ),
-    );
-
-    this.logger.log(`Playlist ${playlistId} items reordered`);
-
-    // Notify devices that use this playlist to refresh
-    await this.eventsService.notifyPlaylistUpdate(playlistId);
-
-    return { message: 'Playlist items reordered successfully' };
   }
 }

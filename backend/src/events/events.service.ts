@@ -1,5 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Subject, Observable, filter } from 'rxjs';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type DeviceEventType =
@@ -25,7 +26,6 @@ export interface DeviceEvent {
 
 @Injectable()
 export class EventsService implements OnModuleDestroy {
-  private readonly logger = new Logger(EventsService.name);
   private events$ = new Subject<DeviceEvent>();
 
   constructor(private prisma: PrismaService) {}
@@ -41,7 +41,6 @@ export class EventsService implements OnModuleDestroy {
    * Emit an event to all connected clients
    */
   emit(event: DeviceEvent): void {
-    this.logger.debug(`Emitting event: ${event.type}`, event.payload);
     this.events$.next(event);
   }
 
@@ -72,9 +71,11 @@ export class EventsService implements OnModuleDestroy {
    * Notify devices when a screen is updated
    * Finds all devices that have this screen in their playlist
    */
-  async notifyScreenUpdate(screenId: number): Promise<void> {
+  async notifyScreenUpdate(screenId: number, tx?: Prisma.TransactionClient): Promise<void> {
+    this.assertIds([screenId]);
+    if (!tx) return this.prisma.$transaction(t => this.notifyScreenUpdate(screenId, t));
     // Find all playlists containing this screen
-    const playlistItems = await this.prisma.playlistItem.findMany({
+    const playlistItems = await tx.playlistItem.findMany({
       where: { screenId },
       include: {
         playlist: {
@@ -99,17 +100,14 @@ export class EventsService implements OnModuleDestroy {
 
     if (deviceIdsArray.length > 0) {
       // Set refreshPending flag on all affected devices
-      await this.prisma.device.updateMany({
+      await tx.device.updateMany({
         where: { id: { in: deviceIdsArray } },
         data: { refreshPending: true },
       });
 
-      this.logger.log(
-        `Screen ${screenId} updated - notifying ${deviceIdsArray.length} devices`,
-      );
     }
 
-    this.emit({
+    await this.persist(tx, {
       type: 'screen:updated',
       payload: {
         screenId,
@@ -122,9 +120,11 @@ export class EventsService implements OnModuleDestroy {
   /**
    * Notify devices when a playlist is updated
    */
-  async notifyPlaylistUpdate(playlistId: number): Promise<void> {
+  async notifyPlaylistUpdate(playlistId: number, tx?: Prisma.TransactionClient): Promise<void> {
+    this.assertIds([playlistId]);
+    if (!tx) return this.prisma.$transaction(t => this.notifyPlaylistUpdate(playlistId, t));
     // Find all devices using this playlist
-    const devices = await this.prisma.device.findMany({
+    const devices = await tx.device.findMany({
       where: { playlistId },
       select: { id: true },
     });
@@ -133,17 +133,14 @@ export class EventsService implements OnModuleDestroy {
 
     if (deviceIds.length > 0) {
       // Set refreshPending flag on all affected devices
-      await this.prisma.device.updateMany({
+      await tx.device.updateMany({
         where: { id: { in: deviceIds } },
         data: { refreshPending: true },
       });
 
-      this.logger.log(
-        `Playlist ${playlistId} updated - notifying ${deviceIds.length} devices`,
-      );
     }
 
-    this.emit({
+    await this.persist(tx, {
       type: 'playlist:updated',
       payload: {
         playlistId,
@@ -157,9 +154,11 @@ export class EventsService implements OnModuleDestroy {
    * Notify devices when a screen design is updated
    * @returns The number of devices that were notified
    */
-  async notifyScreenDesignUpdate(screenDesignId: number): Promise<number> {
+  async notifyScreenDesignUpdate(screenDesignId: number, tx?: Prisma.TransactionClient): Promise<number> {
+    this.assertIds([screenDesignId]);
+    if (!tx) return this.prisma.$transaction(t => this.notifyScreenDesignUpdate(screenDesignId, t));
     // Find all playlists containing this screen design
-    const playlistItems = await this.prisma.playlistItem.findMany({
+    const playlistItems = await tx.playlistItem.findMany({
       where: { screenDesignId },
       include: {
         playlist: {
@@ -181,7 +180,7 @@ export class EventsService implements OnModuleDestroy {
     }
 
     // Also find devices with direct screen design assignments
-    const directAssignments = await this.prisma.deviceScreenAssignment.findMany({
+    const directAssignments = await tx.deviceScreenAssignment.findMany({
       where: { screenDesignId },
       select: { deviceId: true },
     });
@@ -194,27 +193,15 @@ export class EventsService implements OnModuleDestroy {
 
     if (deviceIdsArray.length > 0) {
       // Set refreshPending flag on all affected devices
-      await this.prisma.device.updateMany({
+      await tx.device.updateMany({
         where: { id: { in: deviceIdsArray } },
         data: { refreshPending: true },
       });
 
-      this.logger.log(
-        `Screen design ${screenDesignId} updated - notifying ${deviceIdsArray.length} devices`,
-      );
 
-      // Also emit device:refresh event (same as individual device refresh button)
-      // This ensures the frontend dashboard updates and the behavior is consistent
-      this.emit({
-        type: 'device:refresh',
-        payload: {
-          deviceIds: deviceIdsArray,
-          timestamp: Date.now(),
-        },
-      });
     }
 
-    this.emit({
+    await this.persist(tx, {
       type: 'screen_design:updated',
       payload: {
         screenDesignId,
@@ -229,23 +216,44 @@ export class EventsService implements OnModuleDestroy {
   /**
    * Notify specific devices to refresh
    */
-  async notifyDevicesRefresh(deviceIds: number[]): Promise<void> {
+  async notifyDevicesRefresh(deviceIds: number[], tx?: Prisma.TransactionClient): Promise<void> {
+    this.assertIds(deviceIds);
+    if (!deviceIds.length) return;
+    if (!tx) return this.prisma.$transaction(t => this.notifyDevicesRefresh(deviceIds, t));
     if (deviceIds.length > 0) {
       // Set refreshPending flag on specified devices
-      await this.prisma.device.updateMany({
+      await tx.device.updateMany({
         where: { id: { in: deviceIds } },
         data: { refreshPending: true },
       });
 
-      this.logger.log(`Notifying ${deviceIds.length} devices to refresh`);
     }
 
-    this.emit({
-      type: 'device:refresh',
-      payload: {
-        deviceIds,
-        timestamp: Date.now(),
-      },
+    // A batched request still has one revision counter per actual device.
+    for (const deviceId of new Set(deviceIds)) {
+      await this.persist(tx, {
+        type: 'device:refresh',
+        payload: { deviceIds: [deviceId], timestamp: Date.now() },
+      });
+    }
+  }
+
+  private async persist(tx: Prisma.TransactionClient, event: DeviceEvent) {
+    const aggregateType = event.payload.screenId ? 'Screen' : event.payload.playlistId ? 'Playlist' : event.payload.screenDesignId ? 'ScreenDesign' : 'Device';
+    const aggregateId = String(event.payload.screenId ?? event.payload.playlistId ?? event.payload.screenDesignId ?? [...new Set(event.payload.deviceIds)].sort((a, b) => a - b).join(','));
+    const aggregate = await tx.outboxAggregate.upsert({
+      where: { aggregateType_aggregateId: { aggregateType, aggregateId } },
+      create: { aggregateType, aggregateId, revision: 1 }, update: { revision: { increment: 1 } },
     });
+    const occurredAt = new Date(event.payload.timestamp);
+    await tx.outboxEvent.create({ data: { eventType: event.type, aggregateType, aggregateId,
+      aggregateRevision: String(aggregate.revision), payloadVersion: 1,
+      payload: event.payload as Prisma.InputJsonValue, occurredAt, availableAt: occurredAt } });
+  }
+
+  private assertIds(ids: number[]) {
+    if (!Array.isArray(ids) || ids.length > 1024 || !ids.every(id => Number.isSafeInteger(id) && id > 0)) {
+      throw new BadRequestException('Invalid notification identifiers');
+    }
   }
 }

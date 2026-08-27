@@ -7,6 +7,7 @@ import type {
   ProtocolVersion,
 } from '@inker/contracts';
 import type { ResolvedDeviceConfiguration } from './device-configuration';
+import type { DeliveryContext } from '../events/outbox.types';
 
 export const TRANSPORT_ADAPTER_METADATA = Symbol('inker.transport-adapter');
 
@@ -39,7 +40,10 @@ export interface TransportAdapter {
   };
   prepareRegistration(input: { macAddress?: string }): TransportRegistration;
   rotateBootstrap?(device: { id: number; externalId: string | null }): TransportRegistration;
-  dispatchRefresh(deviceId: number): Promise<void>;
+  /** With context: reuse the revision keyed by deliveryId on retry and honor signal. */
+  dispatchRefresh(deviceId: number, context?: DeliveryContext): Promise<void>;
+  /** Connected transports must drop sessions when their durable consumer lease expires. */
+  deliveryLeaseExpired?(): void;
 }
 
 export interface DeliveryPolicy {

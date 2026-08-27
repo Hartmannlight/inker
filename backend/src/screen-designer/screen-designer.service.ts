@@ -177,6 +177,8 @@ export class ScreenDesignerService {
         this.logger.log(`Screen design ${id} widgets updated: ${widgets.length} widgets`);
       }
 
+      await this.eventsService.notifyScreenDesignUpdate(id, tx);
+
       // Fetch and return the updated design with all relations
       return tx.screenDesign.findUnique({
         where: { id },
@@ -197,9 +199,6 @@ export class ScreenDesignerService {
 
     // Invalidate any existing capture file (it's now stale)
     this.invalidateCapture(id);
-
-    // Notify devices that use this screen design to refresh
-    await this.eventsService.notifyScreenDesignUpdate(id);
 
     // Transform widgets to restore virtual template IDs for custom widgets
     return updatedDesign ? this.transformScreenDesignForResponse(updatedDesign) : null;
@@ -438,31 +437,33 @@ export class ScreenDesignerService {
       config.design ||= 'progressBar';
     }
 
-    const widget = await this.prisma.screenWidget.create({
-      data: {
-        screenDesignId,
-        templateId: dto.templateId,
-        x: dto.x ?? 0,
-        y: dto.y ?? 0,
-        width,
-        height,
-        rotation: dto.rotation ?? 0,
-        config,
-        zIndex: dto.zIndex ?? 0,
-      },
-      include: {
-        template: true,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const widget = await tx.screenWidget.create({
+        data: {
+          screenDesignId,
+          templateId: dto.templateId,
+          x: dto.x ?? 0,
+          y: dto.y ?? 0,
+          width,
+          height,
+          rotation: dto.rotation ?? 0,
+          config,
+          zIndex: dto.zIndex ?? 0,
+        },
+        include: {
+          template: true,
+        },
+      });
+
+      this.logger.log(
+        `Widget added to screen design ${screenDesignId}: ${template.name}`,
+      );
+
+      // Notify devices that use this screen design to refresh
+      await this.eventsService.notifyScreenDesignUpdate(screenDesignId, tx);
+
+      return widget;
     });
-
-    this.logger.log(
-      `Widget added to screen design ${screenDesignId}: ${template.name}`,
-    );
-
-    // Notify devices that use this screen design to refresh
-    await this.eventsService.notifyScreenDesignUpdate(screenDesignId);
-
-    return widget;
   }
 
   /**
@@ -505,28 +506,30 @@ export class ScreenDesignerService {
       ? { ...(widget.config as object), ...dto.config }
       : undefined;
 
-    const updatedWidget = await this.prisma.screenWidget.update({
-      where: { id: widgetId },
-      data: {
-        x: dto.x,
-        y: dto.y,
-        width: dto.width,
-        height: dto.height,
-        rotation: dto.rotation,
-        config,
-        zIndex: dto.zIndex,
-      },
-      include: {
-        template: true,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const updatedWidget = await tx.screenWidget.update({
+        where: { id: widgetId },
+        data: {
+          x: dto.x,
+          y: dto.y,
+          width: dto.width,
+          height: dto.height,
+          rotation: dto.rotation,
+          config,
+          zIndex: dto.zIndex,
+        },
+        include: {
+          template: true,
+        },
+      });
+
+      this.logger.log(`Widget ${widgetId} updated`);
+
+      // Notify devices that use this screen design to refresh
+      await this.eventsService.notifyScreenDesignUpdate(screenDesignId, tx);
+
+      return updatedWidget;
     });
-
-    this.logger.log(`Widget ${widgetId} updated`);
-
-    // Notify devices that use this screen design to refresh
-    await this.eventsService.notifyScreenDesignUpdate(screenDesignId);
-
-    return updatedWidget;
   }
 
   /**
@@ -549,16 +552,18 @@ export class ScreenDesignerService {
       throw new BadRequestException('Widget does not belong to this screen design');
     }
 
-    await this.prisma.screenWidget.delete({
-      where: { id: widgetId },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.screenWidget.delete({
+        where: { id: widgetId },
+      });
+
+      this.logger.log(`Widget ${widgetId} removed from screen design ${screenDesignId}`);
+
+      // Notify devices that use this screen design to refresh
+      await this.eventsService.notifyScreenDesignUpdate(screenDesignId, tx);
+
+      return { message: 'Widget removed successfully' };
     });
-
-    this.logger.log(`Widget ${widgetId} removed from screen design ${screenDesignId}`);
-
-    // Notify devices that use this screen design to refresh
-    await this.eventsService.notifyScreenDesignUpdate(screenDesignId);
-
-    return { message: 'Widget removed successfully' };
   }
 
   /**

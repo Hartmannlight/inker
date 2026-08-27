@@ -395,8 +395,8 @@ describe('DevicesService', () => {
 
       const result = await service.triggerRefresh(1);
 
-      expect(mockPrisma.device.update.calls).toHaveLength(1);
-      expect(mockPrisma.device.update.calls[0][0].data.refreshPending).toBe(true);
+      // EventsService owns the flag and outbox in a single transaction.
+      expect(mockPrisma.device.update.calls).toHaveLength(0);
       expect(mockEventsService.notifyDevicesRefresh.calls).toHaveLength(1);
       expect(mockEventsService.notifyDevicesRefresh.calls[0][0]).toEqual([1]);
       expect(result.message).toBe('Device refresh triggered');

@@ -119,7 +119,7 @@ export class DevicesService {
     const [devices, total] = await Promise.all([
       this.prisma.device.findMany({
         include: {
-  
+
           playlist: {
             select: {
               id: true,
@@ -257,56 +257,58 @@ export class DevicesService {
       );
     }
 
-    const updatedDevice = await this.prisma.device.update({
-      where: { id },
-      data: {
-        name: updateDeviceDto.name,
-        macAddress: updateDeviceDto.macAddress,
-        firmwareVersion: updateDeviceDto.firmwareVersion,
-        playlistId: updateDeviceDto.playlistId,
-        modelId: updateDeviceDto.modelId,
-        isActive: updateDeviceDto.isActive,
-        profileId,
-        deliveryPolicyId,
-        capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
-        capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
-        transport: adapter.legacy.transport,
-        width: resolved.capabilities.display.width,
-        height: resolved.capabilities.display.height,
-        // Quiet hours / sleep schedule (undefined = no change, null = clear/disable)
-        sleepStartAt: updateDeviceDto.sleepStartAt,
-        sleepStopAt: updateDeviceDto.sleepStopAt,
-        showSleepScreen: updateDeviceDto.showSleepScreen,
-        // Set refreshPending if playlist or model/format changed to trigger immediate device refresh
-        ...((playlistChanging || modelChanging) && { refreshPending: true }),
-      },
-      include: {
-        profile: true,
-        deliveryPolicy: true,
-        playlist: {
-          include: {
-            items: {
-              include: {
-                screen: true,
-              },
-              orderBy: {
-                order: 'asc',
+    return this.prisma.$transaction(async (tx) => {
+      const updatedDevice = await tx.device.update({
+        where: { id },
+        data: {
+          name: updateDeviceDto.name,
+          macAddress: updateDeviceDto.macAddress,
+          firmwareVersion: updateDeviceDto.firmwareVersion,
+          playlistId: updateDeviceDto.playlistId,
+          modelId: updateDeviceDto.modelId,
+          isActive: updateDeviceDto.isActive,
+          profileId,
+          deliveryPolicyId,
+          capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
+          capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
+          transport: adapter.legacy.transport,
+          width: resolved.capabilities.display.width,
+          height: resolved.capabilities.display.height,
+          // Quiet hours / sleep schedule (undefined = no change, null = clear/disable)
+          sleepStartAt: updateDeviceDto.sleepStartAt,
+          sleepStopAt: updateDeviceDto.sleepStopAt,
+          showSleepScreen: updateDeviceDto.showSleepScreen,
+          // Set refreshPending if playlist or model/format changed to trigger immediate device refresh
+          ...((playlistChanging || modelChanging) && { refreshPending: true }),
+        },
+        include: {
+          profile: true,
+          deliveryPolicy: true,
+          playlist: {
+            include: {
+              items: {
+                include: {
+                  screen: true,
+                },
+                orderBy: {
+                  order: 'asc',
+                },
               },
             },
           },
         },
-      },
+      });
+
+      this.logger.log(`Device updated: ${updatedDevice.name}`);
+
+      // Notify device to refresh if playlist changed (including unassigned)
+      if (playlistChanging) {
+        await this.eventsService.notifyDevicesRefresh([id], tx);
+        this.logger.log(`Device ${id} playlist changed - refresh notification sent`);
+      }
+
+      return serializeDevice(updatedDevice);
     });
-
-    this.logger.log(`Device updated: ${updatedDevice.name}`);
-
-    // Notify device to refresh if playlist changed (including unassigned)
-    if (playlistChanging) {
-      await this.eventsService.notifyDevicesRefresh([id]);
-      this.logger.log(`Device ${id} playlist changed - refresh notification sent`);
-    }
-
-    return serializeDevice(updatedDevice);
   }
 
   /**
@@ -540,13 +542,7 @@ export class DevicesService {
       throw new NotFoundException('Device not found');
     }
 
-    // Set refreshPending flag
-    await this.prisma.device.update({
-      where: { id },
-      data: { refreshPending: true },
-    });
-
-    // Emit SSE event for connected clients
+    // Persist the refresh flag and outbox intent atomically
     await this.eventsService.notifyDevicesRefresh([id]);
 
     this.logger.log(`Refresh triggered for device: ${device.name}`);
@@ -559,60 +555,62 @@ export class DevicesService {
    * Device will display the default "Hello World" welcome screen
    */
   async unassignPlaylist(id: number) {
-    const device = await this.prisma.device.findUnique({
-      where: { id },
-      include: {
-        playlist: {
-          select: {
-            id: true,
-            name: true,
+    return this.prisma.$transaction(async (tx) => {
+      const device = await tx.device.findUnique({
+        where: { id },
+        include: {
+          playlist: {
+            select: {
+              id: true,
+              name: true,
+            },
           },
         },
-      },
+      });
+
+      if (!device) {
+        throw new NotFoundException('Device not found');
+      }
+
+      // Check if device has a playlist assigned
+      if (!device.playlistId) {
+        throw new BadRequestException('Device has no playlist assigned');
+      }
+
+      const previousPlaylist = device.playlist;
+
+      // Unassign playlist and trigger refresh
+      const updatedDevice = await tx.device.update({
+        where: { id },
+        data: {
+          playlistId: null,
+          refreshPending: true, // Trigger refresh to show default screen
+        },
+        include: {
+
+        },
+      });
+
+      // Notify device to refresh (will now show the default welcome screen)
+      await this.eventsService.notifyDevicesRefresh([id], tx);
+
+      this.logger.log(
+        `Playlist "${previousPlaylist?.name}" unassigned from device "${device.name}" - device will show default welcome screen`,
+      );
+
+      return {
+        message: 'Playlist unassigned successfully',
+        device: serializeDevice(updatedDevice),
+        previousPlaylist: previousPlaylist
+          ? { id: previousPlaylist.id, name: previousPlaylist.name }
+          : null,
+        displayContent: {
+          type: 'welcome',
+          title: 'Hello World',
+          subtitle: 'This is inker!',
+          message: 'Assign a playlist to this device to display your content',
+        },
+      };
     });
-
-    if (!device) {
-      throw new NotFoundException('Device not found');
-    }
-
-    // Check if device has a playlist assigned
-    if (!device.playlistId) {
-      throw new BadRequestException('Device has no playlist assigned');
-    }
-
-    const previousPlaylist = device.playlist;
-
-    // Unassign playlist and trigger refresh
-    const updatedDevice = await this.prisma.device.update({
-      where: { id },
-      data: {
-        playlistId: null,
-        refreshPending: true, // Trigger refresh to show default screen
-      },
-      include: {
-
-      },
-    });
-
-    // Notify device to refresh (will now show the default welcome screen)
-    await this.eventsService.notifyDevicesRefresh([id]);
-
-    this.logger.log(
-      `Playlist "${previousPlaylist?.name}" unassigned from device "${device.name}" - device will show default welcome screen`,
-    );
-
-    return {
-      message: 'Playlist unassigned successfully',
-      device: serializeDevice(updatedDevice),
-      previousPlaylist: previousPlaylist
-        ? { id: previousPlaylist.id, name: previousPlaylist.name }
-        : null,
-      displayContent: {
-        type: 'welcome',
-        title: 'Hello World',
-        subtitle: 'This is inker!',
-        message: 'Assign a playlist to this device to display your content',
-      },
-    };
   }
 }

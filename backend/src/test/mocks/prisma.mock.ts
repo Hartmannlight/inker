@@ -17,7 +17,7 @@ export function createMockPrisma() {
     count: createMock(),
   });
 
-  return {
+  const prisma = {
     device: createModelMock(),
     screen: createModelMock(),
     screenDesign: createModelMock(),
@@ -43,14 +43,21 @@ export function createMockPrisma() {
     publicationRevision: createModelMock(),
     devicePublicationState: createModelMock(),
     outboxEvent: createModelMock(),
+    outboxAggregate: createModelMock(),
+    outboxEffect: createModelMock(),
+    outboxDelivery: createModelMock(),
+    outboxConsumer: createModelMock(),
+    outboxTarget: createModelMock(),
+    deviceScreenAssignment: createModelMock(),
     blockedDevice: createModelMock(),
     widgetTemplate: createModelMock(),
     $transaction: createMock().mockImplementation(async (fn: any) => {
-      if (typeof fn === 'function') return fn(createMockPrisma());
+      if (typeof fn === 'function') return fn(prisma);
       return Promise.all(fn);
     }),
     $queryRaw: createMock(),
   };
+  return prisma;
 }
 
 export type MockPrisma = ReturnType<typeof createMockPrisma>;

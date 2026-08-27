@@ -53,6 +53,7 @@
     "class-validator": "^0.14.0",
     "compression": "^1.7.4",
     "helmet": "^7.1.0",
+    "ioredis": "5.11.1",
     "joi": "^17.11.0",
     "liquidjs": "^10.25.1",
     "nest-winston": "^1.9.4",

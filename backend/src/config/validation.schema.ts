@@ -8,6 +8,8 @@ export const validationSchema = Joi.object({
 
   // Database
   DATABASE_URL: Joi.string().required(),
+  OUTBOX_REDIS_PORT: Joi.number().integer().min(1).max(65535).default(6379),
+  REDIS_PASSWORD: Joi.string().allow('').default('inker_redis'),
 
   // Instance security
   ADMIN_PIN: Joi.string().min(4).max(128).invalid('1111').required()

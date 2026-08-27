@@ -25,9 +25,11 @@ export class WebSocketTransportAdapter implements TransportAdapter {
     return this.createBootstrap(device.externalId ?? generateToken(12));
   }
 
-  async dispatchRefresh(deviceId: number): Promise<void> {
-    await this.gateway.pushPresentation(deviceId);
+  async dispatchRefresh(deviceId: number, context?: import('../events/outbox.types').DeliveryContext): Promise<void> {
+    await this.gateway.pushPresentation(deviceId, context);
   }
+
+  deliveryLeaseExpired() { this.gateway.expireDeliveryConnections(); }
 
   private createBootstrap(externalId: string): TransportRegistration {
     const pairingToken = generateToken(32);

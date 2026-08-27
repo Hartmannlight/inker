@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false
+  },
+  "include": [
+    "outbox*.integration.ts",
+    "../src/events/*.ts",
+    "../src/events/*.test.ts",
+    "../src/device-platform/device-update-coordinator.service.test.ts"
+  ],
+  "exclude": []
+}

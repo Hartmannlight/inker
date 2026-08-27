@@ -50,6 +50,7 @@ import { WebSocketTelemetryService } from './websocket-telemetry.service';
     },
   ],
   exports: [
+    DeviceUpdateCoordinator,
     PresentationService,
     WebDisplayGateway,
     DeviceConfigurationService,

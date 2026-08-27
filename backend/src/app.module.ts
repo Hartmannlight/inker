@@ -22,6 +22,7 @@ import { JobsModule } from './jobs/jobs.module';
 import { CommonModule } from './common/common.module';
 import { ScreenDesignerModule } from './screen-designer/screen-designer.module';
 import { EventsModule } from './events/events.module';
+import { OutboxModule } from './events/outbox.module';
 import { SettingsModule } from './settings/settings.module';
 import { PluginsModule } from './plugins/plugins.module';
 import { ModelsModule } from './models/models.module';
@@ -86,6 +87,7 @@ import { validationSchema } from './config/validation.schema';
     JobsModule,
     ScreenDesignerModule,
     EventsModule,
+    OutboxModule,
     DevicePlatformModule,
     PublicationsModule,
     DeviceEnrollmentModule,

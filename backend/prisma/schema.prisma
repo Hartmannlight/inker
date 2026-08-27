@@ -253,6 +253,10 @@ model OutboxEvent {
   eventType      String    @map("event_type")
   aggregateType  String    @map("aggregate_type")
   aggregateId    String    @map("aggregate_id")
+  aggregateRevision String? @map("aggregate_revision")
+  claimToken     String?   @map("claim_token")
+  claimOwner     String?   @map("claim_owner")
+  claimUntil     DateTime? @map("claim_until")
   payloadVersion Int       @default(1) @map("payload_version")
   payload        Json
   status         String    @default("pending")
@@ -265,9 +269,58 @@ model OutboxEvent {
   createdAt      DateTime  @default(now()) @map("created_at")
 
   @@index([status, availableAt])
+  @@index([status, claimUntil])
   @@index([aggregateType, aggregateId])
   @@index([occurredAt])
   @@map("outbox_events")
+}
+
+// Revision counters/tombstones are independent of event retention and row deletion.
+model OutboxAggregate {
+  aggregateType String @map("aggregate_type")
+  aggregateId String @map("aggregate_id")
+  revision Int @default(0)
+  @@id([aggregateType, aggregateId])
+  @@map("outbox_aggregates")
+}
+
+// A small permanent idempotency receipt; payloads are retained with the event only.
+model OutboxEffect {
+  key String @id
+  eventId String @unique @map("event_id")
+  completedAt DateTime? @map("completed_at")
+  deliveries OutboxDelivery[]
+  targets OutboxTarget[]
+  @@map("outbox_effects")
+}
+
+model OutboxDelivery {
+  deliveryId String @id @default(cuid()) @map("delivery_id")
+  effectKey String @map("effect_key")
+  deviceId Int @map("device_id")
+  // Retry snapshot of the existing browser contract, not a publication/render cache.
+  presentation Json?
+  effect OutboxEffect @relation(fields: [effectKey], references: [key], onDelete: Cascade)
+  @@unique([effectKey, deviceId])
+  @@map("outbox_deliveries")
+}
+
+model OutboxConsumer {
+  consumerId String @id @map("consumer_id")
+  expiresAt DateTime @map("expires_at")
+  @@map("outbox_consumers")
+}
+
+model OutboxTarget {
+  effectKey String @map("effect_key")
+  consumerId String @map("consumer_id")
+  delivered Boolean @default(false)
+  attemptToken String? @map("attempt_token")
+  lastError String? @map("last_error")
+  effect OutboxEffect @relation(fields: [effectKey], references: [key], onDelete: Cascade)
+  @@id([effectKey, consumerId])
+  @@index([consumerId, delivered])
+  @@map("outbox_targets")
 }
 
 model Model {

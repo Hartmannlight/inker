@@ -9,6 +9,7 @@ import { PresentationService } from './presentation.service';
 import { WebDisplayAuthService, type DeviceConnectionSession } from './web-display-auth.service';
 import { WebSocketTelemetryService } from './websocket-telemetry.service';
 import { isDeviceOriginAllowed } from './websocket-origin';
+import type { DeliveryContext } from '../events/outbox.types';
 
 interface Connection {
   client: WebSocket;
@@ -21,6 +22,7 @@ interface Connection {
   queue: DeviceClientMessage[];
   draining: boolean;
   closed: boolean;
+  lastRevision?: number;
   tokens: number;
   tokenTime: number;
   onMessage: (raw: RawData, binary: boolean) => void;
@@ -82,8 +84,16 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
   metrics() { return { ...this.counters, connections: this.clients.size, authenticatedConnections: [...this.connections.values()].reduce((sum, set) => sum + set.size, 0), devices: this.connections.size }; }
   isConnected(deviceId: number): boolean { return (this.connections.get(deviceId)?.size ?? 0) > 0; }
 
-  async pushPresentation(deviceId: number): Promise<void> {
+  expireDeliveryConnections() {
+    for (const state of this.clients.values()) this.disconnect(state, 1011, 'Delivery lease expired');
+  }
+
+  async pushPresentation(deviceId: number, context?: DeliveryContext): Promise<void> {
     if (!this.isConnected(deviceId) || this.closing) return;
+    if (context) {
+      context.signal.throwIfAborted();
+      return this.deliver(deviceId, context);
+    }
     this.requestedPushes.add(deviceId);
     const existing = this.pushes.get(deviceId);
     if (existing) return existing;
@@ -97,21 +107,26 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
     return run;
   }
 
-  private async deliver(deviceId: number): Promise<void> {
+  private async deliver(deviceId: number, context?: DeliveryContext): Promise<void> {
     const states = [...(this.connections.get(deviceId) ?? [])];
     try {
       const authorized = (await Promise.all(states.map(async state => await this.check(state) ? state : undefined)))
         .filter((state): state is Connection => !!state && !state.closed);
       if (!authorized.length) return;
-      const presentation = await this.operation(authorized[0], () => this.presentations.getForDevice(deviceId));
+      const presentation = await this.operation(authorized[0], () => this.presentations.getForDevice(deviceId, context));
       // Recheck after asynchronous work, including rotation during rendering.
       for (const state of authorized) if (await this.check(state)) {
-        this.send(state, { protocolVersion: '1.0', type: 'presentation.changed', presentation });
+        context?.signal.throwIfAborted();
+        if (state.lastRevision !== undefined && presentation.revision <= state.lastRevision) continue;
+        if (context) await this.operation(state, () => this.sendConfirmed(state, { protocolVersion: '1.0', type: 'presentation.changed', presentation }));
+        else this.send(state, { protocolVersion: '1.0', type: 'presentation.changed', presentation });
+        state.lastRevision = presentation.revision;
       }
       this.scheduleTransition(deviceId, presentation.nextTransitionAt);
     } catch {
       this.logger.warn('Device presentation delivery failed');
       for (const state of states) this.fail(state);
+      if (context) throw new Error('OUTBOX_ADAPTER_FAILED');
     }
   }
 
@@ -273,6 +288,20 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
       if (Buffer.byteLength(payload) > LIMITS.maxMessageBytes || state.client.bufferedAmount > LIMITS.maxBufferedBytes) throw new Error();
       state.client.send(payload, error => { if (error) this.fail(state); });
     } catch { this.fail(state); }
+  }
+
+  private sendConfirmed(state: Connection, message: DeviceServerMessage): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const fail = () => reject(new Error('OUTBOX_SEND_FAILED'));
+      if (state.closed || state.client.readyState !== WebSocket.OPEN) { fail(); return; }
+      try {
+        const parsed = parseDeviceServerMessage(message);
+        if (!parsed.success) throw new Error();
+        const payload = JSON.stringify(parsed.data);
+        if (Buffer.byteLength(payload) > LIMITS.maxMessageBytes || state.client.bufferedAmount > LIMITS.maxBufferedBytes) throw new Error();
+        state.client.send(payload, error => error ? fail() : resolve());
+      } catch { fail(); }
+    });
   }
 
   private fail(state: Connection) {

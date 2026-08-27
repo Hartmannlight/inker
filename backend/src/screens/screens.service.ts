@@ -111,32 +111,34 @@ export class ScreensService {
    * Update screen
    */
   async update(id: number, updateScreenDto: UpdateScreenDto) {
-    const screen = await this.prisma.screen.findUnique({
-      where: { id },
+    return this.prisma.$transaction(async (tx) => {
+      const screen = await tx.screen.findUnique({
+        where: { id },
+      });
+
+      if (!screen) {
+        throw new NotFoundException('Screen not found');
+      }
+
+      const updatedScreen = await tx.screen.update({
+        where: { id },
+        data: {
+          name: updateScreenDto.name,
+          description: updateScreenDto.description,
+          imageUrl: updateScreenDto.imageUrl,
+          thumbnailUrl: updateScreenDto.thumbnailUrl,
+          isPublic: updateScreenDto.isPublic,
+        },
+
+      });
+
+      this.logger.log(`Screen updated: ${updatedScreen.name}`);
+
+      // Notify devices that use this screen to refresh
+      await this.eventsService.notifyScreenUpdate(id, tx);
+
+      return updatedScreen;
     });
-
-    if (!screen) {
-      throw new NotFoundException('Screen not found');
-    }
-
-    const updatedScreen = await this.prisma.screen.update({
-      where: { id },
-      data: {
-        name: updateScreenDto.name,
-        description: updateScreenDto.description,
-        imageUrl: updateScreenDto.imageUrl,
-        thumbnailUrl: updateScreenDto.thumbnailUrl,
-        isPublic: updateScreenDto.isPublic,
-      },
-
-    });
-
-    this.logger.log(`Screen updated: ${updatedScreen.name}`);
-
-    // Notify devices that use this screen to refresh
-    await this.eventsService.notifyScreenUpdate(id);
-
-    return updatedScreen;
   }
 
   /**
@@ -145,52 +147,55 @@ export class ScreensService {
    * Also cleans up uploaded image files from the filesystem
    */
   async remove(id: number) {
-    const screen = await this.prisma.screen.findUnique({
-      where: { id },
-      include: {
-        _count: {
-          select: {
-            playlistItems: true,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const screen = await tx.screen.findUnique({
+        where: { id },
+        include: {
+          _count: {
+            select: {
+              playlistItems: true,
+            },
+          },
+          playlistItems: {
+            select: {
+              playlistId: true,
+            },
           },
         },
-        playlistItems: {
-          select: {
-            playlistId: true,
-          },
-        },
-      },
+      });
+
+      if (!screen) {
+        throw new NotFoundException('Screen not found');
+      }
+
+      // Collect affected playlist IDs for notification before deletion
+      const affectedPlaylistIds = [
+        ...new Set(screen.playlistItems.map((item) => item.playlistId)),
+      ];
+
+      // Delete screen from database (PlaylistItems cascade automatically via Prisma)
+      await tx.screen.delete({
+        where: { id },
+      });
+
+      this.logger.log(
+        `Screen deleted: ${screen.name} (removed from ${screen._count.playlistItems} playlist(s))`,
+      );
+
+      // Notify devices using affected playlists to refresh
+      for (const playlistId of affectedPlaylistIds) {
+        await this.eventsService.notifyPlaylistUpdate(playlistId, tx);
+      }
+
+      return {
+        message: 'Screen deleted successfully',
+        affectedPlaylists: affectedPlaylistIds.length,
+        imageUrl: screen.imageUrl, thumbnailUrl: screen.thumbnailUrl,
+      };
     });
-
-    if (!screen) {
-      throw new NotFoundException('Screen not found');
-    }
-
-    // Collect affected playlist IDs for notification before deletion
-    const affectedPlaylistIds = [
-      ...new Set(screen.playlistItems.map((item) => item.playlistId)),
-    ];
-
-    // Delete screen from database (PlaylistItems cascade automatically via Prisma)
-    await this.prisma.screen.delete({
-      where: { id },
-    });
-
-    // Clean up image files from filesystem
-    await this.cleanupScreenFiles(screen.imageUrl, screen.thumbnailUrl);
-
-    this.logger.log(
-      `Screen deleted: ${screen.name} (removed from ${screen._count.playlistItems} playlist(s))`,
-    );
-
-    // Notify devices using affected playlists to refresh
-    for (const playlistId of affectedPlaylistIds) {
-      await this.eventsService.notifyPlaylistUpdate(playlistId);
-    }
-
-    return {
-      message: 'Screen deleted successfully',
-      affectedPlaylists: affectedPlaylistIds.length,
-    };
+    // Filesystem cleanup runs only after the domain/outbox commit.
+    await this.cleanupScreenFiles(result.imageUrl, result.thumbnailUrl);
+    return { message: result.message, affectedPlaylists: result.affectedPlaylists };
   }
 
   /**

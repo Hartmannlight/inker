@@ -14,6 +14,7 @@ describe('EventsService', () => {
     mockPrisma.deviceScreenAssignment = {
       findMany: createMock(),
     };
+    mockPrisma.outboxAggregate.upsert.mockResolvedValue({ revision: 1 });
     service = new EventsService(mockPrisma as any);
   });
 
@@ -95,7 +96,7 @@ describe('EventsService', () => {
   // ─── notifyScreenUpdate ────────────────────────────────────────────
 
   describe('notifyScreenUpdate()', () => {
-    it('should find playlist items, collect device IDs, set refreshPending, and emit', async () => {
+    it('should find playlist items, collect device IDs, set refreshPending, and persist', async () => {
       mockPrisma.playlistItem.findMany.mockResolvedValue([
         {
           playlist: {
@@ -110,7 +111,8 @@ describe('EventsService', () => {
       ]);
       mockPrisma.device.updateMany.mockResolvedValue({ count: 3 });
 
-      const eventPromise = firstValueFrom(service.getEventStream());
+      const emitted: DeviceEvent[] = [];
+      service.getEventStream().subscribe(event => emitted.push(event));
 
       await service.notifyScreenUpdate(5);
 
@@ -122,22 +124,29 @@ describe('EventsService', () => {
       expect(updateCall.where.id.in).toContain(30);
       expect(updateCall.data.refreshPending).toBe(true);
 
-      const event = await eventPromise;
+      expect(emitted).toHaveLength(0);
+      const row = mockPrisma.outboxEvent.create.calls[0][0].data;
+      expect(row.payloadVersion).toBe(1);
+      const event = { type: row.eventType, payload: row.payload };
       expect(event.type).toBe('screen:updated');
       expect(event.payload.screenId).toBe(5);
     });
 
-    it('should emit event even when no devices are affected', async () => {
+    it('should persist event even when no devices are affected', async () => {
       mockPrisma.playlistItem.findMany.mockResolvedValue([]);
 
-      const eventPromise = firstValueFrom(service.getEventStream());
+      const emitted: DeviceEvent[] = [];
+      service.getEventStream().subscribe(event => emitted.push(event));
 
       await service.notifyScreenUpdate(5);
 
       // Should NOT call updateMany when no devices
       expect(mockPrisma.device.updateMany.calls).toHaveLength(0);
 
-      const event = await eventPromise;
+      expect(emitted).toHaveLength(0);
+      const row = mockPrisma.outboxEvent.create.calls[0][0].data;
+      expect(row.payloadVersion).toBe(1);
+      const event = { type: row.eventType, payload: row.payload };
       expect(event.type).toBe('screen:updated');
       expect(event.payload.deviceIds).toEqual([]);
     });
@@ -146,11 +155,12 @@ describe('EventsService', () => {
   // ─── notifyPlaylistUpdate ──────────────────────────────────────────
 
   describe('notifyPlaylistUpdate()', () => {
-    it('should find devices, set refreshPending, and emit event', async () => {
+    it('should find devices, set refreshPending, and persist event', async () => {
       mockPrisma.device.findMany.mockResolvedValue([{ id: 1 }, { id: 2 }]);
       mockPrisma.device.updateMany.mockResolvedValue({ count: 2 });
 
-      const eventPromise = firstValueFrom(service.getEventStream());
+      const emitted: DeviceEvent[] = [];
+      service.getEventStream().subscribe(event => emitted.push(event));
 
       await service.notifyPlaylistUpdate(7);
 
@@ -159,22 +169,29 @@ describe('EventsService', () => {
       expect(mockPrisma.device.updateMany.calls).toHaveLength(1);
       expect(mockPrisma.device.updateMany.calls[0][0].data.refreshPending).toBe(true);
 
-      const event = await eventPromise;
+      expect(emitted).toHaveLength(0);
+      const row = mockPrisma.outboxEvent.create.calls[0][0].data;
+      expect(row.payloadVersion).toBe(1);
+      const event = { type: row.eventType, payload: row.payload };
       expect(event.type).toBe('playlist:updated');
       expect(event.payload.playlistId).toBe(7);
       expect(event.payload.deviceIds).toEqual([1, 2]);
     });
 
-    it('should emit event even with no devices on playlist', async () => {
+    it('should persist event even with no devices on playlist', async () => {
       mockPrisma.device.findMany.mockResolvedValue([]);
 
-      const eventPromise = firstValueFrom(service.getEventStream());
+      const emitted: DeviceEvent[] = [];
+      service.getEventStream().subscribe(event => emitted.push(event));
 
       await service.notifyPlaylistUpdate(7);
 
       expect(mockPrisma.device.updateMany.calls).toHaveLength(0);
 
-      const event = await eventPromise;
+      expect(emitted).toHaveLength(0);
+      const row = mockPrisma.outboxEvent.create.calls[0][0].data;
+      expect(row.payloadVersion).toBe(1);
+      const event = { type: row.eventType, payload: row.payload };
       expect(event.type).toBe('playlist:updated');
       expect(event.payload.deviceIds).toEqual([]);
     });
@@ -184,21 +201,21 @@ describe('EventsService', () => {
 
   describe('notifyDevicesRefresh()', () => {
     it('should NOT call updateMany for empty device array', async () => {
-      const eventPromise = firstValueFrom(service.getEventStream());
+      const emitted: DeviceEvent[] = [];
+      service.getEventStream().subscribe(event => emitted.push(event));
 
       await service.notifyDevicesRefresh([]);
 
       expect(mockPrisma.device.updateMany.calls).toHaveLength(0);
-
-      const event = await eventPromise;
-      expect(event.type).toBe('device:refresh');
-      expect(event.payload.deviceIds).toEqual([]);
+      expect(emitted).toHaveLength(0);
+      expect(mockPrisma.outboxEvent.create.calls).toHaveLength(0);
     });
 
-    it('should set refreshPending and emit event for non-empty array', async () => {
+    it('should set refreshPending and persist event for non-empty array', async () => {
       mockPrisma.device.updateMany.mockResolvedValue({ count: 2 });
 
-      const eventPromise = firstValueFrom(service.getEventStream());
+      const emitted: DeviceEvent[] = [];
+      service.getEventStream().subscribe(event => emitted.push(event));
 
       await service.notifyDevicesRefresh([5, 10]);
 
@@ -206,9 +223,14 @@ describe('EventsService', () => {
       expect(mockPrisma.device.updateMany.calls[0][0].where.id.in).toEqual([5, 10]);
       expect(mockPrisma.device.updateMany.calls[0][0].data.refreshPending).toBe(true);
 
-      const event = await eventPromise;
+      expect(emitted).toHaveLength(0);
+      const row = mockPrisma.outboxEvent.create.calls[0][0].data;
+      expect(row.payloadVersion).toBe(1);
+      const event = { type: row.eventType, payload: row.payload };
       expect(event.type).toBe('device:refresh');
-      expect(event.payload.deviceIds).toEqual([5, 10]);
+      expect(event.payload.deviceIds).toEqual([5]);
+      expect(mockPrisma.outboxEvent.create.calls[1][0].data.payload.deviceIds).toEqual([10]);
+      expect(mockPrisma.outboxEvent.create.calls).toHaveLength(2);
     });
   });
 });

@@ -325,8 +325,7 @@ describe('PlaylistsService', () => {
         id: 1,
         name: 'Playlist',
       });
-      // $transaction receives an array of promises when called with array argument
-      mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+      // The interactive transaction includes both reorder and outbox intent.
 
       const result = await service.reorderItems(1, [
         { id: 10, order: 0 },

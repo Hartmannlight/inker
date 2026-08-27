@@ -33,6 +33,16 @@ export class PublicationCleanupService {
     );
 
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.outboxConsumer.deleteMany({ where: { expiresAt: { lt: now } } });
+      // Retain only opaque idempotency tombstones after normal event retention.
+      // Pending/processing work has no age-only deletion path.
+      const expiredEvents = await transaction.outboxEvent.findMany({ where: { OR: [
+        { status: 'delivered', processedAt: { lt: deliveredCutoff } },
+        { status: 'dead-letter', processedAt: { lt: deadLetterCutoff } },
+      ] }, select: { eventId: true } });
+      const expiredEffects = { effect: { eventId: { in: expiredEvents.map(event => event.eventId) } } };
+      await transaction.outboxTarget.deleteMany({ where: expiredEffects });
+      await transaction.outboxDelivery.deleteMany({ where: expiredEffects });
       const delivered = await transaction.outboxEvent.deleteMany({
         where: {
           status: "delivered",
