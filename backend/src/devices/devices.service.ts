@@ -10,19 +10,14 @@ import { EventsService } from '../events/events.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { generateToken } from '../common/utils/crypto.util';
-import { hashToken } from '../common/utils/crypto.util';
-import { DeviceDriverRegistry } from './drivers/device-driver.registry';
-import { DEVICE_TYPES } from './drivers/device-driver';
 import { Prisma } from '@prisma/client';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { serializeDevice, serializeDevices, isNewerVersion } from './entities/device.entity';
 import { FirmwareService } from '../firmware/firmware.service';
-import { DeviceConfigurationService } from '../device-platform/device-configuration.service';
-import {
-  BUILTIN_POLICY_IDS,
-  BUILTIN_PROFILE_IDS,
-} from '../device-platform/device-configuration.catalog';
-import type { DeviceCapabilitiesOverride } from '../device-platform/device-configuration';
+import { DeliveryPolicyRegistry } from '../device-platform/delivery-policy.registry';
+import type { ResolvedDeviceConfiguration } from '../device-platform/device-configuration';
+import { ProfileResolverService } from '../device-platform/profile-resolver.service';
+import { TransportAdapterRegistry } from '../device-platform/transport-adapter.registry';
 
 @Injectable()
 export class DevicesService {
@@ -32,8 +27,9 @@ export class DevicesService {
     private prisma: PrismaService,
     private eventsService: EventsService,
     private firmwareService: FirmwareService,
-    private driverRegistry: DeviceDriverRegistry,
-    private deviceConfiguration: DeviceConfigurationService,
+    private profileResolver: ProfileResolverService,
+    private deliveryPolicies: DeliveryPolicyRegistry,
+    private transportAdapters: TransportAdapterRegistry,
   ) {}
 
   /**
@@ -41,47 +37,16 @@ export class DevicesService {
    * If MAC was previously blocked (deleted device), unblock it first
    */
   async create(createDeviceDto: CreateDeviceDto) {
-    const requestedDeviceType = createDeviceDto.deviceType ??
-      (createDeviceDto.profileId === BUILTIN_PROFILE_IDS.BROWSER_HD ||
-      createDeviceDto.profileId === BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE
-        ? DEVICE_TYPES.WEB_DISPLAY
-        : DEVICE_TYPES.TRMNL);
-    const profileId = createDeviceDto.profileId ??
-      (requestedDeviceType === DEVICE_TYPES.WEB_DISPLAY
-        ? BUILTIN_PROFILE_IDS.BROWSER_HD
-        : BUILTIN_PROFILE_IDS.TRMNL_7_5_MONO);
-    const profileDeviceType = this.legacyDeviceTypeForProfile(profileId);
-    if (createDeviceDto.deviceType && createDeviceDto.deviceType !== profileDeviceType) {
+    const resolved = await this.profileResolver.resolveForCreate(createDeviceDto);
+    const adapter = this.adapterFor(resolved);
+    if (createDeviceDto.deviceType && createDeviceDto.deviceType !== adapter.legacy.deviceType) {
       throw new BadRequestException('deviceType conflicts with the selected device profile');
     }
-    const driver = this.driverRegistry.get(profileDeviceType);
-    const deliveryPolicyId = createDeviceDto.deliveryPolicyId ??
-      (profileId === BUILTIN_PROFILE_IDS.BROWSER_HD
-        ? BUILTIN_POLICY_IDS.CONNECTED_BROWSER
-        : profileId === BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE
-          ? BUILTIN_POLICY_IDS.CONNECTED_EMBEDDED
-          : BUILTIN_POLICY_IDS.SLEEPY);
-    const compatibilityOverride = createDeviceDto.capabilitiesOverride ??
-      (profileDeviceType === DEVICE_TYPES.TRMNL
-        ? { display: { renderFormats: ['png'], mimeTypes: ['image/png'] } }
-        : undefined);
-    const requestedOverride = this.withDisplayDimensions(
-      compatibilityOverride,
-      createDeviceDto.width,
-      createDeviceDto.height,
-    );
-    const resolved = await this.deviceConfiguration.resolve(
-      profileId,
-      deliveryPolicyId,
-      requestedOverride,
-    );
     const width = resolved.capabilities.display.width;
     const height = resolved.capabilities.display.height;
+    const registration = adapter.prepareRegistration({ macAddress: createDeviceDto.macAddress });
 
-    if (driver.type === DEVICE_TYPES.TRMNL) {
-      if (!createDeviceDto.macAddress) {
-        throw new BadRequestException('MAC address is required for TRMNL devices');
-      }
+    if (createDeviceDto.macAddress) {
       const existingDevice = await this.prisma.device.findUnique({
         where: { macAddress: createDeviceDto.macAddress },
       });
@@ -93,31 +58,23 @@ export class DevicesService {
       });
     }
 
-    const isWebDisplay = driver.type === DEVICE_TYPES.WEB_DISPLAY;
-    const apiKey = isWebDisplay ? null : this.generateApiKey();
-    const externalId = isWebDisplay ? generateToken(12) : null;
-    const pairingToken = isWebDisplay ? generateToken(32) : null;
-    const pairingExpiresAt = isWebDisplay
-      ? new Date(Date.now() + 15 * 60 * 1000)
-      : null;
-
     // Create device
     const device = await this.prisma.device.create({
       data: {
         name: createDeviceDto.name,
-        deviceType: driver.type,
-        transport: resolved.capabilities.transport.modes.includes('websocket') ? 'websocket' : 'pull',
-        externalId,
+        deviceType: adapter.legacy.deviceType,
+        transport: adapter.legacy.transport,
+        externalId: registration.externalId,
         capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
         configuration: {},
         telemetry: {},
-        profileId,
+        profileId: resolved.profile.profileId,
         capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
-        deliveryPolicyId,
+        deliveryPolicyId: resolved.deliveryPolicy.policyId,
         macAddress: createDeviceDto.macAddress ?? null,
-        apiKey,
-        pairingTokenHash: pairingToken ? hashToken(pairingToken) : null,
-        pairingExpiresAt,
+        apiKey: registration.apiKey,
+        pairingTokenHash: registration.pairingTokenHash,
+        pairingExpiresAt: registration.pairingExpiresAt,
         playlistId: createDeviceDto.playlistId,
         width,
         height,
@@ -140,14 +97,14 @@ export class DevicesService {
       },
     });
 
-    this.logger.log(`Device created: ${device.name} (${driver.type}/${driver.transport})`);
+    this.logger.log(`Device created: ${device.name} (${adapter.adapterId})`);
 
     return serializeDevice({
       ...device,
-      ...(pairingToken && externalId
+      ...(registration.bootstrap?.pairingToken && registration.externalId
         ? {
-            pairingToken,
-            displayUrl: `/display/${externalId}?pair=${encodeURIComponent(pairingToken)}`,
+            pairingToken: registration.bootstrap.pairingToken,
+            displayUrl: `/display/${registration.externalId}?pair=${encodeURIComponent(registration.bootstrap.pairingToken)}`,
           }
         : {}),
     });
@@ -280,24 +237,25 @@ export class DevicesService {
 
     const profileId = updateDeviceDto.profileId ?? device.profileId;
     const deliveryPolicyId = updateDeviceDto.deliveryPolicyId ?? device.deliveryPolicyId;
-    if (
-      updateDeviceDto.profileId &&
-      this.legacyDeviceTypeForProfile(profileId) !== this.legacyDeviceTypeForProfile(device.profileId)
-    ) {
+    const currentResolved = await this.profileResolver.resolveForCreate({
+      profileId: device.profileId,
+      deliveryPolicyId: device.deliveryPolicyId,
+      capabilitiesOverride: device.capabilitiesOverride,
+    });
+    const resolved = await this.profileResolver.resolveForCreate({
+      profileId,
+      deliveryPolicyId,
+      capabilitiesOverride: updateDeviceDto.capabilitiesOverride ?? device.capabilitiesOverride,
+      width: modelDimensions.width ?? updateDeviceDto.width,
+      height: modelDimensions.height ?? updateDeviceDto.height,
+    });
+    const currentAdapter = this.adapterFor(currentResolved);
+    const adapter = this.adapterFor(resolved);
+    if (updateDeviceDto.profileId && adapter.adapterId !== currentAdapter.adapterId) {
       throw new BadRequestException(
         'A device profile cannot switch between legacy transport families in place',
       );
     }
-    const requestedOverride = this.withDisplayDimensions(
-      updateDeviceDto.capabilitiesOverride ?? device.capabilitiesOverride,
-      modelDimensions.width ?? updateDeviceDto.width,
-      modelDimensions.height ?? updateDeviceDto.height,
-    );
-    const resolved = await this.deviceConfiguration.resolve(
-      profileId,
-      deliveryPolicyId,
-      requestedOverride,
-    );
 
     const updatedDevice = await this.prisma.device.update({
       where: { id },
@@ -312,7 +270,7 @@ export class DevicesService {
         deliveryPolicyId,
         capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
         capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
-        transport: resolved.capabilities.transport.modes.includes('websocket') ? 'websocket' : 'pull',
+        transport: adapter.legacy.transport,
         width: resolved.capabilities.display.width,
         height: resolved.capabilities.display.height,
         // Quiet hours / sleep schedule (undefined = no change, null = clear/disable)
@@ -493,24 +451,29 @@ export class DevicesService {
   async regeneratePairingToken(id: number) {
     const device = await this.prisma.device.findUnique({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (device.profileId !== BUILTIN_PROFILE_IDS.BROWSER_HD || !device.externalId) {
+    const configuration = await this.profileResolver.resolveForCreate({
+      profileId: device.profileId,
+      deliveryPolicyId: device.deliveryPolicyId,
+      capabilitiesOverride: device.capabilitiesOverride,
+    });
+    const adapter = this.adapterFor(configuration);
+    if (!adapter.rotateBootstrap || !device.externalId) {
       throw new BadRequestException('Pairing links are only available for web displays');
     }
 
-    const pairingToken = generateToken(32);
-    const pairingExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    const registration = adapter.rotateBootstrap(device);
     await this.prisma.device.update({
       where: { id },
       data: {
-        pairingTokenHash: hashToken(pairingToken),
-        pairingExpiresAt,
+        pairingTokenHash: registration.pairingTokenHash,
+        pairingExpiresAt: registration.pairingExpiresAt,
       },
     });
 
     return {
       deviceId: id,
-      pairingExpiresAt,
-      displayUrl: `/display/${device.externalId}?pair=${encodeURIComponent(pairingToken)}`,
+      pairingExpiresAt: registration.pairingExpiresAt,
+      displayUrl: `/display/${device.externalId}?pair=${encodeURIComponent(registration.bootstrap!.pairingToken)}`,
     };
   }
 
@@ -521,30 +484,9 @@ export class DevicesService {
     return generateToken(32);
   }
 
-  private withDisplayDimensions(
-    override: unknown,
-    width?: number,
-    height?: number,
-  ): DeviceCapabilitiesOverride | null {
-    const normalized = this.deviceConfiguration.normalizeOverride(override);
-    if (width === undefined && height === undefined) return normalized;
-    return {
-      ...normalized,
-      display: {
-        ...normalized?.display,
-        ...(width !== undefined ? { width } : {}),
-        ...(height !== undefined ? { height } : {}),
-      },
-    };
-  }
-
-  private legacyDeviceTypeForProfile(
-    profileId: string,
-  ): (typeof DEVICE_TYPES)[keyof typeof DEVICE_TYPES] {
-    return profileId === BUILTIN_PROFILE_IDS.BROWSER_HD ||
-      profileId === BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE
-      ? DEVICE_TYPES.WEB_DISPLAY
-      : DEVICE_TYPES.TRMNL;
+  private adapterFor(configuration: ResolvedDeviceConfiguration) {
+    const policy = this.deliveryPolicies.get(configuration.deliveryPolicy.mode);
+    return this.transportAdapters.get(policy.selectTransport(configuration.capabilities));
   }
 
   /**

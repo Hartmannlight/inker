@@ -18,23 +18,29 @@ describe('SetupService', () => {
       mockPrisma as any,
       mockSetupScreenService as any,
       {
-        get: () => ({
-          type: 'trmnl',
-          transport: 'pull',
-          getDefaultCapabilities: (width: number, height: number) => ({
-            display: { width, height, colorDepth: 1, formats: ['image/png'] },
-            telemetry: [], interaction: [], realtime: false,
-          }),
+        resolveForCreate: async (selection: any) => ({
+          profile: { profileId: selection.profileId },
+          deliveryPolicy: { policyId: selection.deliveryPolicyId, mode: 'sleepy' },
+          capabilitiesOverride: selection.capabilitiesOverride,
+          capabilities: {
+            display: {
+              width: selection.capabilitiesOverride.display.width,
+              height: selection.capabilitiesOverride.display.height,
+            },
+            transport: { modes: ['http-pull'] },
+          },
         }),
       } as any,
+      { get: () => ({ selectTransport: () => 'http-pull' }) } as any,
       {
-        resolve: async (profileId: string, deliveryPolicyId: string, override: any) => ({
-          profile: { profileId },
-          deliveryPolicy: { policyId: deliveryPolicyId },
-          capabilitiesOverride: override,
-          capabilities: {
-            display: { width: override.display.width, height: override.display.height },
-          },
+        get: () => ({
+          legacy: { deviceType: 'trmnl', transport: 'pull' },
+          prepareRegistration: () => ({
+            apiKey: 'generated-key',
+            externalId: null,
+            pairingTokenHash: null,
+            pairingExpiresAt: null,
+          }),
         }),
       } as any,
     );

@@ -18,30 +18,72 @@ describe('DevicesService', () => {
   let mockFirmwareService: {
     getLatestStableOrNull: ReturnType<typeof createMock>;
   };
-  const mockDriverRegistry = {
-    get: (type: string) => ({
-      type: type || 'trmnl',
-      transport: type === 'web-display' ? 'websocket' : 'pull',
-      getDefaultCapabilities: (width = 800, height = 480) => ({
-        display: { width, height, colorDepth: 1, formats: ['image/png'] },
-        telemetry: [], interaction: [], realtime: type === 'web-display',
-      }),
-    }),
-  };
-  const mockDeviceConfiguration = {
-    normalizeOverride: (value: any) => value ?? null,
-    resolve: async (profileId: string, deliveryPolicyId: string, override: any) => ({
+  const mockProfileResolver = {
+    resolveForCreate: async (selection: any) => {
+      const profileId = selection.profileId ??
+        (selection.deviceType === 'web-display' ? 'browser-hd-1920x1080' : 'trmnl-byod-7.5-mono');
+      const deliveryPolicyId = selection.deliveryPolicyId ??
+        (profileId.startsWith('browser-') ? 'reference-connected-browser' : 'reference-sleepy');
+      const override = selection.capabilitiesOverride ?? null;
+      return {
       profile: { profileId },
-      deliveryPolicy: { policyId: deliveryPolicyId },
+      deliveryPolicy: {
+        policyId: deliveryPolicyId,
+        mode: deliveryPolicyId.includes('connected') ? 'connected' : 'sleepy',
+      },
       capabilitiesOverride: override ?? null,
       capabilities: {
         protocolVersion: '1.0',
         profileId,
-        display: { width: override?.display?.width ?? 800, height: override?.display?.height ?? 480 },
+        display: {
+          width: selection.width ?? override?.display?.width ?? 800,
+          height: selection.height ?? override?.display?.height ?? 480,
+        },
         transport: { modes: profileId.startsWith('browser-') ? ['websocket'] : ['http-pull'] },
         energy: { source: 'battery' },
         interaction: { inputs: [] },
       },
+      };
+    },
+  };
+  const mockDeliveryPolicies = {
+    get: (mode: string) => ({
+      mode,
+      selectTransport: (capabilities: any) =>
+        capabilities.transport.modes.includes('websocket') ? 'websocket' : 'http-pull',
+    }),
+  };
+  const mockTransportAdapters = {
+    get: (mode: string) => ({
+      adapterId: mode,
+      legacy: mode === 'websocket'
+        ? { deviceType: 'web-display', transport: 'websocket' }
+        : { deviceType: 'trmnl', transport: 'pull' },
+      prepareRegistration: () => mode === 'websocket'
+        ? {
+            apiKey: null,
+            externalId: 'external-id',
+            pairingTokenHash: 'pairing-hash',
+            pairingExpiresAt: new Date(Date.now() + 60_000),
+            bootstrap: { pairingToken: 'pairing-token' },
+          }
+        : {
+            apiKey: 'generated-key',
+            externalId: null,
+            pairingTokenHash: null,
+          pairingExpiresAt: null,
+          },
+      ...(mode === 'websocket'
+        ? {
+            rotateBootstrap: (device: any) => ({
+              apiKey: null,
+              externalId: device.externalId,
+              pairingTokenHash: 'rotated-pairing-hash',
+              pairingExpiresAt: new Date(Date.now() + 60_000),
+              bootstrap: { pairingToken: 'rotated-pairing-token' },
+            }),
+          }
+        : {}),
     }),
   };
 
@@ -76,8 +118,9 @@ describe('DevicesService', () => {
       mockPrisma as any,
       mockEventsService as any,
       mockFirmwareService as any,
-      mockDriverRegistry as any,
-      mockDeviceConfiguration as any,
+      mockProfileResolver as any,
+      mockDeliveryPolicies as any,
+      mockTransportAdapters as any,
     );
   });
 
@@ -133,6 +176,29 @@ describe('DevicesService', () => {
       // serializeDevice adds status and isOnline
       expect(result).toHaveProperty('status');
       expect(result).toHaveProperty('isOnline');
+    });
+
+    it('keeps the WebDisplay bootstrap response while persisting only its hash', async () => {
+      mockPrisma.device.create.mockResolvedValue(makeDevice({
+        deviceType: 'web-display',
+        profileId: 'browser-hd-1920x1080',
+        deliveryPolicyId: 'reference-connected-browser',
+        apiKey: null,
+        externalId: 'external-id',
+      }));
+
+      const result = await service.create({
+        name: 'Browser Display',
+        deviceType: 'web-display',
+      } as any);
+
+      const data = mockPrisma.device.create.calls[0][0].data;
+      expect(data.deviceType).toBe('web-display');
+      expect(data.transport).toBe('websocket');
+      expect(data.pairingTokenHash).toBe('pairing-hash');
+      expect(data).not.toHaveProperty('pairingToken');
+      expect(result.pairingToken).toBe('pairing-token');
+      expect(result.displayUrl).toBe('/display/external-id?pair=pairing-token');
     });
   });
 
@@ -247,6 +313,38 @@ describe('DevicesService', () => {
       await service.update(1, { name: 'Renamed' } as any);
 
       expect(mockEventsService.notifyDevicesRefresh.calls).toHaveLength(0);
+    });
+
+    it('rejects an in-place switch to a profile using another adapter', async () => {
+      mockPrisma.device.findUnique.mockResolvedValue(makeDevice());
+
+      await expect(service.update(1, {
+        profileId: 'browser-hd-1920x1080',
+        deliveryPolicyId: 'reference-connected-browser',
+      } as any)).rejects.toThrow(
+        'A device profile cannot switch between legacy transport families in place',
+      );
+    });
+  });
+
+  describe('regeneratePairingToken()', () => {
+    it('delegates WebDisplay bootstrap rotation to the selected adapter', async () => {
+      mockPrisma.device.findUnique.mockResolvedValue(makeDevice({
+        deviceType: 'web-display',
+        profileId: 'browser-hd-1920x1080',
+        deliveryPolicyId: 'reference-connected-browser',
+        externalId: 'external-id',
+      }));
+      mockPrisma.device.update.mockResolvedValue({});
+
+      const result = await service.regeneratePairingToken(1);
+
+      expect(mockPrisma.device.update.calls[0][0].data.pairingTokenHash).toBe(
+        'rotated-pairing-hash',
+      );
+      expect(result.displayUrl).toBe(
+        '/display/external-id?pair=rotated-pairing-token',
+      );
     });
   });
 

@@ -4,12 +4,11 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { generateToken } from '../../common/utils/crypto.util';
 import { SetupScreenService } from './setup-screen.service';
-import { DeviceDriverRegistry } from '../../devices/drivers/device-driver.registry';
-import { DEVICE_TYPES } from '../../devices/drivers/device-driver';
 import { Prisma } from '@prisma/client';
-import { DeviceConfigurationService } from '../../device-platform/device-configuration.service';
+import { DeliveryPolicyRegistry } from '../../device-platform/delivery-policy.registry';
+import { ProfileResolverService } from '../../device-platform/profile-resolver.service';
+import { TransportAdapterRegistry } from '../../device-platform/transport-adapter.registry';
 import {
   BUILTIN_POLICY_IDS,
   BUILTIN_PROFILE_IDS,
@@ -57,8 +56,9 @@ export class SetupService {
   constructor(
     private prisma: PrismaService,
     private setupScreenService: SetupScreenService,
-    private deviceDrivers: DeviceDriverRegistry,
-    private deviceConfiguration: DeviceConfigurationService,
+    private profileResolver: ProfileResolverService,
+    private deliveryPolicies: DeliveryPolicyRegistry,
+    private transportAdapters: TransportAdapterRegistry,
   ) {}
 
   /**
@@ -134,18 +134,14 @@ export class SetupService {
     }
 
     // Device doesn't exist, create new one
-    // Generate API key (UUID)
-    const apiKey = generateToken(32);
-
     // Auto-detect the device's model + resolution from what its firmware reports (issue: TRMNL X
     // was defaulting to 800x480). The device's own reported width/height win; the model code links
     // it to an Inker model (resolution + colour depth).
     const resolved = await this.resolveDeviceModel(modelName, reportedWidth, reportedHeight);
-    const driver = this.deviceDrivers.get(DEVICE_TYPES.TRMNL);
-    const configured = await this.deviceConfiguration.resolve(
-      BUILTIN_PROFILE_IDS.TRMNL_7_5_MONO,
-      BUILTIN_POLICY_IDS.SLEEPY,
-      {
+    const configured = await this.profileResolver.resolveForCreate({
+      profileId: BUILTIN_PROFILE_IDS.TRMNL_7_5_MONO,
+      deliveryPolicyId: BUILTIN_POLICY_IDS.SLEEPY,
+      capabilitiesOverride: {
         display: {
           width: resolved.width,
           height: resolved.height,
@@ -155,7 +151,12 @@ export class SetupService {
           mimeTypes: resolved.mimeTypes,
         },
       },
+    });
+    const deliveryPolicy = this.deliveryPolicies.get(configured.deliveryPolicy.mode);
+    const adapter = this.transportAdapters.get(
+      deliveryPolicy.selectTransport(configured.capabilities),
     );
+    const registration = adapter.prepareRegistration({ macAddress });
     this.logger.log(
       `Provisioning ${macAddress}: model="${modelName ?? 'none'}" reported=${reportedWidth ?? '?'}x${reportedHeight ?? '?'} ` +
       `→ ${resolved.width}x${resolved.height}${resolved.modelId ? ` (modelId ${resolved.modelId})` : ''}`,
@@ -166,8 +167,8 @@ export class SetupService {
       data: {
         name: `Device-${macAddress.slice(-8)}`,
         friendlyId: this.generateFriendlyId(),
-        deviceType: driver.type,
-        transport: driver.transport,
+        deviceType: adapter.legacy.deviceType,
+        transport: adapter.legacy.transport,
         externalId: macAddress,
         capabilities: configured.capabilities as unknown as Prisma.InputJsonValue,
         configuration: {},
@@ -176,7 +177,7 @@ export class SetupService {
         capabilitiesOverride: configured.capabilitiesOverride as unknown as Prisma.InputJsonValue,
         deliveryPolicyId: configured.deliveryPolicy.policyId,
         macAddress,
-        apiKey,
+        apiKey: registration.apiKey,
         firmwareVersion,
         modelId: resolved.modelId ?? undefined,
         width: resolved.width,

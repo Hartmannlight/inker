@@ -20,12 +20,26 @@ export const BUILTIN_POLICY_IDS = {
 export interface BuiltinDeviceProfile {
   profile: DeviceProfile;
   defaultCapabilities: DeviceCapabilities;
+  provisioning: {
+    legacyDeviceType: 'trmnl' | 'web-display';
+    legacyDefault: boolean;
+    defaultDeliveryPolicyId: string;
+    compatibilityOverride?: Record<string, unknown>;
+  };
 }
 
 const zeroSafeArea = { top: 0, right: 0, bottom: 0, left: 0 } as const;
 
 export const BUILTIN_DEVICE_PROFILES: readonly BuiltinDeviceProfile[] = [
   {
+    provisioning: {
+      legacyDeviceType: 'trmnl',
+      legacyDefault: true,
+      defaultDeliveryPolicyId: BUILTIN_POLICY_IDS.SLEEPY,
+      compatibilityOverride: {
+        display: { renderFormats: ['png'], mimeTypes: ['image/png'] },
+      },
+    },
     profile: {
       protocolVersion: '1.0',
       profileId: BUILTIN_PROFILE_IDS.TRMNL_7_5_MONO,
@@ -77,6 +91,11 @@ export const BUILTIN_DEVICE_PROFILES: readonly BuiltinDeviceProfile[] = [
     },
   },
   {
+    provisioning: {
+      legacyDeviceType: 'web-display',
+      legacyDefault: false,
+      defaultDeliveryPolicyId: BUILTIN_POLICY_IDS.CONNECTED_EMBEDDED,
+    },
     profile: {
       protocolVersion: '1.0',
       profileId: BUILTIN_PROFILE_IDS.ESP32_TOUCH_REFERENCE,
@@ -122,6 +141,11 @@ export const BUILTIN_DEVICE_PROFILES: readonly BuiltinDeviceProfile[] = [
     },
   },
   {
+    provisioning: {
+      legacyDeviceType: 'web-display',
+      legacyDefault: true,
+      defaultDeliveryPolicyId: BUILTIN_POLICY_IDS.CONNECTED_BROWSER,
+    },
     profile: {
       protocolVersion: '1.0',
       profileId: BUILTIN_PROFILE_IDS.BROWSER_HD,

@@ -68,7 +68,7 @@ müssen.
 | [x] | WP-10 | Pairing-UI mit Code und QR | WP-09 |
 | [ ] | WP-11 | Sichere Instanz-Secrets und verbotene Defaults | WP-05 |
 | [x] | WP-12 | Sichere Admin-Session statt langlebigem Local-Storage-Token | WP-11 |
-| [ ] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
+| [x] | WP-13 | Saubere Profile-, Transport- und Delivery-Abstraktionen | WP-04, WP-06 |
 | [ ] | WP-14 | Pull-Auslieferung mit Manifest, ETag und Delivery Policy | WP-07, WP-13 |
 | [ ] | WP-15 | Gehärteter WebSocket-Transport und gedrosselte Telemetrie | WP-08, WP-13 |
 | [ ] | WP-16 | Transaktions-Outbox und zuverlässiger Event-Dispatcher | WP-07, WP-13 |
@@ -1257,14 +1257,14 @@ Gerätepfade. Noch keine neue Protokollfunktion.
 
 **Aufgaben:**
 
-- [ ] Definiere ProfileResolver, TransportAdapter und DeliveryPolicy als getrennte
+- [x] Definiere ProfileResolver, TransportAdapter und DeliveryPolicy als getrennte
   Interfaces.
-- [ ] Registriere Adapter über NestJS-Multi-Provider/Discovery statt zentralem
+- [x] Registriere Adapter über NestJS-Multi-Provider/Discovery statt zentralem
   Hardcoding.
-- [ ] Verschiebe TRMNL- und WebDisplay-Defaults in Profile.
-- [ ] Lass DevicesService nur orchestrieren und nicht transportspezifisch handeln.
-- [ ] Ergänze unbekannter-Adapter-, Override- und Capability-Tests.
-- [ ] Halte optionale spätere MQTT-Erweiterung als Contract-Test fest, ohne sie zu
+- [x] Verschiebe TRMNL- und WebDisplay-Defaults in Profile.
+- [x] Lass DevicesService nur orchestrieren und nicht transportspezifisch handeln.
+- [x] Ergänze unbekannter-Adapter-, Override- und Capability-Tests.
+- [x] Halte optionale spätere MQTT-Erweiterung als Contract-Test fest, ohne sie zu
   implementieren.
 
 **Abnahme:** Ein Dummy-Adapter kann in einem Test registriert werden, ohne
@@ -1272,7 +1272,45 @@ DevicesService oder Dashboardcode zu ändern.
 
 **Validierung:** Unit-, DI- und bestehende Gerätetests.
 
-**Handoff:** Adapterregistrierung und noch vorhandene Legacy-Sonderfälle notieren.
+**Handoff (abgeschlossen am 2026-08-26):**
+
+- `ProfileResolver`, `TransportAdapter` und `DeliveryPolicy` sind getrennte
+  Erweiterungsverträge. Eingebaute Transportadapter sind normale Nest-Provider mit
+  `@RegisterTransportAdapter()`; `TransportAdapterRegistry` entdeckt sie über
+  `DiscoveryService` und Metadaten. Doppelte Modi verhindern den Start, ein
+  angeforderter unbekannter Modus wird kontrolliert abgelehnt. Der DI-Test
+  registriert einen Dummy-`mqtt`-Adapter ohne Änderung an `DevicesService` oder
+  Dashboardcode; ein MQTT-Protokoll, -Client oder -Credential wurde nicht
+  implementiert.
+- TRMNL-, ESP32-Referenz- und Browser-Defaults einschließlich Legacy-Gerätetyp,
+  Delivery Policy und nötiger Kompatibilitäts-Overrides liegen im eingebauten
+  Profilkatalog. Der Resolver führt Profil, Policy, Capability-Overrides und
+  Dimensionen zusammen; fremde Profile müssen ihre Policy explizit angeben.
+  Persistierte Profilverträge und das Prisma-Schema bleiben unverändert, daher ist
+  keine Migration nötig.
+- `sleepy` und `responsive-pull` wählen HTTP-Pull ohne unmittelbaren Dispatch;
+  `connected` wählt WebSocket mit unmittelbarem Dispatch. Die effektiven
+  WP-06-Capabilities validieren die Auswahl. `DevicesService` und
+  `DeviceUpdateCoordinator` orchestrieren Resolver, Policy und Adapter, ohne die
+  migrierten Pfade anhand von Profil-IDs oder Transportstrings zu verzweigen.
+- Der HTTP-Pull-Adapter bewahrt TRMNL-MAC-Prüfung und API-Key-Erzeugung. Der
+  WebSocket-Adapter bewahrt externe Display-ID, 15-minütiges Pairing-Bootstrap,
+  ausschließlich persistierten Token-Hash, Rotation und Gateway-Dispatch. Die in
+  WP-08 bis WP-10 festgelegten Credential- und Pairing-Lebenszyklen wurden nicht
+  geändert.
+- Verbleibende Legacy-Sonderfälle: `SetupService` bleibt der explizite
+  TRMNL-Firmware-Einstieg, löst Profil, Policy und Adapter nun aber über die neuen
+  Verträge auf. `DisplayService`/`getDisplayContent` und `regenerateApiKey` bleiben
+  bestehende Pull-APIs für WP-14. `WebDisplayGateway` bleibt die konkrete
+  WebSocket-Implementierung hinter dem Adapter. Die aus WP-06 übernommenen
+  Datenbankspiegel (`deviceType`, `transport`, `capabilities`, Dimensionen und
+  `Model`) sowie die ESP32-Annahmen aus ADR-008 bleiben bewusst bestehen.
+- Validiert mit 501 Backend-Tests, 23 Contract-Tests, Backend- und
+  Contract-Typechecks, ESLint der geänderten Produktionsdateien, Builder- und
+  vollständigem Produktionsimage sowie einem Runtime-DI/API-Smoke für Pull und
+  WebSocket. Der Smoke fand keine Adapterfehler und keine Credentials in Logs. Die
+  bereits bestehende optionale Seed-Warnung zum im Runtime-Image nicht enthaltenen
+  TypeScript-Katalog bleibt paketfremd unverändert.
 
 ## WP-14 – Pull-Auslieferung mit ETag und Policies
 
