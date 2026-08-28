@@ -29,6 +29,13 @@ describe('startup configuration validation', () => {
     expect(knownDefault.error?.message).toContain('ADMIN_PIN must not use a known default');
   });
 
+  test('Federation defaults to no trusted proxies and only permits bounded IP literals', () => {
+    expect(validationSchema.validate(secureEnvironment).value.FEDERATION_TRUSTED_PROXIES).toBe('');
+    expect(validationSchema.validate({ ...secureEnvironment, FEDERATION_TRUSTED_PROXIES: '127.0.0.1, ::1' }).error).toBeUndefined();
+    for (const value of ['*', 'localhost', '127.0.0.0/8', '127.0.0.1,', Array(33).fill('127.0.0.1').join(',')])
+      expect(validationSchema.validate({ ...secureEnvironment, FEDERATION_TRUSTED_PROXIES: value }).error).toBeDefined();
+  });
+
   test('rejects the removed environment-key path instead of silently ignoring it', () => {
     const result = validationSchema.validate({
       ...secureEnvironment,

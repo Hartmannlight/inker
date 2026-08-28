@@ -12,6 +12,9 @@ const TEXT_SECRET_ASSIGNMENT = new RegExp(
 
 export function redactSecretText(text: string): string {
   return text
+    // Shares have a distinct namespace, so even an accidental URL/path or
+    // free-form diagnostic must not retain their bearer material.
+    .replace(/sp_share_[A-Za-z0-9_-]{64}/g, REDACTED)
     // Digest and Cookie headers can contain several comma/semicolon-separated
     // values. A complete header line is sensitive, regardless of auth scheme.
     .replace(/^([ \t]*(?:proxy-authorization|authorization|set-cookie|cookie)\s*:\s*)[^\r\n]*/gim, `$1${REDACTED}`)

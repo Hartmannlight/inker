@@ -81,7 +81,7 @@ müssen.
 | [x] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
 | [x] | WP-24 | Persistente Timer-Domäne | WP-23 |
 | [x] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
-| [ ] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
+| [x] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
 | [ ] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
 | [ ] | WP-28 | Strukturierte Logs, Metriken und Betriebszustände | WP-20 |
 | [ ] | WP-29 | Last-, Fault-, Backup- und Security-Freigabegate | WP-19, WP-21, WP-25, WP-27, WP-28 |
@@ -3096,14 +3096,14 @@ Publication-Feed und Tests. Noch kein Remote-Import-Worker.
 
 **Aufgaben:**
 
-- [ ] Definiere versionierten Federation-Capability- und Publication-Feed.
-- [ ] Begrenze ShareCredential auf read-only, eine Publication und optionalen
+- [x] Definiere versionierten Federation-Capability- und Publication-Feed.
+- [x] Begrenze ShareCredential auf read-only, eine Publication und optionalen
   Ablauf.
-- [ ] Speichere nur Credentialhash und Auditmetadaten.
-- [ ] Liefere Manifest/Artefaktmetadaten mit ETag und stabiler Remote-Server-ID.
-- [ ] Implementiere Widerruf und konstante Authfehler.
-- [ ] Verhindere Zugriff auf Entwürfe, Sources, Secrets und Gerätebefehle.
-- [ ] Ergänze Kompatibilitäts-, Scope- und Widerrufstests.
+- [x] Speichere nur Credentialhash und Auditmetadaten.
+- [x] Liefere Manifest/Artefaktmetadaten mit ETag und stabiler Remote-Server-ID.
+- [x] Implementiere Widerruf und konstante Authfehler.
+- [x] Verhindere Zugriff auf Entwürfe, Sources, Secrets und Gerätebefehle.
+- [x] Ergänze Kompatibilitäts-, Scope- und Widerrufstests.
 
 **Abnahme:** Ein ShareCredential kann ausschließlich die freigegebene Publication
 lesen und keine lokalen Aktionen auslösen.
@@ -3111,6 +3111,41 @@ lesen und keine lokalen Aktionen auslösen.
 **Validierung:** Contract-, AuthZ-, ETag- und Negative-Security-Tests.
 
 **Handoff:** Feed-Endpunkte, Version und Anforderungen an WP-27 notieren.
+
+### WP-26 Handoff – 2026-08-28
+
+- Abgenommen auf `codex/device-platform-spike`. Migration
+  `20260904000000_federation_shares`: unveränderliche Singleton-Server-ID;
+  Sharehash mit eigenem Namespace, Publication-Scope, Ablauf/Widerruf und Audit.
+  Quoten 16 aktive Shares pro Publication/128 pro Instanz sind transaktional.
+  GETs schreiben nichts, auch keine Last-Used- oder Retention-Updates.
+- Föderationsvertrag 1.0: Discovery `/api/federation/v1/capabilities`, Feed
+  `/api/federation/v1/publications/:publicationId`, Artefakte unter
+  `/revisions/:revision/artifacts/:sha256`. Feed- und Artefakt-ETags; erneute
+  Shareprüfung nach dem Lesen auch für 304. Ausschließlich persistierte,
+  hashgeprüfte veröffentlichte Bildartefakte, keine lokalen Aktionen, Timer,
+  Drafts, Source-Snapshots oder Secrets. Retained Revisions bleiben scoped lesbar.
+- TLS obligatorisch, keine Pairing-HTTP-Ausnahme. Forwarded-Scheme nur von
+  expliziten unmittelbaren IPs (`FEDERATION_TRUSTED_PROXIES`); Nginx überschreibt
+  Clientheader. Der echte HTTPS-Test entdeckte doppeltes `nosniff`; gezielt in
+  der Federation-Location korrigiert und vollständig erneut geprüft.
+- Root-Nachweise: 895 Backendtests/5754 Assertions, 77 Contracttests/1331,
+  94 Frontendtests; 15 SQLite-Integrationen/298 mit zwei echten Prozessen;
+  13 Migrationstests/221 einschließlich kompletter Bestandstabellen-/Schema-
+  Unverändertheit. Produktion und neue Tests typegeprüft, Lint und Diff grün.
+  Die Gesamtsuiten enthalten weiterhin die separat unintegrierten WP-28-Coretests.
+- Produktionsimage `inker:wp26-test`, finaler Digest
+  `sha256:2ea40d037284afbc9925963bb6b5895a4ff0bebdce04390dd8894875e16dd1e1`.
+  `backend/test/federation-container-smoke.cjs` Exit 0: eigene CA, echte
+  Zertifikatsprüfung und Ablehnung ohne CA, HTTP-/Forwarded-Spoof-Ablehnung,
+  Admin/CSRF/Device-Trennung, falscher Scope, echte zeitliche Expiration,
+  PNG-/BMP-Bytes/Hashes/ETags, 20 unverändernde Reads, alte Revision nach Publish,
+  Containerneustart mit gleicher Server-ID/Feed, Widerruf inklusive 304, Secret-
+  Audit der Logs/DB. Eigene Container und Volumes nachweislich entfernt.
+- Betrieb und WP-27-Anforderungen:
+  [FEDERATION_OPERATIONS.md](FEDERATION_OPERATIONS.md). Keine Hardwareprüfung
+  für diesen Serververtrag nötig; die schon offenen physischen Gerätemessungen
+  bleiben offen. Nächster Schritt WP-27; noch kein Remote-Import implementiert.
 
 ## WP-27 – Remote-Abonnements und lokales Fallback
 

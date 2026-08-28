@@ -21,12 +21,13 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
-- WP-00 bis WP-25 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
+- WP-00 bis WP-26 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
   Handoffs abgeglichen; keine erneute Implementierung. Hardwaremessungen offen.
-- Letzter lokaler Commit: `c7ab8b0` (WP-24). Branch unverändert.
+- Letzter lokaler Commit: `7b29bed` (WP-25). Branch unverändert.
 - WP-25 abgenommen: Scheduling, private Push/Pull, Clock-Skew, echtes Docker/Browser,
-  Integration und abschließender Secret-Audit grün. Lokaler Paketcommit folgt.
-- Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-25 aufnehmen.
+  Integration und abschließender Secret-Audit grün. Lokal committed.
+- WP-26 abgenommen, Paketcommit folgt. Danach WP-27 sichere Remote-Abonnements.
+- Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-26 aufnehmen.
   WP-28-Core-P2 (Originalrückgabe/Proxy) durch begrenzte Detachedkopie behoben.
   WP-26 bis WP-29 offen.
 
@@ -281,4 +282,25 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    danachWP26. Read-onlyWP26Inventarvorhanden:keineFederationmodelle/ServerID,
    eigeneShareAuth+reineFeedProjectionnötig(keineDeviceManifestActions/Timer/Sources).
 
-Kein Foundation-Abschluss behauptet. WP-26 bis WP-29 sind noch offen.
+9. WP26 implementiert, noch NICHT abgenommen: Migration20260904000000_federation_shares,
+   unveränderliche Singleton-Server-ID und Publication-Sharehash mit Audit/Widerruf;
+   TLS-only Guard mit expliziten unmittelbaren Proxy-IP-Literalen. Reiner Feed
+   latest/retainedArtifact, Version1.0,64KiB/8Artefakte/2MiBpro/8MiBgesamt,
+   ETags+AuthentifizierungvorundnachReadinkl304; keineSource/Timer/Aktionsdaten.
+   AgentDateienintegriertundRootgeprüft. Root895Backend/5754,77Contracts/1331,
+   94Frontend,15realeSQLite/298inkl2Prozesse,13Migrationen/221grün.
+   Produktion+neueTestsTypecheckundLintgrün. BetriebFEDERATION_OPERATIONS.md.
+   ErsterImagebuildgrün,HTTPSContainerlaufbisArtefakthash/ETaggrün,dann
+   doppelterNginx+BackendnosniffHeaderentdeckt. Gezieltesproxy_hide_headerin
+   Federationlocationbehoben;finalerImagebuildSession20341läuft. Danachganzen
+   ContainerSmokeerneutausführen,Restart/Revoke/SecretAudit/Cleanupabwarten.
+   VorherkeinIndexhakenundkeinCommit. ErsterTestcontainer+Volumesentfernt.
+   FinaleLogs.tmp/goal-wp26-*.log. AchtWP28Coredateienweiterhinseparat.
+
+   FinalesImagegrün(Digest2ea40d03), vollständigerTLSContainerSmokeExit0:
+   CAverify/HTTPspoof/CSRF/Scope/Expiry/Revoke/Revision/Restart/SecretAuditgrün,
+   eigeneContainer+Volumesnachweislichentfernt. GültigerInteractionEventim
+   Negativtestverwendet(keine400SchemaabweisungstattAuthnachweis).
+   WP26Index/Handoff/Phase8/Betriebaktualisiert, Paketcommitfolgt; danachWP27.
+
+Kein Foundation-Abschluss behauptet. WP-27 bis WP-29 sind noch offen.

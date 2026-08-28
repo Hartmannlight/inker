@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { isIP } from 'node:net';
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string()
@@ -34,6 +35,10 @@ export const validationSchema = Joi.object({
     .truthy('true')
     .falsy('false')
     .default(false),
+  FEDERATION_TRUSTED_PROXIES: Joi.string().allow('').default('').custom((value: string, helpers) => {
+    const addresses = value === '' ? [] : value.split(',').map(address => address.trim());
+    return addresses.length <= 32 && addresses.every(address => isIP(address)) ? value : helpers.error('any.invalid');
+  }),
 
   // File uploads
   MAX_FILE_SIZE: Joi.number().default(10485760),

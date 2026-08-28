@@ -556,8 +556,8 @@ keine Firmwareimplementierung oder physische Displayfunktion behauptet.
 Inhalte teilen können, ohne Displays mit mehreren Administrationszugängen zu
 belasten.
 
-- [ ] Einen minimalen versionierten Publication-Feed definieren.
-- [ ] Read-only ShareCredential auf genau eine Publication begrenzen.
+- [x] Einen minimalen versionierten Publication-Feed definieren.
+- [x] Read-only ShareCredential auf genau eine Publication begrenzen.
 - [ ] RemoteServer und RemoteSubscription persistieren.
 - [ ] HTTPS-Verifikation, URL-Normalisierung und Vertrauensanzeige implementieren.
 - [ ] Remote-Manifeste per Conditional GET und begrenztem Worker abrufen.

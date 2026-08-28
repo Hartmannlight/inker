@@ -101,6 +101,79 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-26 adds empty federation storage without changing any existing rows or table definitions', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp26-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations'), latest = '20260904000000_federation_shares';
+    const names = readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort();
+    expect(names[names.length - 1]).toBe('20260903000000_timers');
+    applySql(databasePath, [join(migrations, names[0], 'migration.sql'),
+      join(import.meta.dir, 'fixtures', 'inker-0.6.0-data.sql'),
+      ...names.slice(1).map(name => join(migrations, name, 'migration.sql'))]);
+    const database = new Database(databasePath, { strict: true });
+    try {
+      database.exec(`PRAGMA foreign_keys=ON;
+        INSERT INTO admin_accounts(admin_id,display_name,credential_version,updated_at)
+          VALUES('existing-admin','Existing Administrator',7,'2026-08-01T12:00:00.000Z');
+        INSERT INTO admin_credentials(credential_id,admin_id,kind,password_hash)
+          VALUES('existing-password','existing-admin','password','synthetic-adaptive-hash');
+        INSERT INTO admin_sessions(session_id,admin_id,token_hash,csrf_token_hash,expires_at)
+          VALUES('existing-session','existing-admin','synthetic-session-hash','synthetic-csrf-hash','2027-08-01T12:00:00.000Z');
+        INSERT INTO device_credentials(credential_id,device_id,token_hash)
+          VALUES('existing-device-credential',1,'synthetic-device-hash');
+        INSERT INTO publications(publication_id,publication_key) VALUES('existing-publication','wp26-upgrade');
+        INSERT INTO publication_revisions(publication_revision_id,publication_id,revision,protocol_version,content,content_hash)
+          VALUES('existing-revision','existing-publication',5,'1.0','{"schemaVersion":1,"fixtureArtifacts":["mono-800x480-white-png"]}','synthetic-content-hash');
+        INSERT INTO device_publication_states(device_id,desired_publication_revision_id,acknowledged_publication_revision_id,desired_sequence,updated_at)
+          VALUES(1,'existing-revision','existing-revision',42,'2026-08-01T12:00:00.000Z');
+        INSERT INTO timers(timer_id,version,creator_device_id,creator_external_id,visibility,status,duration_ms,started_at,ends_at,paused_remaining_ms,evaluated_at,completed_at,acknowledged_at,acknowledged_by_device_id,acknowledged_by_external_id)
+          VALUES('existing-running',3,1,'existing-external-id','shared','running',10000,10000,20000,NULL,12000,NULL,NULL,NULL,NULL),
+                ('existing-paused',4,1,'existing-external-id','private','paused',10000,10000,NULL,6000,14000,NULL,NULL,NULL,NULL),
+                ('existing-acknowledged',5,1,'existing-external-id','shared','completed',10000,10000,20000,NULL,21000,20000,21000,1,'existing-external-id');
+        INSERT INTO outbox_events(event_id,event_type,aggregate_type,aggregate_id,aggregate_revision,payload,status,attempts,claim_token,claim_owner,claim_until)
+          VALUES('existing-outbox','timer.completion.due','Timer','existing-running','3','{"timerId":"existing-running","version":3,"dueAt":20000}','processing',2,'existing-claim','existing-worker','2026-08-01T12:00:00.000Z');
+        INSERT INTO outbox_effects(key,event_id,completed_at)
+          VALUES('existing-effect','previous-delivery','2026-08-01T12:00:00.000Z');
+        INSERT INTO outbox_deliveries(delivery_id,effect_key,device_id,presentation)
+          VALUES('existing-delivery','existing-effect',1,'{"revision":42}');
+        INSERT INTO outbox_targets(effect_key,consumer_id,delivered)
+          VALUES('existing-effect','existing-consumer',1);
+        INSERT INTO source_secrets(id,ciphertext) VALUES('existing-secret','synthetic-ciphertext');
+        INSERT INTO source_definitions(source_definition_id,name,connector_type,schema_version,configuration,secret_id,refresh_interval_seconds,timeout_ms,concurrency_group,next_refresh_at,updated_at,transformation_code)
+          VALUES('existing-source','Existing source','fixture','1','{"data":{"value":7}}','existing-secret',60,500,'provider',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'return data;');
+        INSERT INTO interaction_receipts(device_id,event_id,command_id,credential_id,publication_id,publication_revision,action,request_hash,result)
+          VALUES(1,'existing-interaction','existing-command','existing-device-credential','existing-publication','5','view.next','synthetic-request-hash','{"status":"accepted"}');
+        INSERT INTO interaction_rates(device_id,minute_at,minute_count,second_at,second_count)
+          VALUES(1,CURRENT_TIMESTAMP,7,CURRENT_TIMESTAMP,2);
+        INSERT INTO interaction_sequences(credential_id,last_sequence,updated_at)
+          VALUES('existing-device-credential',42,CURRENT_TIMESTAMP);`);
+      expect(database.query('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+      const tables = database.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .all().map(row => row.name);
+      const rows = () => Object.fromEntries(tables.map(table => [table,
+        database.query('SELECT * FROM "' + table + '" ORDER BY rowid').all()]));
+      const definitions = () => database.query<{ type: string; name: string; tbl_name: string; sql: string | null }, []>(
+        'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all()
+        .filter(row => tables.includes(row.tbl_name));
+      const beforeRows = rows(), beforeDefinitions = definitions();
+      for (const table of ['admin_accounts', 'admin_credentials', 'admin_sessions', 'devices', 'device_credentials',
+        'publications', 'publication_revisions', 'device_publication_states', 'timers', 'outbox_events', 'outbox_effects',
+        'outbox_deliveries', 'outbox_targets', 'source_secrets', 'source_definitions', 'interaction_receipts',
+        'interaction_rates', 'interaction_sequences']) expect(beforeRows[table].length, table).toBeGreaterThan(0);
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(rows()).toEqual(beforeRows);
+      expect(definitions()).toEqual(beforeDefinitions);
+      expect(database.query('SELECT * FROM federation_identity').all()).toEqual([]);
+      expect(database.query('SELECT * FROM share_credentials').all()).toEqual([]);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    // Finish any later migrations before comparing with the current datamodel.
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort()
+      .map(name => join(migrations, name, 'migration.sql')));
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  }, 30_000);
+
   test('WP-24 preserves prior records and enforces timer states, integer limits and nullable device references', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp24-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260903000000_timers';
@@ -521,6 +594,7 @@ describe("Prisma migration baseline", () => {
         "20260901000000_source_transformations",
         "20260902000000_interactions",
         "20260903000000_timers",
+        "20260904000000_federation_shares",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

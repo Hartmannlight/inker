@@ -60,6 +60,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
   /** Strip query parameters from URL to prevent token leakage in logs */
   private sanitizeUrl(url: string): string {
     const qIndex = url.indexOf('?');
-    return qIndex >= 0 ? url.substring(0, qIndex) : url;
+    return redactSecretText(qIndex >= 0 ? url.substring(0, qIndex) : url);
   }
 }

@@ -32,6 +32,10 @@ export const configuration = () => ({
     trustProxy: process.env.PAIRING_TRUST_PROXY === 'true',
   },
 
+  federation: {
+    trustedProxies: process.env.FEDERATION_TRUSTED_PROXIES || '',
+  },
+
   upload: {
     maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10), // 10MB
     screensDir: process.env.SCREENS_DIR || './uploads/screens',

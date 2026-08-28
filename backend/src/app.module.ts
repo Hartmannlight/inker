@@ -32,6 +32,7 @@ import { InteractionsModule } from './interactions/interactions.module';
 import { DeviceEnrollmentModule } from './device-enrollment/device-enrollment.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
+import { FederationModule } from './federation/federation.module';
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { validationSchema } from './config/validation.schema';
     SourcesModule,
     InteractionsModule,
     DeviceEnrollmentModule,
+    FederationModule,
     SettingsModule,
     PluginsModule,
     ModelsModule,

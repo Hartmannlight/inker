@@ -11,6 +11,20 @@ coverage
 *.log
 .DS_Store
 
+# Local QA, recovery material and instance secrets never enter build context.
+/.tmp
+/tmp
+/.wp00-backups
+/upstream
+/reference-checkouts
+backend/secrets
+backend/.render-cache
+**/*.pem
+**/*.key
+**/*.db
+**/*.db-wal
+**/*.db-shm
+
 # Dev files
 backend/Dockerfile.dev
 frontend/Dockerfile.dev

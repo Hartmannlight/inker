@@ -43,6 +43,11 @@ den stabilen Importnamen `@inker/contracts` eingebunden.
 - `InteractionEvent` und `CommandResult` bilden idempotente Aktionen und deren
   Ergebnis ab. Das Geräte-Credential wird nur über `credentialId` referenziert,
   nicht als Secret übertragen.
+- `FederationCapabilities` und `FederationPublicationFeed` beschreiben einen
+  begrenzten, read-only Publication-Export mit stabiler Server-ID und
+  hashgebundenen Artefaktpfaden. Share-Credentials sind kein Bestandteil des
+  Feedvertrags. Betriebsgrenzen stehen in
+  [FEDERATION_OPERATIONS](../docs/architecture/FEDERATION_OPERATIONS.md).
 
 Die vier Profile unter `fixtures/profiles/` sind Contract-Beispiele. Insbesondere
 ist das 480×480-ESP32-Profil ausdrücklich eine Referenz-Fixture und keine

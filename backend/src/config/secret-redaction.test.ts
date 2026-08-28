@@ -74,6 +74,14 @@ describe('secret redaction', () => {
     }
   });
 
+  test('redacts standalone Federation share credentials in paths and prose', () => {
+    const token = `sp_share_${'a'.repeat(64)}`;
+    expect(redactSecretText(`/api/federation/${token}/feed failed ${token}`))
+      .toBe('/api/federation/[REDACTED]/feed failed [REDACTED]');
+    expect(redactLogValue({ message: token, credentialId: 'public-identity' }))
+      .toEqual({ message: '[REDACTED]', credentialId: 'public-identity' });
+  });
+
   test('redacts quoted JSON values without losing adjacent diagnostic fields', () => {
     const document = {
       password: 'synthetic marker with spaces, a comma; and an escaped "quote"',
