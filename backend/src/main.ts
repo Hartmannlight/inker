@@ -55,12 +55,14 @@ async function bootstrap() {
   // Enable CORS - restrict origins via CORS_ORIGINS env (comma-separated)
   // Default: same-origin only (derived from request). Set CORS_ORIGINS=* to allow all.
   const corsOrigins = process.env.CORS_ORIGINS;
+  const exposedHeaders = ['ETag', 'X-Server-Time', 'X-Correlation-ID', 'X-Refresh-After-Seconds', 'X-Delivery-Mode'];
   if (corsOrigins === '*') {
-    app.enableCors();
+    app.enableCors({ exposedHeaders });
   } else if (corsOrigins) {
     app.enableCors({
       origin: corsOrigins.split(',').map((o) => o.trim()),
       credentials: true,
+      exposedHeaders,
     });
   } else {
     // Default: allow same-origin requests only
@@ -72,6 +74,7 @@ async function bootstrap() {
         callback(new Error('CORS not allowed'), false);
       },
       credentials: true,
+      exposedHeaders,
     });
   }
 

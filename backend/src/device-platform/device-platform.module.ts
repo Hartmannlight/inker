@@ -19,10 +19,12 @@ import { PullDeviceAuthService } from './pull-device-auth.service';
 import { PullLastSeenService } from './pull-last-seen.service';
 import { WebSocketTelemetryService } from './websocket-telemetry.service';
 import { RenderCacheModule } from '../render-cache/render-cache.module';
+import { TimerCoreModule } from '../timers/timer-core.module';
+import { TimersController } from './timers.controller';
 
 @Module({
-  imports: [PrismaModule, DiscoveryModule, RenderCacheModule],
-  controllers: [WebDisplaysController, PullContentController],
+  imports: [PrismaModule, DiscoveryModule, RenderCacheModule, TimerCoreModule],
+  controllers: [WebDisplaysController, PullContentController, TimersController],
   providers: [
     PullContentService,
     PullDeviceAuthService,

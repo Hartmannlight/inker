@@ -534,17 +534,21 @@ Persistenz, Zeit und mehrere Displays.
 - [x] Event-IDs deduplizieren und Wiederholungen idempotent beantworten (WP-23).
 - [x] Publication-spezifische Aktionsrechte prüfen (WP-23).
 - [x] Persistentes Timer-Modell und Zustandsautomat implementieren (WP-24).
-- [ ] Timerabschluss als durable Queue-Aufgabe planen.
-- [ ] Timer nach Neustart rekonstruieren und überfällige Abschlüsse nachholen.
-- [ ] Serverzeit/-offset an Clients liefern; Countdown lokal aus `endsAt`
+- [x] Timerabschluss als durable Queue-Aufgabe planen (WP-25).
+- [x] Timer nach Neustart rekonstruieren und überfällige Abschlüsse nachholen (WP-25).
+- [x] Serverzeit/-offset an Clients liefern; Countdown lokal aus `endsAt`
   darstellen.
-- [ ] Timerzustand an alle berechtigten verbundenen Displays pushen.
-- [ ] Pull-Geräten beim nächsten Abruf denselben Zustand liefern.
-- [ ] Parallel-, Doppel-Tap-, Offline-, Neustart- und Uhrabweichungstests
+- [x] Timerzustand an alle berechtigten verbundenen Displays pushen (WP-25).
+- [x] Pull-Geräten beim nächsten Abruf denselben Zustand liefern (WP-25).
+- [x] Parallel-, Doppel-Tap-, Offline-, Neustart- und Uhrabweichungstests
   erstellen.
 
 **Gate:** Ein ESP32 erzeugt einen Timer, der auf Pi-Browser und späterem
 TRMNL-Pull konsistent erscheint und einen Serverneustart überlebt.
+
+Software-/Protokollnachweis WP-25 mit echten HTTP-/WS-/Redis- und Browserläufen
+erfüllt. Physische ESP32-/Pi-/TRMNL-Prüfungen mangels Hardware weiterhin offen;
+keine Firmwareimplementierung oder physische Displayfunktion behauptet.
 
 ### Phase 8 – Server-zu-Server-Abonnements
 

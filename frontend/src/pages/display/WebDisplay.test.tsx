@@ -424,6 +424,18 @@ describe('WebDisplay credential lifecycle', () => {
     for (const spy of logSpies) spy.mockRestore();
   });
 
+  it('preserves the timer test opt-in during pairing and loads only after authenticated connection', async () => {
+    const fetcher = vi.fn().mockResolvedValue(statusResponse(200, { data: { credential: 'timer-credential', credentialId: 'credential-7',
+      device: { id: 7, name: 'Timer display', externalId: DISPLAY_ID, profileId: 'browser-hd-1920x1080' } } }));
+    vi.stubGlobal('fetch', fetcher);
+    renderDisplay('/display/pair?code=ABCDE-FGHJK&test=timers');
+    await waitFor(() => expect(window.location.pathname).toBe(`/display/${DISPLAY_ID}`));
+    expect(window.location.search).toBe('?test=timers');
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(screen.getByRole('region', { name: 'Timer-Test' })).toBeInTheDocument();
+    expect(window.location.href).not.toContain('timer-credential');
+  });
+
   it.each([
     [400, 'Der Code ist ungültig, abgelaufen oder wurde bereits verwendet.'],
     [403, 'Der Server hat die Kopplung abgelehnt. Prüfe HTTPS und die Serverfreigabe.'],

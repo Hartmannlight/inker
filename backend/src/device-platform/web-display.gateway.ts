@@ -107,6 +107,35 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
     return run;
   }
 
+  /** A tiny invalidation only: the authenticated feed owns timer visibility/data. */
+  async pushTimersChanged(deviceId: number, context?: DeliveryContext): Promise<void> {
+    context?.signal.throwIfAborted();
+    if (this.closing || !this.isConnected(deviceId)) return;
+    const states = [...(this.connections.get(deviceId) ?? [])];
+    const deliver = async () => {
+      for (const state of states) {
+        context?.signal.throwIfAborted();
+        if (!await this.check(state)) continue;
+        context?.signal.throwIfAborted();
+        await this.operation(state, () => this.sendConfirmed(state, { protocolVersion: '1.0', type: 'timers.changed' }));
+        context?.signal.throwIfAborted();
+      }
+    };
+    try {
+      if (!context) { await deliver(); return; }
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => reject(new Error('OUTBOX_ADAPTER_ABORTED'));
+        context.signal.addEventListener('abort', abort, { once: true });
+        if (context.signal.aborted) abort();
+        void deliver().then(resolve, reject).finally(() => context.signal.removeEventListener('abort', abort));
+      });
+    } catch {
+      // Abort closes pending sends and releases bounded per-connection operations.
+      for (const state of states) this.fail(state);
+      if (context) throw new Error('OUTBOX_ADAPTER_FAILED');
+    }
+  }
+
   private async deliver(deviceId: number, context?: DeliveryContext): Promise<void> {
     const states = [...(this.connections.get(deviceId) ?? [])];
     try {

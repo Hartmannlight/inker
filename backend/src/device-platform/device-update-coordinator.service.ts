@@ -107,6 +107,7 @@ export class DeviceUpdateCoordinator {
           await this.refreshDevices([delivery.deviceId], {
             deliveryId: delivery.deliveryId,
             signal: abort.signal,
+            ...(parsed.stateChange ? { stateTopic: parsed.stateChange.topic } : {}),
           });
         }
         abort.signal.throwIfAborted();

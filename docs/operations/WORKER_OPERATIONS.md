@@ -106,11 +106,11 @@ telemetry can still write SQLite. Follow `DATABASE_BACKUP.md` and
 
 ## Repeat the process checks
 
-After building a local `inker:wp24-test` image, run from `backend/`:
+After building a local `inker:wp25-test` image, run from `backend/`:
 
 ```text
-INKER_SMOKE_IMAGE=inker:wp24-test node test/websocket-container-smoke.cjs
-INKER_SMOKE_IMAGE=inker:wp24-test node test/worker-startup-container.cjs
+INKER_SMOKE_IMAGE=inker:wp25-test node test/websocket-container-smoke.cjs
+INKER_SMOKE_IMAGE=inker:wp25-test node test/worker-startup-container.cjs
 bun test ./test/outbox-redis.integration.ts
 ```
 
@@ -124,4 +124,10 @@ It also checks the authenticated [interaction pipeline](../architecture/INTERACT
 concurrent duplicate touch events and their durable receipt after restart.
 The [timer domain](../architecture/TIMER_OPERATIONS.md) fixture covers private/shared
 authorization, state transitions and persistent anchors without database ticks.
-On PowerShell set `$env:INKER_SMOKE_IMAGE='inker:wp24-test'` before the Node command.
+On PowerShell set `$env:INKER_SMOKE_IMAGE='inker:wp25-test'` before the Node command.
+
+WP-25 adds durable timer completion to the existing timer queue, including startup
+reconstruction from SQLite, authorized WS invalidations and the next pull state.
+Unchanged recovery is read-only; early execution after a clock correction is deferred
+without consuming the failure budget. See [timer operations](../architecture/TIMER_OPERATIONS.md)
+for deadline recovery, private/shared visibility and the isolated two-browser fixture.

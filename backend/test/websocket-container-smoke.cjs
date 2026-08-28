@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { execFile, execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp24-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp25-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
@@ -89,7 +89,7 @@ async function main() {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
       '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets',
-      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp24-test');
+      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp25-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'large database inspection pipe regression';
     assert.equal(db("await p.$queryRawUnsafe('SELECT 1'); console.log(JSON.stringify('x'.repeat(256000)));").length, 256000);
@@ -331,7 +331,11 @@ async function main() {
     stage = 'pull-create';
     const pull = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 pull', macAddress: 'AA:15:00:00:00:01' } })).body;
     interactionBeforeRestart = await require('./fixtures/interaction-container-check.cjs')({ request, db, renderedFor, secrets, setStage: value => { stage = value; } });
-    timersBeforeRestart = await require('./fixtures/timer-domain-container-check.cjs')({ request, db, renderedFor, until, secrets, setStage: value => { stage = value; } });
+    timersBeforeRestart = await require('./fixtures/timer-domain-container-check.cjs')({ request, db, renderedFor, until, secrets, connect,
+      setStage: value => { stage = value; }, worker: async enabled => {
+        await dockerAsync('exec', name, '/command/s6-svc', enabled ? '-u' : '-d', '/run/service/worker');
+        await until(() => workerReady() === enabled, 400);
+      } });
     stage = 'pull-setup';
     const setup = await request('/api/setup', { headers: { HTTP_ID: 'AA:15:00:00:00:01' } }); assert.equal(setup.response.status, 200);
     pull.apiKey = setup.body.api_key; assert.ok(pull.apiKey); secrets.push(pull.apiKey);

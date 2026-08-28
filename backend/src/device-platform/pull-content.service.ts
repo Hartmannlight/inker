@@ -9,6 +9,8 @@ import { TransportAdapterRegistry } from './transport-adapter.registry';
 import { publicationAllowedActions, publicationArtifacts } from '../publications/publication-content';
 import { PullLastSeenService } from './pull-last-seen.service';
 import { RenderCacheService } from '../render-cache/render-cache.service';
+import { TimerService } from '../timers/timer.service';
+import { timerFeedResult } from '../timers/timer-feed';
 
 type PullDevice = Prisma.DeviceGetPayload<{ include: { profile: true; deliveryPolicy: true } }>;
 
@@ -21,9 +23,10 @@ export class PullContentService {
     private readonly transports: TransportAdapterRegistry,
     private readonly lastSeen: PullLastSeenService,
     @Optional() private readonly cache?: RenderCacheService,
+    @Optional() private readonly timers?: TimerService,
   ) {}
 
-  async read(device: PullDevice) {
+  async read(device: PullDevice, includeTimers = true) {
     const { configuration, hints } = this.resolve(device);
     const state = await this.prisma.devicePublicationState.findUnique({
       where: { deviceId: device.id }, include: { desiredRevision: true },
@@ -42,6 +45,8 @@ export class PullContentService {
     if (!artifact) throw new NotAcceptableException('No compatible published artifact');
     const allowedActions = cached && !cached.fallback && revision.publicationRevisionId === desired.publicationRevisionId
       ? publicationAllowedActions(revision) : [];
+    const timerState = includeTimers && this.timers
+      ? timerFeedResult(await this.timers.listForAuthenticatedDevice(device.id)) : undefined;
 
     const variantId = `${artifact.format}-${artifact.width}x${artifact.height}-${artifact.bitDepth}-${artifact.rotation}`;
     const contentTag = createHash('sha256').update(JSON.stringify([
@@ -50,6 +55,7 @@ export class PullContentService {
       // Revoking rights on fallback must invalidate an authorized manifest even
       // when its previously rendered image and revision remain identical.
       ...(allowedActions.length ? [allowedActions] : []),
+      ...(timerState ? [timerState.etag] : []),
     ])).digest('hex');
     const artifactEtag = `"${artifact.sha256}"`;
     const manifest: PresentationManifest = {
@@ -62,6 +68,7 @@ export class PullContentService {
         mimeType: artifact.mimeType, sizeBytes: artifact.bytes.length, sha256: artifact.sha256, etag: artifactEtag }],
       refresh: { refreshAfterSeconds: hints.refreshAfterSeconds },
       allowedActions,
+      ...(timerState ? { timerState: timerState.feed } : {}),
       ...(cached?.fallback ? { fallbackRevision: String(revision.revision) } : {}),
       metadata: { desiredRevision: String(desired.revision), fallback: cached?.fallback ?? false,
         ...(cached ? { rendererVersion: cached.rendererVersion } : {}),

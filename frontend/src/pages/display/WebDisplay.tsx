@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { config } from '../../config';
 import { comparePresentationRevisions, parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
+import { TimerTestPanel } from './TimerTestPanel';
 import {
   exchangeDeviceEnrollment,
   normalizePairingBaseUrl,
@@ -48,6 +49,8 @@ export function WebDisplay() {
   const initialExternalId = routeExternalId === 'pair' ? '' : routeExternalId;
   const initialSearch = useRef(new URLSearchParams(window.location.search));
   const initialShortCode = useRef(initialSearch.current.get('code'));
+  const [timerTest] = useState(() => initialSearch.current.get('test') === 'timers');
+  const [timerRefreshSignal, setTimerRefreshSignal] = useState(0);
   const [activeExternalId, setActiveExternalId] = useState(initialExternalId);
   const initialStorageKey = initialExternalId ? `inker_display_${initialExternalId}` : null;
   const [credential, setCredential] = useState(() => initialStorageKey ? localStorage.getItem(initialStorageKey) : null);
@@ -104,13 +107,20 @@ export function WebDisplay() {
       window.history.replaceState(
         window.history.state,
         '',
-        `/display/${encodeURIComponent(result.device.externalId)}`,
+        `/display/${encodeURIComponent(result.device.externalId)}${timerTest ? '?test=timers' : ''}`,
       );
     } catch (error) {
       setState('error');
       setMessage(shortPairingMessage(error));
     }
-  }, []);
+  }, [timerTest]);
+
+  const timerUnauthorized = useCallback(() => {
+    if (storageKey && localStorage.getItem(storageKey) === credential) localStorage.removeItem(storageKey);
+    setCredential(storageKey ? localStorage.getItem(storageKey) : null);
+    setState('unpaired');
+    setMessage('Pairing is no longer valid. Generate a new pairing link.');
+  }, [storageKey, credential]);
 
   useEffect(() => {
     if (!initialShortCode.current || shortPairingStarted.current) return;
@@ -200,8 +210,12 @@ export function WebDisplay() {
             armWatchdog();
             setState('connected');
             setMessage('Connected');
+            if (timerTest) setTimerRefreshSignal(value => value + 1);
           } else if (data.type === 'presentation.changed') {
             void preloadPresentation(data.presentation);
+            if (timerTest) setTimerRefreshSignal(value => value + 1);
+          } else if (data.type === 'timers.changed') {
+            if (timerTest) setTimerRefreshSignal(value => value + 1);
           } else if (data.type === 'ping') {
             armWatchdog();
             socket?.send(JSON.stringify({ protocolVersion: '1.0', type: 'pong', nonce: data.nonce }));
@@ -292,7 +306,7 @@ export function WebDisplay() {
       window.removeEventListener('resize', reportViewport);
       socket?.close(1000, 'Display closed');
     };
-  }, [activeExternalId, connectionApiUrl, credential, pairingToken, storageKey]);
+  }, [activeExternalId, connectionApiUrl, credential, pairingToken, storageKey, timerTest]);
 
   const submitShortCode = (event: React.FormEvent) => {
     event.preventDefault();
@@ -303,6 +317,9 @@ export function WebDisplay() {
 
   return (
     <main className="fixed inset-0 overflow-auto" style={{ background: presentation?.content.background ?? '#050505' }}>
+      {timerTest && credential && activeExternalId && !pairingToken && <TimerTestPanel
+        key={`${connectionApiUrl}|${activeExternalId}|${credential}`} apiUrl={connectionApiUrl} externalId={activeExternalId}
+        credential={credential} connected={state === 'connected'} refreshSignal={timerRefreshSignal} onUnauthorized={timerUnauthorized} />}
       {presentation && (
         <img
           key={`${presentation.revision}:${presentation.renderRevision ?? 0}`}

@@ -52,6 +52,7 @@ export type DeviceServerMessage = Envelope & (
   | { type: 'connected'; deviceId: number; heartbeatInterval: number; pongTimeout: number; telemetryInterval: number }
   | { type: 'ping'; nonce: string; timestamp: number }
   | { type: 'presentation.changed'; presentation: WebDisplayManifest }
+  | { type: 'timers.changed' }
 );
 
 function record(value: unknown): Record<string, unknown> {
@@ -142,6 +143,9 @@ export function parseDeviceServerMessage(value: unknown): ParseResult<DeviceServ
         telemetryInterval: integer(r.telemetryInterval, 60000, 2147483647) };
       case 'ping': return { protocolVersion, type: r.type, nonce: text(r.nonce, 64, /^[A-Za-z0-9_-]+$/), timestamp: integer(r.timestamp, 0) };
       case 'presentation.changed': return { protocolVersion, type: r.type, presentation: manifest(r.presentation) };
+      case 'timers.changed':
+        if (Reflect.ownKeys(r).some(key => typeof key !== 'string' || !['protocolVersion', 'type'].includes(key))) throw new Error();
+        return { protocolVersion, type: r.type };
       default: throw new Error();
     }
   });

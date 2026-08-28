@@ -207,8 +207,16 @@ export class OutboxStore {
       await tx.outboxEffect.create({
         data: { key: parsed.key, eventId: event.eventId },
       });
+      let recipients: Prisma.DeviceWhereInput = { id: { in: parsed.deviceIds } };
+      if (parsed.stateChange?.topic === 'timers') {
+        const timer = await tx.timer.findUnique({ where: { timerId: parsed.stateChange.timerId },
+          select: { visibility: true, creatorDeviceId: true } });
+        recipients = timer?.visibility === 'shared' ? { isActive: true }
+          : timer?.visibility === 'private' && timer.creatorDeviceId !== null
+            ? { id: timer.creatorDeviceId, isActive: true } : { id: { in: [] } };
+      }
       const devices = await tx.device.findMany({
-        where: { id: { in: parsed.deviceIds } },
+        where: recipients,
         select: { id: true },
       });
       if (devices.length)

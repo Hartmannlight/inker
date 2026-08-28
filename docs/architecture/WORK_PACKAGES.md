@@ -80,7 +80,7 @@ müssen.
 | [x] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
 | [x] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
 | [x] | WP-24 | Persistente Timer-Domäne | WP-23 |
-| [ ] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
+| [x] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
 | [ ] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
 | [ ] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
 | [ ] | WP-28 | Strukturierte Logs, Metriken und Betriebszustände | WP-20 |
@@ -3001,14 +3001,14 @@ ESP32-/Browser-Testoberfläche. Kein allgemeines Timer-Widgetdesign.
 
 **Aufgaben:**
 
-- [ ] Plane pro laufendem Timer einen idempotenten Abschlussjob.
-- [ ] Rekonstruiere zukünftige Jobs und schließe überfällige Timer beim Start ab.
-- [ ] Verhindere doppelte Completion bei Worker-Race/Retry.
-- [ ] Push Timeränderungen an berechtigte verbundene Displays.
-- [ ] Integriere Timerzustand in den nächsten Pull-Zustand für E-Ink.
-- [ ] Liefere Serverzeit/Offset für lokale Countdownanzeige.
-- [ ] Baue einen minimalen Testscreen zum Erstellen und Beobachten.
-- [ ] Teste Neustart, Offline, Doppel-Tap, zwei Displays und Clock Skew.
+- [x] Plane pro laufendem Timer einen idempotenten Abschlussjob.
+- [x] Rekonstruiere zukünftige Jobs und schließe überfällige Timer beim Start ab.
+- [x] Verhindere doppelte Completion bei Worker-Race/Retry.
+- [x] Push Timeränderungen an berechtigte verbundene Displays.
+- [x] Integriere Timerzustand in den nächsten Pull-Zustand für E-Ink.
+- [x] Liefere Serverzeit/Offset für lokale Countdownanzeige.
+- [x] Baue einen minimalen Testscreen zum Erstellen und Beobachten.
+- [x] Teste Neustart, Offline, Doppel-Tap, zwei Displays und Clock Skew.
 
 **Abnahme:** Ein ESP32-/Browser-Client erstellt einen Timer, Pi-Browser sieht ihn
 sofort, TRMNL beim nächsten Pull und ein Serverneustart ändert das Ergebnis nicht.
@@ -3016,6 +3016,70 @@ sofort, TRMNL beim nächsten Pull und ein Serverneustart ändert das Ergebnis ni
 **Validierung:** End-to-End-, Restart-, Multi-Client- und Fake-Clock-Test.
 
 **Handoff:** Referenzablauf und spätere Widget-/Benachrichtigungsfragen notieren.
+
+### Abschluss WP-25 (2026-08-28)
+
+- Softwareabnahme erfolgreich auf `codex/device-platform-spike`, Basis `c7ab8b0`.
+  Lokaler Paketcommit folgt nach diesem Handoff; kein Push, Merge oder Deployment.
+  Physische ESP32-/Pi-/TRMNL-Prüfungen bleiben mangels Hardware ausdrücklich offen.
+- Laufende Timerversionen planen atomar `timer.completion.due` mit deterministischer
+  ID aus Timer/Version/Deadline. Alte ausstehende Jobs werden erledigt; beanspruchte
+  alte Versionen sind wirkungslos. Timerqueue global zwei Slots, acht Sekunden
+  Timeout, fünf tatsächliche Fehlversuche. Startup rekonstruiert fehlende zukünftige
+  und überfällige Jobs aus SQLite; nur Startup reaktiviert aktuelle Deadletters.
+  Normale Fünfsekunden-Recovery ist bei vorhandenen Fristen ausschließlich lesend.
+- Completion prüft Claim, Lease, Status, Version und Deadline, schreibt Zustand,
+  Event und Effect atomar und prüft die Lease vor Commit erneut. Nach Absturz
+  zwischen Commit und Bestätigung verhindert der Effect eine zweite Completion.
+  `completedAt` bleibt auch nach Downtime die ursprüngliche Deadline. Ein
+  Uhr-Rücksprung stellt einen frühen Job ohne Budgetverbrauch zurück.
+- Autorisierte WS-Invalidierung `timers.changed` enthält keine Timerdaten oder
+  IDs. Empfänger stammen aus der Timer-Sichtbarkeit, aktuelle Credentials werden
+  vor dem begrenzten Send geprüft. Kein Renderauftrag oder künstlicher
+  Presentation-/Render-Versionswechsel. Private Timer bleiben beim Ersteller;
+  geteilte Timer sind für aktive lokale Geräte sichtbar.
+- `GET /api/timers` liefert direkt den geprüften `TimerFeed` (100 Zeilen/128 KiB),
+  ETag über sichtbare Snapshots und `X-Server-Time` auch bei 304. Device-Bearer und
+  vorhandenes Legacy-Pull-Credential erlauben Lesen; Adminsession, MAC und URL-
+  Credentials nicht. Legacygeräte ohne externe ID bleiben ohne Command-Rechte.
+  Nächster Pull enthält `timerState`; Timeränderungen ändern nur den Manifest-ETag,
+  nicht die Artefakte. Artefaktlesevorgänge scannen keine Timer.
+- Minimale Browser-Testansicht unter `/display/<externalId>?test=timers`; Parameter
+  bleibt beim Pairing erhalten. Explizite Publication-Aktionen steuern Befehle.
+  Lokaler Countdown nutzt Serverprobe, Roundtrip-Ausgleich und `performance.now`,
+  mit Untergrenze `evaluatedAt` und oberer ISO-Zeitgrenze. Coalescing, identisches
+  Retry-Event, Doppeltap-Sperre, Offlinezustand, Reconnect-Race und Entfernung
+  privater Daten bei Credential-/Identitätswechsel sind getestet.
+- Hauptagent: final 843 Backendtests/5.530 Assertions; 66 Contracttests/994;
+  94 Frontendtests; 13 vorhandene Timerintegrationen und final 16 Scheduling-
+  Integrationen/144 mit echten Worker-Prozessen. 148 übrige Integrationen geprüft:
+  zunächst drei veraltete Ganzkörpervergleiche wegen neuer Serverzeit erkannt,
+  nur diese Zeit nach kanonischer ISO-Prüfung im Vergleich normalisiert; beide
+  vollständigen betroffenen Dateien anschließend 41/41 mit 2.782 Assertions.
+  Alle übrigen Manifest-, ETag-, Auth- und Null-Schreibprüfungen unverändert.
+  Ein Isolationstest erreichte unter parallelem Imagebuild die unveränderte
+  2,5s-Grenze; nach Build 14/14 Isolation und ganze 843er-Suite grün, kein Limitfix.
+  Produktions-/Test-Typechecks, gezieltes Lint und Whitespace-Prüfung grün.
+- Finales `inker:wp25-test` gebaut und vollständiger Produktions-Smoke Exit 0:
+  echtes HTTP/WS/Redis, zwei Display-Principals, private Zustellung, automatische
+  Completion, offline/reconnect, nächster TRMNL-Pull, absichtlich entfernte
+  isolierte Jobs beim Workerstart rekonstruiert, Containerrestart und Secret-Audit.
+  API-p95 mit eingefrorenem Worker 36,0 ms; Isolation SIGSTOP→Kill 2.519,5 ms,
+  Login 103,1 ms, 20 API-/Artefaktlesevorgänge p95 57,0 ms.
+- Zusätzliche echte In-App-Browserprüfung in separater Fixture: zwei gekoppelte
+  Displays, Doppelklick genau ein Timer/eine Receipt, geteilte Pause/Fortsetzung/
+  Abbruch, privater Timer beim anderen unsichtbar, lokal 0 s während API offline,
+  Workerabschluss unverändert, automatischer Reconnect liest completed v2,
+  Quittierung v3 und Reload ohne offene Timer. Finale sechs Browserbefehle,
+  genau zwei Timer. Layout per Screenshot geprüft. Alle Testcontainer/Volumes
+  entfernt; keine fremden Dienste verändert.
+- Reviewkorrekturen: Recovery-Writerlocks, Uhr-Rücksprung/Retrybudget, unmittelbarer
+  Reconnect bei noch laufendem Fetch und Countdown bei rückwärtiger Serverprobe.
+  Keine offenen Softwareblockaden. Protokollnachweis ersetzt keinen physischen
+  Firmwaretest; unveränderte TRMNL-Firmware zeichnet das neue JSON nicht selbst.
+  Allgemeine Widgets, Alarm-/Benachrichtigungsdesign und Firmware bleiben außerhalb
+  des Scopes. Referenzablauf und Betriebsgrenzen: [TIMER_OPERATIONS.md](TIMER_OPERATIONS.md).
+  Nächster Schritt WP-26; acht unintegrierte WP-28-Kerndateien bleiben separat.
 
 ## WP-26 – Föderationsvertrag und Share-Credentials
 

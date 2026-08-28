@@ -17,6 +17,8 @@ import { QUEUE_POLICIES, type QueueName } from '../jobs/queue-policy';
 import type { Prisma } from '@prisma/client';
 import { SourceWorkerService } from '../sources/source-worker.service';
 import { SOURCE_REFRESH } from '../sources/source-job';
+import { TimerWorkerService } from '../timers/timer-worker.service';
+import { TIMER_DUE } from '../timers/timer-scheduling';
 
 @Injectable()
 export class OutboxDispatcher
@@ -30,6 +32,7 @@ export class OutboxDispatcher
   private heartbeatAt = 0;
   private maintenanceAt = 0;
   private reconcileAt = 0;
+  private timerReconcileAt = 0;
   private stopTask?: Promise<void>;
   private readonly counts = { claimed: 0, delivered: 0, failed: 0, stale: 0 };
 
@@ -41,9 +44,11 @@ export class OutboxDispatcher
     private readonly playback: PlaybackService,
     private readonly renderCache: RenderCacheService,
     private readonly sources: SourceWorkerService,
+    private readonly timers: TimerWorkerService,
   ) {}
 
   async onApplicationBootstrap() {
+    await this.timers.reconcile(true);
     this.redis.startWorkers((job, signal, queue) => this.dispatch(job, signal, queue));
     this.timer = setInterval(() => {
       void this.tick();
@@ -84,6 +89,10 @@ export class OutboxDispatcher
         await this.renderCache.reconcile();
         await this.sources.schedule();
       }
+      if (Date.now() >= this.timerReconcileAt) {
+        await this.timers.reconcile();
+        this.timerReconcileAt = Date.now() + 5000;
+      }
       for (const name of ['delivery', 'render', 'timer', 'maintenance', 'source-refresh'] as const) {
         for (let i = 0; i < QUEUE_POLICIES[name].globalConcurrency && !this.stopped; i++) {
         const filter = this.queueFilter(name);
@@ -113,10 +122,10 @@ export class OutboxDispatcher
   }
 
   private queueFilter(name: QueueName): Prisma.OutboxEventWhereInput {
-    const special = [RENDER_REQUESTED, PLAYBACK_DUE, MAINTENANCE_DUE, SOURCE_REFRESH];
+    const special = [RENDER_REQUESTED, PLAYBACK_DUE, TIMER_DUE, MAINTENANCE_DUE, SOURCE_REFRESH];
     if (name === 'source-refresh') return { eventType: SOURCE_REFRESH };
     if (name === 'render') return { eventType: RENDER_REQUESTED };
-    if (name === 'timer') return { eventType: PLAYBACK_DUE };
+    if (name === 'timer') return { eventType: { in: [PLAYBACK_DUE, TIMER_DUE] } };
     if (name === 'maintenance') return { eventType: MAINTENANCE_DUE };
     return { eventType: { notIn: special } };
   }
@@ -134,10 +143,17 @@ export class OutboxDispatcher
       return;
     }
     const expectedQueue = event.eventType === SOURCE_REFRESH ? 'source-refresh' : event.eventType === RENDER_REQUESTED ? 'render'
-      : event.eventType === PLAYBACK_DUE ? 'timer' : event.eventType === MAINTENANCE_DUE ? 'maintenance' : 'delivery';
+      : [PLAYBACK_DUE, TIMER_DUE].includes(event.eventType) ? 'timer' : event.eventType === MAINTENANCE_DUE ? 'maintenance' : 'delivery';
     if (queue && queue !== expectedQueue) { this.counts.stale++; return; }
     try {
       signal.throwIfAborted();
+      if (event.eventType === TIMER_DUE) {
+        await this.timers.completeDue(event, signal);
+        signal.throwIfAborted();
+        if (await this.store.ack(event)) this.counts.delivered++;
+        else this.counts.stale++;
+        return;
+      }
       if (event.eventType === SOURCE_REFRESH) {
         const outcome = await this.sources.execute(event, signal);
         if (outcome === 'failed') { this.counts.failed++; return; }
@@ -183,6 +199,10 @@ export class OutboxDispatcher
       if (await this.store.ack(event)) this.counts.delivered++;
       else this.counts.stale++;
     } catch (error) {
+      if (event.eventType === TIMER_DUE && error instanceof Error && error.message === 'TIMER_NOT_DUE') {
+        if (!await this.timers.deferEarly(event)) this.counts.stale++;
+        return;
+      }
       const code =
         error instanceof Error && error.message === 'OUTBOX_INVALID_PAYLOAD'
           ? 'OUTBOX_INVALID_PAYLOAD'

@@ -37,6 +37,85 @@ function setup() {
 afterEach(async () => { for (const g of gateways.splice(0)) await g.onApplicationShutdown(); setSystemTime(); });
 
 describe('WebSocket gateway security and liveness', () => {
+  test('timer notifications recheck credentials and send no presentation, IDs or timer data', async () => {
+    const h = setup();
+    await h.authenticate();
+    const context = { deliveryId: 'timer-delivery', stateTopic: 'timers' as const, signal: new AbortController().signal };
+    const before = h.presentations.getForDevice.mock.calls.length;
+    const checks = h.auth.revalidateConnection.mock.calls.length;
+    const revision = [...(h.gateway as any).connections.get(7)][0].lastRevision;
+    await h.gateway.pushTimersChanged(7, context);
+    expect(h.client.sent.at(-1)).toEqual({ protocolVersion: '1.0', type: 'timers.changed' });
+    expect(h.presentations.getForDevice.mock.calls.length).toBe(before);
+    expect(h.auth.revalidateConnection.mock.calls.length).toBe(checks + 1);
+    expect([...(h.gateway as any).connections.get(7)][0].lastRevision).toEqual(revision);
+    expect((h.gateway as any).transitionTimers.size).toBe(0);
+    expect(JSON.stringify(h.client.sent.at(-1))).not.toMatch(/delivery|credential|timerId|presentation/);
+  });
+
+  test('timer notifications reject revoked or expired credentials without presentation work', async () => {
+    for (const reason of ['revoked', 'expired']) {
+      const h = setup();
+      await h.authenticate();
+      h.auth.revalidateConnection.mockRejectedValue(new UnauthorizedException(reason));
+      await h.gateway.pushTimersChanged(7, { deliveryId: 'timer', signal: new AbortController().signal, stateTopic: 'timers' });
+      expect(h.client.sent.some(message => message.type === 'timers.changed')).toBe(false);
+      expect(h.client.code).toBe(4401);
+      expect(h.presentations.getForDevice).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  test('pre-aborted timer pushes perform no credential read or send', async () => {
+    const h = setup(); await h.authenticate();
+    const before = h.client.sent.length, checks = h.auth.revalidateConnection.mock.calls.length;
+    const abort = new AbortController(); abort.abort();
+    await expect(h.gateway.pushTimersChanged(7, { deliveryId: 'timer', signal: abort.signal })).rejects.toThrow();
+    expect(h.client.sent).toHaveLength(before);
+    expect(h.auth.revalidateConnection.mock.calls.length).toBe(checks);
+    expect(h.gateway.isConnected(7)).toBe(true);
+  });
+
+  test('abort during timer authorization closes the socket and late DB completion cannot send', async () => {
+    const h = setup(); await h.authenticate();
+    const session = await h.auth.revalidateConnection();
+    let release!: (value: typeof session) => void;
+    h.auth.revalidateConnection.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const abort = new AbortController();
+    const pending = h.gateway.pushTimersChanged(7, { deliveryId: 'timer', signal: abort.signal });
+    await settle(); abort.abort();
+    await expect(pending).rejects.toThrow('OUTBOX_ADAPTER_FAILED');
+    release(session); await settle();
+    expect(h.client.sent.some(message => message.type === 'timers.changed')).toBe(false);
+    expect(h.client.code).toBe(1011);
+    expect((h.gateway as any).inFlight.size).toBe(0);
+    expect(h.presentations.getForDevice).toHaveBeenCalledTimes(1);
+  });
+
+  test('timer sends wait for confirmation and abort releases pending socket operations', async () => {
+    const h = setup(); await h.authenticate();
+    let callback!: (error?: Error) => void, settled = false;
+    h.client.send = (value, done) => { h.client.sent.push(JSON.parse(value)); callback = done!; };
+    const abort = new AbortController();
+    const pending = h.gateway.pushTimersChanged(7, { deliveryId: 'timer', signal: abort.signal });
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await settle(); expect(settled).toBe(false);
+    expect(h.client.sent.at(-1)).toEqual({ protocolVersion: '1.0', type: 'timers.changed' });
+    abort.abort(); await expect(pending).rejects.toThrow('OUTBOX_ADAPTER_FAILED');
+    callback(); await settle();
+    expect(h.client.code).toBe(1011);
+    expect((h.gateway as any).inFlight.size).toBe(0);
+    expect(h.client.sent.filter(message => message.type === 'timers.changed')).toHaveLength(1);
+  });
+
+  test('timer push backpressure fails durably without invoking presentation work', async () => {
+    const h = setup(); await h.authenticate(); h.client.bufferedAmount = 262145;
+    await expect(h.gateway.pushTimersChanged(7, { deliveryId: 'timer', signal: new AbortController().signal }))
+      .rejects.toThrow('OUTBOX_ADAPTER_FAILED');
+    expect(h.client.sent.some(message => message.type === 'timers.changed')).toBe(false);
+    expect(h.client.code).toBe(1011);
+    expect(h.presentations.getForDevice).toHaveBeenCalledTimes(1);
+  });
+
   test('sends ready render at the same desired revision and rejects late fallback receipts', async () => {
     const h = setup();
     await h.authenticate();

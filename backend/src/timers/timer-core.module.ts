@@ -3,5 +3,5 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { TimerClock, TimerService } from './timer.service';
 import { TimerHandlers } from './timer-handlers';
 
-@Module({ imports: [PrismaModule], providers: [TimerClock, TimerService, TimerHandlers], exports: [TimerService, TimerHandlers] })
+@Module({ imports: [PrismaModule], providers: [TimerClock, TimerService, TimerHandlers], exports: [TimerClock, TimerService, TimerHandlers] })
 export class TimerCoreModule {}

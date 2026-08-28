@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { Subject } from 'rxjs';
 import { createMock } from '../test/mocks/helpers';
 import { DeviceUpdateCoordinator } from './device-update-coordinator.service';
+import { TIMER_CHANGED } from '../timers/timer.events';
 
 function configured(mode: 'sleepy' | 'connected') {
   return {
@@ -15,6 +16,32 @@ function configured(mode: 'sleepy' | 'connected') {
 }
 
 describe('DeviceUpdateCoordinator extension dispatch', () => {
+  it('routes durable timer targets with stateTopic and rechecks active devices', async () => {
+    const timerId = '14899899-30ab-451d-87fa-14a001eb9748';
+    const event = { eventId: 'timer-event', eventType: TIMER_CHANGED, aggregateType: 'Timer', aggregateId: timerId,
+      aggregateRevision: '1', payloadVersion: 1, payload: { timerId, version: 1, reason: 'created' } };
+    const findMany = createMock().mockResolvedValue([{ id: 7 }]);
+    const dispatchRefresh = createMock().mockResolvedValue(undefined), emit = createMock();
+    const finishTarget = createMock().mockResolvedValue(true);
+    const store = { register: createMock().mockResolvedValue(undefined),
+      pendingTargets: async () => [{ effectKey: 'effect', effect: { eventId: event.eventId, deliveries: [{ deviceId: 7, deliveryId: 'delivery' }] } }],
+      beginTarget: async () => true, finishTarget };
+    const coordinator = new DeviceUpdateCoordinator({ emit } as any,
+      { device: { findMany }, outboxEvent: { findUnique: async () => event } } as any,
+      { resolvePersisted: () => configured('connected') } as any,
+      { get: () => ({ dispatchOnRefresh: true, selectTransport: () => 'websocket' }) } as any,
+      { list: () => [], get: () => ({ dispatchRefresh }) } as any, store as any);
+    (coordinator as any).active = true;
+    await coordinator.poll();
+    expect(findMany.calls[0][0]).toMatchObject({ where: { id: { in: [7] }, isActive: true } });
+    expect(dispatchRefresh.calls).toHaveLength(1);
+    expect(dispatchRefresh.calls[0][0]).toBe(7);
+    expect(dispatchRefresh.calls[0][1]).toMatchObject({ deliveryId: 'delivery', stateTopic: 'timers' });
+    expect(dispatchRefresh.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    expect(finishTarget.calls[0][3]).toBe(true);
+    expect(emit.calls).toHaveLength(0);
+  });
+
   it('dispatches connected devices through the selected adapter and leaves pull devices pending', async () => {
     const stream = new Subject<any>();
     const prisma = {

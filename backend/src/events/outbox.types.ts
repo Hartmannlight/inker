@@ -44,6 +44,7 @@ export function parseOutboxEvent(event: EventInput): {
   key: string;
   deviceIds: number[];
   notification?: DeviceEvent;
+  stateChange?: { topic: 'timers'; timerId: string };
 } {
   const invalid = () => {
     throw new Error('OUTBOX_INVALID_PAYLOAD');
@@ -57,9 +58,10 @@ export function parseOutboxEvent(event: EventInput): {
     return invalid();
   const p = event.payload as Record<string, unknown>;
   if (event.eventType === TIMER_CHANGED) {
-    parseTimerEvent(event);
-    // WP24 records domain events; bounded timer delivery is connected in WP25.
-    return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, event.aggregateRevision!), deviceIds: [] };
+    const timer = parseTimerEvent(event);
+    // Recipient authorization is resolved from current state in prepare's tx.
+    return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, event.aggregateRevision!),
+      deviceIds: [], stateChange: { topic: 'timers', timerId: timer.timerId } };
   }
   if (event.eventType === 'render.artifact.ready') {
     if (event.aggregateType !== 'RenderRequest' || !event.aggregateRevision || !/^[a-zA-Z0-9-]{1,100}$/.test(event.aggregateRevision) ||
@@ -161,4 +163,5 @@ export function parseOutboxEvent(event: EventInput): {
 export interface DeliveryContext {
   deliveryId: string;
   signal: AbortSignal;
+  stateTopic?: 'timers';
 }

@@ -39,6 +39,7 @@ export class PullContentController {
     response.setHeader('Cache-Control', 'no-store');
     const device = await this.auth.authenticate(headers);
     const result = await this.content.read(device);
+    await this.auth.authenticate(headers);
     this.setDeliveryHeaders(response, result, result.etag);
     if (matchesIfNoneMatch(headers['if-none-match'], result.etag)) {
       response.status(304).end();
@@ -51,7 +52,7 @@ export class PullContentController {
   async artifact(@Headers() headers: IncomingHttpHeaders, @Param('sha256') sha256: string, @Res() response: Response) {
     response.setHeader('Cache-Control', 'no-store');
     const device = await this.auth.authenticate(headers);
-    const result = await this.content.read(device);
+    const result = await this.content.read(device, false);
     // Authorization is to the current desired variant, not to an unrestricted hash store.
     if (!/^[a-f0-9]{64}$/.test(sha256) || result.artifact.sha256 !== sha256) {
       throw new NotFoundException('Published artifact not found');
@@ -65,6 +66,7 @@ export class PullContentController {
   }
 
   private setDeliveryHeaders(response: Response, result: Awaited<ReturnType<PullContentService['read']>>, etag: string) {
+    if (result.manifest.timerState) response.setHeader('X-Server-Time', result.manifest.timerState.serverTime);
     response.set({ ETag: etag, 'Cache-Control': 'private, no-cache',
       'X-Refresh-After-Seconds': String(result.hints.refreshAfterSeconds), 'X-Delivery-Mode': result.deliveryMode });
     response.vary('Authorization, HTTP_ID, Access-Token');

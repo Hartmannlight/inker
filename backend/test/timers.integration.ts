@@ -354,7 +354,7 @@ describe('WP-24 persistent timer commands through real authenticated interaction
     await httpError(domain('create', createPayload(), fifth), 409, 'TIMER_LIMIT_REACHED');
   }, 30_000);
 
-  test('real timer events pass strict outbox parsing and finish delivery without dead-letter or display fanout', async () => {
+  test('real timer events pass strict parsing and persist only authorized private display deliveries', async () => {
     const timer = await domain('create', createPayload());
     await domain('pause', mutation(timer));
     const rows = (await domainRows()).events;
@@ -370,7 +370,7 @@ describe('WP-24 persistent timer commands through real authenticated interaction
       expect(await outbox.ack(claimed!)).toBe(true);
       expect(await p.outboxEvent.findUniqueOrThrow({ where: { eventId: row.eventId } })).toMatchObject({ status: 'delivered', lastError: null });
     }
-    expect(await p.outboxDelivery.count()).toBe(0);
+    expect((await p.outboxDelivery.findMany()).map(delivery => delivery.deviceId)).toEqual([owner.deviceId, owner.deviceId]);
     expect(await p.outboxEvent.count({ where: { status: 'dead-letter' } })).toBe(0);
   });
 

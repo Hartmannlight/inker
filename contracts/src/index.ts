@@ -92,3 +92,4 @@ export {
   type TimerStatus,
   type TimerVisibility,
 } from './timer';
+export { TIMER_FEED_LIMITS, parseTimerFeed, type TimerFeed } from './timer-feed';

@@ -26,7 +26,8 @@ export class WebSocketTransportAdapter implements TransportAdapter {
   }
 
   async dispatchRefresh(deviceId: number, context?: import('../events/outbox.types').DeliveryContext): Promise<void> {
-    await this.gateway.pushPresentation(deviceId, context);
+    if (context?.stateTopic === 'timers') await this.gateway.pushTimersChanged(deviceId, context);
+    else await this.gateway.pushPresentation(deviceId, context);
   }
 
   deliveryLeaseExpired() { this.gateway.expireDeliveryConnections(); }

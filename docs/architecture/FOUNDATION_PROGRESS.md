@@ -21,14 +21,14 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
-- WP-00 bis WP-24 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
+- WP-00 bis WP-25 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
   Handoffs abgeglichen; keine erneute Implementierung. Hardwaremessungen offen.
-- Letzter lokaler Commit: `1d3ca19` (WP-23). Branch unverändert.
-- WP-24 abgenommen: Domain, Contracts, SQL-Checks, Integration und finaler
-  Produktionscontainer vollständig grün. Lokaler Paketcommit folgt unmittelbar.
-- Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-23 aufnehmen.
+- Letzter lokaler Commit: `c7ab8b0` (WP-24). Branch unverändert.
+- WP-25 abgenommen: Scheduling, private Push/Pull, Clock-Skew, echtes Docker/Browser,
+  Integration und abschließender Secret-Audit grün. Lokaler Paketcommit folgt.
+- Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-25 aufnehmen.
   WP-28-Core-P2 (Originalrückgabe/Proxy) durch begrenzte Detachedkopie behoben.
-  WP-25 bis WP-29 offen.
+  WP-26 bis WP-29 offen.
 
 ## Nächste Schritte
 
@@ -247,4 +247,38 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    HTTP/Restart/SecretAudit. WP24jetztabgenommen;Index/Handoff/Phase7/Betriebaktualisiert.
    NächsterSchrittlokalerWP24Commit(ohneWP28),danachWP25Scheduling/Push/Pull/Browser.
 
-Kein Foundation-Abschluss behauptet. WP-25 bis WP-29 sind noch offen.
+8. WP25 aktiv: dauerhafte Timerjobs mit deterministischer ID pro Timer/Version/
+   Deadline, Outbox-Claimfence vor und nach Domain-I/O. Startup rekonstruiert
+   fehlende Jobs, reaktiviert nur dann erschöpfte noch aktuelle Deadlines;
+   normale Reconciliation alle5s, keine Timer-Tickwrites. Completion bleibt
+   Workerarbeit. Timerfeed GET /api/timers, direktes bounded DTO mit ETag ohne
+   Serverzeitsample; X-Server-Time auch304. Pullmanifest enthält timerState,
+   Artefaktreads scannen keine Timer. Tiny WS-Invalidierung ohne private Daten.
+   Root besitzt Scheduler/Service/Module/HTTP/Pull/Main/Docs/Containerfixture;
+   isolation_review nur neue Schedulerintegration/Prozessfixture;
+   source_contract OutboxTypes/Store/Coordinator/WSAdapter/Gateway+Tests;
+   wp19_renderer Contracts+Frontendtestscreen. Acht WP28-Dateien weiterhin separat.
+   Implementierung/Tests laufen, WP25 noch NICHT abgenommen.
+   Review2P2behoben: unveränderteRecoveryjetztReadfastpath0SQLWrites; Uhr-Rücksprung
+   stellt früheJobsaufOriginaldeadlinezurückohneRetrybudget. Agent+Root16Scheduler-
+   Tests/144Assertionsinkl3echteProzesseund6DispatcherDeferralsgrün.
+   Root27Timer/Scheduler/346vorReviewerweiterunggrün; HTTP26/82grün.
+   Frontendfinal94,Contracts66/994grün. BuildfinalExit0(inker:wp25-test).
+   BackendfinalunterparallelDockerbuild842/843: IsolationstdoutTestRecoverylief
+   in2,5sDeadline; nachBuildgezielt14Isolation/161grünunveränderteLimits.
+   RootvolleSuiteerneutinSession(offiziellesLoggoal-wp25-backend-confirmed.log).
+   AltintegrationenSession68677läuft,TimerContainer+Browsernochnichtgestartet.
+   Browserruntimeverbunden,Dokumentationgelesen; eigeneFixture
+   backend/test/timer-browser-fixture.cjs vorbereitet,Stateunterignoriertem.tmp.
+
+   FinalerContainer55794Exit0inklRestart/SecretAudit/Cleanup. Root843Backend/5530,
+   66Contracts/994,94Frontendgrün. Altintegrationen148:3Zeitvergleichsfehlergezielt
+   behoben;beideganzenDateienRoot41/2782grün,übrige107vorhergrün. KeinSkip.
+   EigeneBrowserfixture2Tabs/2Geräte:SharedDoppeltap1Receipt1Timer,PauseResumeCancel,
+   Private10s/Offline0s/Workercompletedv2/Reconnect/ackv3/Reload;6Receipt2Timer.
+   LayoutScreenshotgeprüft,beideTabsgeschlossen,Fixture+Volumesentfernt.
+   WP25Handoff/Index/Phase7aktualisiert. NächsterSchrittPaketcommitohneWP28,
+   danachWP26. Read-onlyWP26Inventarvorhanden:keineFederationmodelle/ServerID,
+   eigeneShareAuth+reineFeedProjectionnötig(keineDeviceManifestActions/Timer/Sources).
+
+Kein Foundation-Abschluss behauptet. WP-26 bis WP-29 sind noch offen.

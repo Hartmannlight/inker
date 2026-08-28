@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PrismaClient, type OutboxEvent } from "@prisma/client";
+import type { PresentationManifest } from "@inker/contracts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,6 +23,16 @@ import { PresentationService } from "../src/device-platform/presentation.service
 import { PullContentService } from "../src/device-platform/pull-content.service";
 
 const root = resolve(import.meta.dir, "..");
+
+/** Assert the live clock sample, then normalize only it for stable-content comparisons. */
+function stableTimerManifest(manifest: PresentationManifest): PresentationManifest {
+  expect(manifest.timerState).toBeDefined();
+  const timerState = manifest.timerState!;
+  expect(timerState.serverTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  expect(new Date(timerState.serverTime).toISOString()).toBe(timerState.serverTime);
+  return { ...manifest, timerState: { ...timerState, serverTime: "1970-01-01T00:00:00.000Z" } };
+}
+
 type Result = {
   playlistRevisionId: string;
   version: number;
@@ -642,7 +653,7 @@ describe("WP-18 persistent playback", () => {
     try {
       const read = async () => [
         await module.get(PresentationService).getForDevice(deviceId),
-        (await module.get(PullContentService).read(pull)).manifest,
+        stableTimerManifest((await module.get(PullContentService).read(pull)).manifest),
       ];
       const before = await read();
       now += 1_000_000;

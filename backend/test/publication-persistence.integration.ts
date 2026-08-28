@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { PrismaClient } from "@prisma/client";
+import type { PresentationManifest } from '@inker/contracts';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -40,6 +41,15 @@ import request from 'supertest';
 const backendRoot = resolve(import.meta.dir, "..");
 const migrationScript = join(backendRoot, "scripts", "migrate-database.ts");
 const createdDirectories: string[] = [];
+
+/** Assert the live clock sample, then normalize only it for stable-content comparisons. */
+function stableTimerManifest(manifest: PresentationManifest): PresentationManifest {
+  expect(manifest.timerState).toBeDefined();
+  const timerState = manifest.timerState!;
+  expect(timerState.serverTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  expect(new Date(timerState.serverTime).toISOString()).toBe(timerState.serverTime);
+  return { ...manifest, timerState: { ...timerState, serverTime: '1970-01-01T00:00:00.000Z' } };
+}
 
 function databaseUrl(path: string) {
   return `file:${path.replaceAll("\\", "/")}`;
@@ -257,7 +267,7 @@ describe("publication persistence boundary", () => {
     const app = module.createNestApplication(); await app.init();
     try {
       const d = await prisma.device.findUniqueOrThrow({ where: { id: pull.id }, include: { profile: true, deliveryPolicy: true } });
-      const read = async () => [await module.get(PresentationService).getForDevice(browser.id), (await module.get(PullContentService).read(d)).manifest];
+      const read = async () => [await module.get(PresentationService).getForDevice(browser.id), stableTimerManifest((await module.get(PullContentService).read(d)).manifest)];
       const before = await prisma.device.findMany();
       const reference = await read();
       writes.length = 0;
@@ -398,9 +408,10 @@ describe("publication persistence boundary", () => {
       expect(unchanged.text).toBe('');
       await request(app.getHttpServer()).get(first.body.content.url).set('If-None-Match', artifact.headers.etag).expect(401);
       const pullFirst = await request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').expect(200);
+      const stablePullFirst = stableTimerManifest(pullFirst.body);
       writes.length = 0;
       for (let i = 0; i < 100; i++) await request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').set('If-None-Match', pullFirst.headers.etag).expect(304).expect(r => expect(r.text).toBe(''));
-      await Promise.all(Array.from({ length: 100 }, () => request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').expect(200).expect(r => expect(r.body).toEqual(pullFirst.body))));
+      await Promise.all(Array.from({ length: 100 }, () => request(app.getHttpServer()).get('/api/v1/device-content').set('Authorization', 'Bearer pull-token').expect(200).expect(r => expect(stableTimerManifest(r.body)).toEqual(stablePullFirst))));
       expect(writes).toEqual([]);
       await prisma.deviceCredential.updateMany({ where: { deviceId: d.id }, data: { revokedAt: new Date() } });
       await request(app.getHttpServer()).get(first.body.content.url).set('Authorization', browserAuthorization).set('If-None-Match', artifact.headers.etag).expect(401);

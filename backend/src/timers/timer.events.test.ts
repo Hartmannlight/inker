@@ -77,7 +77,8 @@ describe('WP-24 timer events', () => {
     for (const reason of TIMER_REASONS) {
       const input = { ...event(), payload: { timerId, version: 1, reason } };
       expect(parseTimerEvent(input)).toEqual({ timerId, version: 1, reason });
-      expect(parseOutboxEvent(input)).toEqual({ key: effectKey(TIMER_CHANGED, 'Timer', timerId, '1'), deviceIds: [] });
+      expect(parseOutboxEvent(input)).toEqual({ key: effectKey(TIMER_CHANGED, 'Timer', timerId, '1'), deviceIds: [],
+        stateChange: { topic: 'timers', timerId } });
     }
   });
 
@@ -89,7 +90,7 @@ describe('WP-24 timer events', () => {
     const another = '55317594-5b03-4ad0-aeb7-1392c5ce36bc';
     expect(parseOutboxEvent({ ...event(), aggregateId: another, payload: { timerId: another, version: 1, reason: 'created' } }).key)
       .not.toBe(original.key);
-    expect(Object.keys(original).sort()).toEqual(['deviceIds', 'key']);
+    expect(Object.keys(original).sort()).toEqual(['deviceIds', 'key', 'stateChange']);
     original.deviceIds.push(99);
     expect(parseOutboxEvent(event()).deviceIds).toEqual([]);
   });

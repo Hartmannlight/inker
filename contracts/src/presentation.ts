@@ -1,4 +1,5 @@
 import { isJsonValue, type JsonObject } from './json-value';
+import { parseTimerFeed, type TimerFeed } from './timer-feed';
 import { validateProtocolVersion, type ProtocolVersion } from './protocol';
 import {
   addIssue,
@@ -49,10 +50,22 @@ export interface PresentationManifest {
   allowedActions: AllowedAction[];
   fallbackRevision?: string;
   metadata?: JsonObject;
+  timerState?: TimerFeed;
 }
 
 export function parsePresentationManifest(value: unknown): ParseResult<PresentationManifest> {
-  return parseContract(value, validatePresentationManifest);
+  try {
+    const descriptor = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'timerState') : undefined;
+    if (value && typeof value === 'object' && 'timerState' in value && !descriptor) throw new Error();
+    if (descriptor && (!descriptor.enumerable || !('value' in descriptor))) throw new Error();
+    const feed = descriptor?.value === undefined ? undefined : parseTimerFeed(descriptor.value);
+    if (feed && !feed.success) throw new Error();
+    const parsed = parseContract(value, validatePresentationManifest);
+    if (!parsed.success || !feed?.success) return parsed;
+    return { ...parsed, data: { ...parsed.data, timerState: feed.data } };
+  } catch {
+    return { success: false, errors: [{ code: 'invalid_timer_feed', path: '$.timerState', severity: 'error', message: 'Invalid bounded timer feed.' }], warnings: [] };
+  }
 }
 
 function validatePresentationManifest(

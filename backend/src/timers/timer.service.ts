@@ -5,6 +5,7 @@ import type { CommandPrincipal } from '../interactions/command-registry';
 import { PrismaService } from '../prisma/prisma.service';
 import { transitionTimer, type TimerAnchor, type TimerAction } from './timer-domain';
 import { TIMER_CHANGED, type TIMER_REASONS } from './timer.events';
+import { scheduleTimer } from './timer-scheduling';
 
 type Tx = Prisma.TransactionClient;
 type DevicePrincipal = Pick<CommandPrincipal, 'deviceId' | 'externalId'>;
@@ -57,6 +58,7 @@ export class TimerService {
     }
   }
   private async changed(tx: Tx, row: Timer, reason: typeof TIMER_REASONS[number]) {
+    await scheduleTimer(tx, row);
     await tx.outboxEvent.create({ data: { eventType: TIMER_CHANGED, aggregateType: 'Timer', aggregateId: row.timerId,
       aggregateRevision: String(row.version), payloadVersion: 1, payload: { timerId: row.timerId, version: row.version, reason },
       occurredAt: row.evaluatedAt, availableAt: row.evaluatedAt } });
@@ -96,10 +98,29 @@ export class TimerService {
     return this.snapshot(row);
   }
 
-  /** No tick writes or implicit completion; WP25 schedules committed deadlines. */
+  /** Only the fenced worker invokes this within its completion transaction. */
+  async completeInTransaction(tx: Tx, timerId: string, version: number, dueAt: number, now: number) {
+    const previous = await tx.timer.findUnique({ where: { timerId } });
+    if (!previous || previous.status !== 'running' || previous.version !== version || previous.endsAt?.getTime() !== dueAt) return;
+    if (now < dueAt) throw new Error('TIMER_NOT_DUE');
+    const next = transitionTimer(this.anchor(previous), 'complete', now);
+    if (!next.changed) return;
+    const row = await tx.timer.update({ where: { timerId }, data: this.data(next.state) });
+    await this.changed(tx, row, 'completed');
+  }
+
+  /** No tick writes or implicit completion. */
   async listForDevice(principal: DevicePrincipal) {
     await this.principal(this.prisma, principal);
-    const rows = await this.prisma.timer.findMany({ where: { AND: [outstanding, visible(principal.deviceId)] },
+    return this.listForAuthenticatedDevice(principal.deviceId);
+  }
+
+  /** Read-only pull credentials may identify legacy devices without externalId. */
+  async listForAuthenticatedDevice(deviceId: number) {
+    if (!Number.isSafeInteger(deviceId) || deviceId < 1 || !await this.prisma.device.findFirst({
+      where: { id: deviceId, isActive: true }, select: { id: true },
+    })) throw new NotFoundException('TIMER_NOT_FOUND');
+    const rows = await this.prisma.timer.findMany({ where: { AND: [outstanding, visible(deviceId)] },
       orderBy: [{ startedAt: 'asc' }, { timerId: 'asc' }], take: TIMER_LIMITS.maxRows });
     return { protocolVersion: '1.0' as const, serverTime: new Date(this.clock.now()).toISOString(), timers: rows.map(row => this.snapshot(row)) };
   }

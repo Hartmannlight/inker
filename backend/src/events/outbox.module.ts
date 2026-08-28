@@ -6,9 +6,10 @@ import { RenderCacheModule } from '../render-cache/render-cache.module';
 import { OutboxTransportModule } from './outbox-transport.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { SourceWorkerModule } from '../sources/source-worker.module';
+import { TimerWorkerModule } from '../timers/timer-worker.module';
 
 @Module({
-  imports: [EventsCoreModule, PlaybackCoreModule, RenderCacheModule, OutboxTransportModule, JobsModule, SourceWorkerModule],
+  imports: [EventsCoreModule, PlaybackCoreModule, RenderCacheModule, OutboxTransportModule, JobsModule, SourceWorkerModule, TimerWorkerModule],
   providers: [OutboxDispatcher],
   exports: [OutboxDispatcher],
 })
