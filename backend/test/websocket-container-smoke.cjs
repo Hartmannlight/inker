@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { execFile, execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp21-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp22-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
@@ -75,7 +75,7 @@ async function main() {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
       '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets',
-      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp21-test');
+      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp22-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
@@ -310,6 +310,8 @@ async function main() {
     const fresh = connect(device, rotated); await until(() => fresh.messages.some(m => m.type === 'presentation.changed'));
     sourceBeforeRestart = await require('./fixtures/source-container-check.cjs')({ request, db, until, renderedFor, connect, secrets, base, setStage: value => { stage = value; },
       login: () => request('/api/auth/login', { method: 'POST', data: { password } }) });
+    await require('./fixtures/isolation-container-check.cjs')({ request, db, until, secrets, base, device, credential: rotated, setStage: value => { stage = value; },
+      login: () => request('/api/auth/login', { method: 'POST', data: { password } }) });
     stage = 'pull-create';
     const pull = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 pull', macAddress: 'AA:15:00:00:00:01' } })).body;
     stage = 'pull-setup';
@@ -370,6 +372,8 @@ async function main() {
     if (location) console.error(`Smoke source location: ${location[1]}:${location[2]}`);
     const sourceLocation = typeof error?.stack === 'string' && error.stack.match(/source-container-check\.cjs:(\d+):(\d+)/);
     if (sourceLocation) console.error(`Source fixture location: ${sourceLocation[1]}:${sourceLocation[2]}`);
+    const isolationLocation = typeof error?.stack === 'string' && error.stack.match(/isolation-container-check\.cjs:(\d+):(\d+)/);
+    if (isolationLocation) console.error(`Isolation fixture location: ${isolationLocation[1]}:${isolationLocation[2]}`);
     {
       try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
     }

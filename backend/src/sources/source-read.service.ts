@@ -10,6 +10,7 @@ export function publicDefinition(source: SourceDefinition) {
     definitionVersion: source.definitionVersion, name: source.name,
     connectorType: source.connectorType, schemaVersion: source.schemaVersion,
     configuration: source.configuration, secretReferences: source.secretId ? { provider: source.secretId } : {},
+    ...(source.transformationCode != null ? { transformationCode: source.transformationCode } : {}),
     refreshIntervalSeconds: source.refreshIntervalSeconds, timeoutMs: source.timeoutMs,
     concurrencyGroup: source.concurrencyGroup,
   };

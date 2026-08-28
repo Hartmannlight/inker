@@ -10,6 +10,7 @@ import { canonicalJson, sha256 } from '../publications/publication-content';
 import { runConnector, validateConnectorResult, type ConnectorType } from './connectors';
 import { SOURCE_LIMITS, SOURCE_REFRESH, scheduleSource } from './source-job';
 import { sourceWrite } from './source-writes';
+import { executeIsolated, IsolatedExecutionError } from '../isolation/isolated-executor';
 
 type Result = Awaited<ReturnType<typeof runConnector>>;
 
@@ -69,6 +70,24 @@ export class SourceWorkerService {
       catch { errorCode = 'SOURCE_SECRET_UNAVAILABLE'; retryable = false; throw new Error(errorCode); }
       result = validateConnectorResult(await runConnector(job.connectorType as ConnectorType, job.source.configuration,
         { signal: abort.signal, attempt: event.attempts, ...(secret ? { secret } : {}) }), secret);
+      abort.signal.throwIfAborted();
+      if (job.source.transformationCode !== null) {
+        try {
+          // Only the already-normalized connector data enters the child. Never
+          // pass source configuration, secret references, credentials or the job.
+          const data = await executeIsolated({ version: 1, kind: 'javascript',
+            code: job.source.transformationCode, data: result.data, mode: 'value' }, abort.signal);
+          abort.signal.throwIfAborted();
+          result = validateConnectorResult({ ...result, data }, secret);
+          result.connectorVersion += '+pure-js-v1';
+        } catch (error) {
+          errorCode = abort.signal.aborted ? (parent.aborted ? 'SOURCE_ABORTED' : 'SOURCE_TIMEOUT')
+            : error instanceof IsolatedExecutionError && error.code === 'ISOLATION_TIMEOUT' ? 'SOURCE_TIMEOUT'
+            : error instanceof IsolatedExecutionError && error.code === 'ISOLATION_ABORTED' ? 'SOURCE_ABORTED'
+            : 'SOURCE_TRANSFORM_FAILED';
+          throw new Error(errorCode);
+        }
+      }
       abort.signal.throwIfAborted();
     } catch {
       result = undefined;

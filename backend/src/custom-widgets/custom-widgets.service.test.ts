@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, spyOn } from 'bun:test';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { CustomWidgetsService } from './custom-widgets.service';
 import { ScriptExecutorService } from './services/script-executor.service';
@@ -32,42 +32,42 @@ describe('CustomWidgetsService', () => {
     const extract = (data: unknown, path: string) =>
       (service as any).extractField(data, path);
 
-    it('should extract a simple top-level field', () => {
+    it('should extract a simple top-level field', async () => {
       expect(extract({ price: 100 }, 'price')).toBe(100);
     });
 
-    it('should extract a nested field with dot notation', () => {
+    it('should extract a nested field with dot notation', async () => {
       expect(extract({ a: { b: 1 } }, 'a.b')).toBe(1);
     });
 
-    it('should extract a field from an array index', () => {
+    it('should extract a field from an array index', async () => {
       const data = { items: [{ name: 'test' }] };
       expect(extract(data, 'items[0].name')).toBe('test');
     });
 
-    it('should return null for a missing path', () => {
+    it('should return null for a missing path', async () => {
       expect(extract({ price: 100 }, 'missing.path')).toBeNull();
     });
 
-    it('should return data as-is when path is empty', () => {
+    it('should return data as-is when path is empty', async () => {
       const data = { price: 100 };
       expect(extract(data, '')).toEqual(data);
     });
 
-    it('should return null/undefined when data is null', () => {
+    it('should return null/undefined when data is null', async () => {
       expect(extract(null, 'field')).toBeNull();
     });
 
-    it('should return undefined when data is undefined', () => {
+    it('should return undefined when data is undefined', async () => {
       expect(extract(undefined, 'field')).toBeUndefined();
     });
 
-    it('should handle deeply nested array access', () => {
+    it('should handle deeply nested array access', async () => {
       const data = { a: { b: [{ c: [{ d: 'deep' }] }] } };
       expect(extract(data, 'a.b[0].c[0].d')).toBe('deep');
     });
 
-    it('should return null when array index is out of bounds', () => {
+    it('should return null when array index is out of bounds', async () => {
       const data = { items: [{ name: 'only' }] };
       expect(extract(data, 'items[5].name')).toBeNull();
     });
@@ -79,34 +79,34 @@ describe('CustomWidgetsService', () => {
     const renderValue = (config: Record<string, unknown>, data: unknown) =>
       (service as any).renderValue(config, data);
 
-    it('should render a string value with prefix and suffix', () => {
+    it('should render a string value with prefix and suffix', async () => {
       const config = { field: 'price', prefix: '$', suffix: ' USD' };
       expect(renderValue(config, { price: 42 })).toBe('$42 USD');
     });
 
-    it('should JSON.stringify an object value', () => {
+    it('should JSON.stringify an object value', async () => {
       const config = { field: 'meta', prefix: '', suffix: '' };
       const data = { meta: { a: 1 } };
       expect(renderValue(config, data)).toBe('{"a":1}');
     });
 
-    it('should return { label, value } when label is set', () => {
+    it('should return { label, value } when label is set', async () => {
       const config = { field: 'temp', prefix: '', suffix: 'C', label: 'Temperature' };
       const result = renderValue(config, { temp: 23 });
       expect(result).toEqual({ label: 'Temperature', value: '23C' });
     });
 
-    it('should return formatted string when label is empty', () => {
+    it('should return formatted string when label is empty', async () => {
       const config = { field: 'count', prefix: '', suffix: '' };
       expect(renderValue(config, { count: 7 })).toBe('7');
     });
 
-    it('should show empty string for null value', () => {
+    it('should show empty string for null value', async () => {
       const config = { field: 'missing', prefix: '(', suffix: ')' };
       expect(renderValue(config, {})).toBe('()');
     });
 
-    it('should handle missing prefix/suffix gracefully', () => {
+    it('should handle missing prefix/suffix gracefully', async () => {
       const config = { field: 'val' };
       expect(renderValue(config, { val: 'hello' })).toBe('hello');
     });
@@ -118,28 +118,28 @@ describe('CustomWidgetsService', () => {
     const renderList = (config: Record<string, unknown>, data: unknown) =>
       (service as any).renderList(config, data);
 
-    it('should render list from arrayPath with itemField', () => {
+    it('should render list from arrayPath with itemField', async () => {
       const config = { arrayPath: 'rates', itemField: 'mid', maxItems: 5, listStyle: 'bullet' };
       const data = { rates: [{ mid: 4.25 }, { mid: 3.80 }] };
       const result = renderList(config, data);
       expect(result).toEqual(['• 4.25', '• 3.8']);
     });
 
-    it('should use root array data when no arrayPath', () => {
+    it('should use root array data when no arrayPath', async () => {
       const config = { itemField: '', maxItems: 3, listStyle: 'bullet' };
       const data = ['alpha', 'beta', 'gamma'];
       const result = renderList(config, data);
       expect(result).toEqual(['• alpha', '• beta', '• gamma']);
     });
 
-    it('should fall back to data.items for RSS feed structure', () => {
+    it('should fall back to data.items for RSS feed structure', async () => {
       const config = { itemField: 'title', maxItems: 2, listStyle: 'none' };
       const data = { items: [{ title: 'Article 1' }, { title: 'Article 2' }, { title: 'Article 3' }] };
       const result = renderList(config, data);
       expect(result).toEqual(['Article 1', 'Article 2']);
     });
 
-    it('should apply different list styles', () => {
+    it('should apply different list styles', async () => {
       const data = ['a', 'b', 'c'];
       expect(renderList({ maxItems: 3, listStyle: 'number' }, data)).toEqual([
         '1. a', '2. b', '3. c',
@@ -155,19 +155,19 @@ describe('CustomWidgetsService', () => {
       ]);
     });
 
-    it('should cap results with maxItems', () => {
+    it('should cap results with maxItems', async () => {
       const data = [1, 2, 3, 4, 5, 6, 7];
       const result = renderList({ maxItems: 3, listStyle: 'none' }, data);
       expect(result).toHaveLength(3);
     });
 
-    it('should JSON.stringify objects when no itemField is given', () => {
+    it('should JSON.stringify objects when no itemField is given', async () => {
       const config = { maxItems: 1, listStyle: 'none' };
       const data = [{ a: 1 }];
       expect(renderList(config, data)).toEqual(['{"a":1}']);
     });
 
-    it('should return empty array when arrayPath resolves to non-array', () => {
+    it('should return empty array when arrayPath resolves to non-array', async () => {
       const config = { arrayPath: 'notAnArray', maxItems: 5, listStyle: 'bullet' };
       expect(renderList(config, { notAnArray: 'string' })).toEqual([]);
     });
@@ -182,51 +182,50 @@ describe('CustomWidgetsService', () => {
       data: unknown,
     ) => (service as any).renderScript(config, template, data);
 
-    it('should render value mode with prefix and suffix', () => {
+    it('should render value mode with prefix and suffix', async () => {
       const config = {
         scriptCode: 'return $.price * 1000;',
         scriptOutputMode: 'value',
         prefix: '$',
         suffix: ' PLN',
       };
-      expect(renderScript(config, null, { price: 4.25 })).toBe('$4250 PLN');
+      expect(await renderScript(config, null, { price: 4.25 })).toBe('$4250 PLN');
     });
 
-    it('should render template mode with {{variables}}', () => {
+    it('should render template mode with {{variables}}', async () => {
       const config = {
         scriptCode: 'var greeting = "Hello"; var name = $.user;',
         scriptOutputMode: 'template',
       };
       const template = '{{greeting}}, {{name}}!';
-      expect(renderScript(config, template, { user: 'World' })).toBe('Hello, World!');
+      expect(await renderScript(config, template, { user: 'World' })).toBe('Hello, World!');
     });
 
-    it('should return error string on script failure', () => {
+    it('rejects script failures instead of rendering error text', async () => {
       const config = {
         scriptCode: 'return $.foo.bar.baz;',
         scriptOutputMode: 'value',
       };
-      const result = renderScript(config, null, {});
-      expect(result).toContain('Error:');
+      await expect(renderScript(config, null, {})).rejects.toMatchObject({ status: 503, message: 'SCRIPT_EXECUTION_FAILED' });
     });
 
-    it('should return "No script defined" when scriptCode is empty', () => {
+    it('rejects missing scripts instead of rendering a placeholder', async () => {
       const config = { scriptCode: '', scriptOutputMode: 'value' };
-      expect(renderScript(config, null, {})).toBe('No script defined');
+      await expect(renderScript(config, null, {})).rejects.toMatchObject({ status: 503, message: 'SCRIPT_EXECUTION_FAILED' });
     });
 
-    it('should keep unmatched {{placeholders}} in template mode', () => {
+    it('should keep unmatched {{placeholders}} in template mode', async () => {
       const config = {
         scriptCode: 'var x = 1;',
         scriptOutputMode: 'template',
       };
       const template = '{{x}} and {{missing}}';
-      expect(renderScript(config, template, {})).toBe('1 and {{missing}}');
+      expect(await renderScript(config, template, {})).toBe('1 and {{missing}}');
     });
 
-    it('should default to value mode when scriptOutputMode is not set', () => {
+    it('should default to value mode when scriptOutputMode is not set', async () => {
       const config = { scriptCode: 'return 42;' };
-      expect(renderScript(config, null, {})).toBe('42');
+      expect(await renderScript(config, null, {})).toBe('42');
     });
   });
 
@@ -236,7 +235,48 @@ describe('CustomWidgetsService', () => {
     const renderGrid = (config: Record<string, unknown>, data: unknown) =>
       (service as any).renderGrid(config, data);
 
-    it('should render a grid with field extraction', () => {
+    it('bounds the grid before starting any child execution', async () => {
+      const execute = spyOn(scriptExecutor, 'execute');
+      try {
+        for (const [gridCols, gridRows] of [[17, 1], [4, 5], [Infinity, 1], [-1, 1], [0, 1], [1.5, 2]]) {
+          await expect(renderGrid({ gridCols, gridRows, gridCells: {} }, {}))
+            .rejects.toMatchObject({ status: 503, message: 'SCRIPT_GRID_LIMIT_EXCEEDED' });
+        }
+        const oversizedCells = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`0-${i}`, { useScript: true, script: 'return 1;' }]));
+        await expect(renderGrid({ gridCells: oversizedCells }, {}))
+          .rejects.toMatchObject({ status: 503, message: 'SCRIPT_GRID_LIMIT_EXCEEDED' });
+        expect(execute).not.toHaveBeenCalled();
+        expect((await renderGrid({ gridCols: 4, gridRows: 4, gridCells: {} }, {})).cells).toEqual([]);
+      } finally { execute.mockRestore(); }
+    });
+
+    it('awaits real cell executions serially and preserves their order', async () => {
+      const original = scriptExecutor.execute.bind(scriptExecutor);
+      let active = 0, maximum = 0;
+      const execute = spyOn(scriptExecutor, 'execute').mockImplementation(async (...args) => {
+        active++;
+        maximum = Math.max(maximum, active);
+        try { return await original(...args); } finally { active--; }
+      });
+      try {
+        const result = await renderGrid({ gridCols: 2, gridRows: 1, gridCells: {
+          '0-0': { useScript: true, script: 'return $.value + 1;' },
+          '0-1': { useScript: true, script: 'return $.value + 2;' },
+        } }, { value: 40 });
+        expect(result.cells.map((cell: { value: unknown }) => cell.value)).toEqual([41, 42]);
+        expect(execute).toHaveBeenCalledTimes(2);
+        expect(maximum).toBe(1);
+        expect(active).toBe(0);
+      } finally { execute.mockRestore(); }
+    }, 10000);
+
+    it('fails a configured script cell that has no code', async () => {
+      await expect(renderGrid({ gridCols: 1, gridRows: 1, gridCells: {
+        '0-0': { useScript: true, script: '' },
+      } }, {})).rejects.toMatchObject({ status: 503, message: 'SCRIPT_EXECUTION_FAILED' });
+    });
+
+    it('should render a grid with field extraction', async () => {
       const config = {
         gridCols: 2,
         gridRows: 1,
@@ -247,7 +287,7 @@ describe('CustomWidgetsService', () => {
         },
       };
       const data = { price: 99, name: 'Widget' };
-      const result = renderGrid(config, data);
+      const result = await renderGrid(config, data);
 
       expect(result.type).toBe('grid');
       expect(result.gridCols).toBe(2);
@@ -258,7 +298,7 @@ describe('CustomWidgetsService', () => {
       expect(result.cells[1].formattedValue).toBe('Widget');
     });
 
-    it('should render a grid cell with script execution', () => {
+    it('should render a grid cell with script execution', async () => {
       const config = {
         gridCols: 1,
         gridRows: 1,
@@ -266,13 +306,13 @@ describe('CustomWidgetsService', () => {
           '0-0': { field: '', useScript: true, script: 'return $.a + $.b;', fieldType: 'number' },
         },
       };
-      const result = renderGrid(config, { a: 10, b: 20 });
+      const result = await renderGrid(config, { a: 10, b: 20 });
       expect(result.cells).toHaveLength(1);
       expect(result.cells[0].formattedValue).toBe('30');
       expect(result.cells[0].useScript).toBe(true);
     });
 
-    it('should skip empty/missing cells', () => {
+    it('should skip empty/missing cells', async () => {
       const config = {
         gridCols: 2,
         gridRows: 2,
@@ -281,13 +321,13 @@ describe('CustomWidgetsService', () => {
           // 0-1, 1-0, 1-1 are missing
         },
       };
-      const result = renderGrid(config, { val: 'only' });
+      const result = await renderGrid(config, { val: 'only' });
       expect(result.cells).toHaveLength(1);
       expect(result.cells[0].row).toBe(0);
       expect(result.cells[0].col).toBe(0);
     });
 
-    it('should handle script error in grid cell gracefully', () => {
+    it('rejects a failed cell without a successful partial grid', async () => {
       const config = {
         gridCols: 1,
         gridRows: 1,
@@ -295,20 +335,18 @@ describe('CustomWidgetsService', () => {
           '0-0': { field: '', useScript: true, script: 'return $.x.y.z;', fieldType: 'text' },
         },
       };
-      const result = renderGrid(config, {});
-      expect(result.cells[0].formattedValue).toContain('Error:');
-      expect(result.cells[0].value).toBeNull();
+      await expect(renderGrid(config, {})).rejects.toMatchObject({ status: 503, message: 'SCRIPT_EXECUTION_FAILED' });
     });
 
-    it('should use default grid dimensions when not specified', () => {
-      const result = renderGrid({ gridCells: {} }, {});
+    it('should use default grid dimensions when not specified', async () => {
+      const result = await renderGrid({ gridCells: {} }, {});
       expect(result.gridCols).toBe(2);
       expect(result.gridRows).toBe(2);
       expect(result.gridGap).toBe(8);
       expect(result.cells).toHaveLength(0);
     });
 
-    it('should include alignment settings on cells', () => {
+    it('should include alignment settings on cells', async () => {
       const config = {
         gridCols: 1,
         gridRows: 1,
@@ -316,7 +354,7 @@ describe('CustomWidgetsService', () => {
           '0-0': { field: 'x', fieldType: 'text', align: 'right', verticalAlign: 'top' },
         },
       };
-      const result = renderGrid(config, { x: 'hi' });
+      const result = await renderGrid(config, { x: 'hi' });
       expect(result.cells[0].align).toBe('right');
       expect(result.cells[0].verticalAlign).toBe('top');
     });
@@ -332,18 +370,18 @@ describe('CustomWidgetsService', () => {
       data: unknown,
     ) => (service as any).renderContent(displayType, template, config, data);
 
-    it('should dispatch to renderValue for "value" type', () => {
-      const result = renderContent('value', null, { field: 'x' }, { x: 'ok' });
+    it('should dispatch to renderValue for "value" type', async () => {
+      const result = await renderContent('value', null, { field: 'x' }, { x: 'ok' });
       expect(result).toBe('ok');
     });
 
-    it('should dispatch to renderList for "list" type', () => {
-      const result = renderContent('list', null, { maxItems: 2, listStyle: 'none' }, ['a', 'b']);
+    it('should dispatch to renderList for "list" type', async () => {
+      const result = await renderContent('list', null, { maxItems: 2, listStyle: 'none' }, ['a', 'b']);
       expect(result).toEqual(['a', 'b']);
     });
 
-    it('should dispatch to renderScript for "script" type', () => {
-      const result = renderContent(
+    it('should dispatch to renderScript for "script" type', async () => {
+      const result = await renderContent(
         'script',
         null,
         { scriptCode: 'return 1;', scriptOutputMode: 'value' },
@@ -352,13 +390,13 @@ describe('CustomWidgetsService', () => {
       expect(result).toBe('1');
     });
 
-    it('should dispatch to renderGrid for "grid" type', () => {
-      const result = renderContent('grid', null, { gridCells: {} }, {});
+    it('should dispatch to renderGrid for "grid" type', async () => {
+      const result = await renderContent('grid', null, { gridCells: {} }, {});
       expect(result.type).toBe('grid');
     });
 
-    it('should stringify data for unknown display type', () => {
-      const result = renderContent('unknown', null, {}, 'raw');
+    it('should stringify data for unknown display type', async () => {
+      const result = await renderContent('unknown', null, {}, 'raw');
       expect(result).toBe('raw');
     });
   });
@@ -393,7 +431,7 @@ describe('CustomWidgetsService', () => {
         config: {},
       } as any);
 
-      expect(result).toEqual(widget);
+      expect<unknown>(result).toEqual(widget);
       expect(mockPrisma.customWidget.create.calls).toHaveLength(1);
     });
   });
@@ -408,7 +446,7 @@ describe('CustomWidgetsService', () => {
       const widget = { id: 1, name: 'W1' };
       mockPrisma.customWidget.findUnique.mockResolvedValue(widget);
       const result = await service.findOne(1);
-      expect(result).toEqual(widget);
+      expect<unknown>(result).toEqual(widget);
     });
   });
 
@@ -472,7 +510,7 @@ describe('CustomWidgetsService', () => {
       mockPrisma.customWidget.update.mockResolvedValue(updated);
 
       const result = await service.update(1, { name: 'New' } as any);
-      expect(result).toEqual(updated);
+      expect<unknown>(result).toEqual(updated);
     });
   });
 
@@ -518,7 +556,7 @@ describe('CustomWidgetsService', () => {
       expect(result[0].minHeight).toBe(60);
       expect(result[0].defaultConfig.customWidgetId).toBe(3);
       expect(result[0].defaultConfig.displayType).toBe('value');
-      expect(result[0].defaultConfig.field).toBe('rate');
+      expect((result[0].defaultConfig as Record<string, unknown>).field).toBe('rate');
       expect(result[0].defaultConfig.fontSize).toBe(24);
 
       // Second widget - null description uses data source name fallback
@@ -534,6 +572,25 @@ describe('CustomWidgetsService', () => {
   });
 
   describe('getWithData()', () => {
+    it('awaits isolated script results before returning the public preview', async () => {
+      mockPrisma.customWidget.findUnique.mockResolvedValue({
+        id: 1, dataSourceId: 5, displayType: 'script', template: null,
+        config: { scriptCode: 'return $.price * 2;', scriptOutputMode: 'value' },
+      });
+      mockDataSourcesService.getCachedData.mockResolvedValue({ price: 21 });
+      const result = await service.getWithData(1, true);
+      expect(result.renderedContent).toBe('42');
+      expect(result.renderedContent).not.toBeInstanceOf(Promise);
+    });
+
+    it('rejects script failure through the preview boundary without exposing guest text', async () => {
+      mockPrisma.customWidget.findUnique.mockResolvedValue({
+        id: 1, dataSourceId: 5, displayType: 'script', template: null,
+        config: { scriptCode: 'throw new Error("private-preview-secret");', scriptOutputMode: 'value' },
+      });
+      mockDataSourcesService.getCachedData.mockResolvedValue({ price: 21 });
+      await expect(service.getWithData(1, true)).rejects.toMatchObject({ status: 503, message: 'SCRIPT_EXECUTION_FAILED' });
+    });
     it('should throw NotFoundException when widget not found', async () => {
       mockPrisma.customWidget.findUnique.mockResolvedValue(null);
       await expect(service.getWithData(999)).rejects.toThrow(NotFoundException);
@@ -554,7 +611,7 @@ describe('CustomWidgetsService', () => {
 
       const result = await service.getWithData(1);
 
-      expect(result.widget).toEqual(widget);
+      expect<unknown>(result.widget).toEqual(widget);
       expect(result.data).toEqual({ price: 100 });
       expect(result.renderedContent).toBe('$100');
     });

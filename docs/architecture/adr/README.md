@@ -33,4 +33,4 @@ ersetzt.
 | [007](007-snapshot-only-rendering.md) | Akzeptiert | Renderer lesen ausschließlich persistierte Snapshots |
 | [008](008-hardware-assumptions.md) | Offen | Hardwaredetails bleiben bis zur Messung Annahmen |
 | [009](009-local-http-policy.md) | Offen | Richtlinie für HTTP-Pairing im lokalen Netz |
-| [010](010-extension-isolation.md) | Offen | Ausführungsgrenze für Drittanbieter-Erweiterungen |
+| [010](010-extension-isolation.md) | Akzeptiert | QuickJS-WASM in beendbaren Kindprozessen; native Erweiterungen nicht freigegeben |

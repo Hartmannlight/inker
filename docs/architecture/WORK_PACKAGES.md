@@ -77,7 +77,7 @@ müssen.
 | [x] | WP-19 | Render-Deduplizierung, Artefaktcache und Fallback | WP-14, WP-17, WP-18 |
 | [x] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
 | [x] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
-| [ ] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
+| [x] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
 | [ ] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
 | [ ] | WP-24 | Persistente Timer-Domäne | WP-23 |
 | [ ] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
@@ -2762,14 +2762,14 @@ Secretgrenze und ein adversarial Testplugin. Kein Marketplace.
 
 **Aufgaben:**
 
-- [ ] Klassifiziere Built-in-Connector, deklarative Erweiterung und unbekannten
+- [x] Klassifiziere Built-in-Connector, deklarative Erweiterung und unbekannten
   Code getrennt.
-- [ ] Definiere zulässige Inputs/Outputs ohne direkten Tokenzugriff.
-- [ ] Verschiebe unbekannten Code in einen beendbaren Subprozess/Worker mit
+- [x] Definiere zulässige Inputs/Outputs ohne direkten Tokenzugriff.
+- [x] Verschiebe unbekannten Code in einen beendbaren Subprozess/Worker mit
   Zeit-, Speicher- und Netzwerkpolicy.
-- [ ] Übergib nur normalisierte Daten und temporäre minimal notwendige Rechte.
-- [ ] Töte hängenden Code zuverlässig und markiere Job/Source als fehlerhaft.
-- [ ] Teste Endlosschleife, Speicherlast, Token-Exfiltrationsversuch und Crash.
+- [x] Übergib nur normalisierte Daten und temporäre minimal notwendige Rechte.
+- [x] Töte hängenden Code zuverlässig und markiere Job/Source als fehlerhaft.
+- [x] Teste Endlosschleife, Speicherlast, Token-Exfiltrationsversuch und Crash.
 
 **Abnahme:** Ein bösartiges Testplugin kann API/Worker nicht dauerhaft blockieren
 und sieht kein Provider-Refresh-Token.
@@ -2778,6 +2778,58 @@ und sieht kein Provider-Refresh-Token.
 
 **Handoff:** Unterstützte Erweiterungsklassen und verbleibende OS-Sandboxgrenzen
 notieren.
+
+**Handoff (2026-08-28, abgenommen):**
+
+- ADR-010 legt drei Klassen fest: geprüfte Built-in-Connectoren im Source-Worker,
+  deklaratives Liquid und unbekannte reine JavaScript-Transformationen im
+  QuickJS-WASM-Gast eines frischen Bun-Kindprozesses. Keine nativen Plugins,
+  npm-Module, Hostbindings, Modul-Loader oder Netzwerkfähigkeiten im Gast.
+  `node:vm` und Liquid-Ausführung im API-Prozess entfernt; keine neuen Widgets,
+  produktiven Connectoren oder Firmware.
+- Feste Grenzen: 1s Gastdeadline, 2,5s einschließlich Prozessqueue, 32MiB feste
+  WASM-Memory, 512KiB Stack, 2 aktive/16 wartende Kinder je Elternprozess,
+  64KiB JSON, 256KiB HTML, begrenzte IPC-Pipes. Abort/Timeout führt zu SIGKILL;
+  Ergebnis und Slotfreigabe erst nach tatsächlichem Prozessende. API und Worker
+  schließen Kinder beim Shutdown. QuickJS0.32.0 exakt gepinnt; LinuxfrozenInstall,
+  vollständiger Build mit `dist/isolation-child.js` und Liquid-Asset erfolgreich.
+- Versionierter JSON-only-Vertrag ohne Getter/Proxies/Hooks, Credentialfelder
+  redigiert; Plugin-Settings bereits vor IPC entfernt. Returnserialisierung bleibt
+  im Gast. Erkannte Reviewfehler behoben: quadratische Text-Redaction,
+  unwirksames alleiniges QuickJS-Heaplimit, Bun-.env-Autoload und Webpack-Auflösung
+  des Liquid-Browserassets. Isolierte Fehler enthalten nur feste Codes.
+- `SourceDefinition.transformationCode` ist optional/nullable, maximal10000Zeichen.
+  Migration20260901000000 erhält vorhandene Quellen/Snapshots. PUT ohne Feld
+  bewahrt Code, null löscht; Definitionsversionen fencen laufende Jobs.
+  Worker übergibt nur validierte Connector-Daten und validiert das Ergebnis
+  erneut gegen Secret/Schema. Connector+Transformation teilen das Sourcebudget.
+  CPU-, Speicher-, Hostzugriffs- und Hookfehler erhalten immutable Last-good-Daten
+  als stale; begrenzte Retries/Circuit/Deadletter bleiben wirksam. Beschädigte
+  Secrets erlauben Disable/Clear/Rotation nur bei identischen öffentlichen Daten;
+  sonst bleibt die Prüfung geschlossen. Neue Secrets werden weiter geprüft.
+- Hauptagent:722Backendtests/3457Assertions,38Contracttests/261 und80Frontendtests
+  bestanden.36Sourceintegrationen/585 und10Migrationstests/66 vollständig grün,
+  zusätzlich88HTTP/Auth/Publication/Playback/Outbox/Cache/Maintenance-Integrationen
+  mit1715Assertions. Echte Chromium-/Sharp-Tests gehören zur Backendsuite.
+  Typechecks für Anwendung, Contracts und geänderte Tests erfolgreich; gezieltes
+  Lint0Errors/1bestehendesWarning. Repositoryweites Lint nicht als grün behauptet.
+  Parenttests prüfen echte Kindprozesse, SIGKILL/Abort/Shutdown, Queuegrenzen,
+  beschädigtes IPC, stdout/stderr-Flooding und Erholung; kein Skip/Platzhalter.
+- Reale Redis-Regressionsstrecke125,54s bestanden: Recovery61,874s,
+  Delivery2/Render3Versuche,100Events6,671s=15,0/s. Finale Produktionsabnahme
+  `inker:wp22-test` besteht WP15/17/18/19/20/21 sowie den neuen Isolationshelper:
+  echtes Liquid, CPU-/Heap-/Exfiltrationsfehler, Last-good, Source-Recovery und
+  beschädigtes Secret abschalten/reparieren. SIGSTOP eines eigenen Gastprozesses
+  beweist unabhängigen Parentkill nach2521,9ms und vollständiges PID-Cleanup.
+  Währenddessen Login104,7ms,20Manifest-/Artefaktreads p9561,3ms; gecachte Bildhashes
+  unverändert. Nachfolgender Auftrag erfolgreich. Containerrestart und
+  vollständiger Secret-Audit bestanden; nur eigene Container/Volumes bereinigt.
+- Betrieb, Kompatibilitätsänderungen, Fehlercodes und Restgrenzen stehen in
+  [ISOLATION_OPERATIONS.md](ISOLATION_OPERATIONS.md). Die Kindprozesse teilen UID
+  und OS-Rechte des Parents; keine vollständige OS-Sandbox oder32MiB-RSS-Zusage.
+  Engine-/Loaderlücken bleiben Risiko, native/frei vernetzte Erweiterungen brauchen
+  eine neue Entscheidung. Hardwareprüfungen bleiben offen. Nächster Schritt WP23;
+  der laut Index erlaubte WP28-Kern darf unabhängig parallel entstehen.
 
 ## WP-23 – Interaction-/Command-Pipeline implementieren
 

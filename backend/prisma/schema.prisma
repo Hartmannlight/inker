@@ -397,6 +397,7 @@ model SourceDefinition {
   connectorType String @map("connector_type")
   schemaVersion String @map("schema_version")
   configuration Json
+  transformationCode String? @map("transformation_code")
   secretId String? @map("secret_id")
   refreshIntervalSeconds Int @map("refresh_interval_seconds")
   timeoutMs Int @map("timeout_ms")

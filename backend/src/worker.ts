@@ -8,6 +8,7 @@ import { OutboxDispatcher } from './events/outbox-dispatcher.service';
 import { OutboxRedisService } from './events/outbox-redis.service';
 import { createLoggerConfig } from './config/logger.config';
 import { DEFAULT_INSTANCE_SECRET_PATH, loadInstanceSecrets } from './config/instance-secrets';
+import { closeIsolatedExecution } from './isolation/isolated-executor';
 
 async function bootstrapWorker() {
   loadInstanceSecrets(resolve(process.env.INKER_INSTANCE_SECRET_PATH || DEFAULT_INSTANCE_SECRET_PATH));
@@ -42,6 +43,7 @@ async function bootstrapWorker() {
       guard.unref();
       try {
         await dispatcher.stop();
+        await closeIsolatedExecution();
         await redis.close();
         await new Promise<void>(resolve => server.close(() => resolve()));
         await app.close();

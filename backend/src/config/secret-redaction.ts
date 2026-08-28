@@ -3,8 +3,10 @@ const SENSITIVE_KEY_PATTERN = '(?:pin|password|passphrase|secret|token|credentia
 const SENSITIVE_KEY = new RegExp(`${SENSITIVE_KEY_PATTERN}$`, 'i');
 // Match sensitive keys directly so an enclosing non-secret JSON object cannot
 // consume nested fields before the scanner reaches their sensitive assignments.
+// Start only at a key boundary: retrying the greedy prefix at every character
+// makes an otherwise harmless long alphanumeric value quadratic.
 const TEXT_SECRET_ASSIGNMENT = new RegExp(
-  `((["']?)[a-z0-9_-]*${SENSITIVE_KEY_PATTERN}\\2\\s*[:=]\\s*)("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|[^\\s,;{}]+)`,
+  `(?<![a-z0-9_-])((["']?)[a-z0-9_-]*${SENSITIVE_KEY_PATTERN}\\2\\s*[:=]\\s*)("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|[^\\s,;{}]+)`,
   'gi',
 );
 

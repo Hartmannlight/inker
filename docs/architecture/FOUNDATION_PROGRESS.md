@@ -143,7 +143,57 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    Testskriptparameter; behoben,keineProduktionsregression. Source-Betriebsdoku
    undRunbookverweise ergänzt. FinalerContainerrestart/Secretauditgrün,Exit0.
    BrowserAdmin/Editor/Pairing und1920×1080weiß→schwarzohneReloadgeprüft;
-   Testcontainer/Volumesbereinigt. WP21abgenommen,lokalerCommitfolgt.
-5. Danach bis WP-29 in Indexreihenfolge; keine unerfüllten Gates überspringen.
+   Testcontainer/Volumesbereinigt. WP21abgenommen,lokal05098c0committed;
+   anschließendArbeitsbaumsauber.
+5. JetztWP22: vollständigesPaket,Architektur1/2/4/5/6.5/7/8/Phase6/11/12 und
+   ADR006/007/010gelesen. Reviewinventar findetweiterhin node:vmScriptExecutor
+   undLiquid imAPI, einschließlichblockierenderResult.toStringaußerhalbVMTimeout.
+   ArchitekturentscheidunginVorbereitung: frischerBunSubprozess mitQuickJS-WASM-
+   Gast, keineHostbindings/Module/Netzwerk, harteGastheap/Stack/Interruptlimits
+   undzusätzlicherElternprozessdeadline/SIGKILL. LiquidBrowserbundleebenfallsimGast.
+   NacktesSubprozess-env:{}istwegengeteilterUID/SecretvolumekeineSecretgrenze.
+   NurreineJS-Transformationen/deklarativeTemplates,keinnativesPlugin/Marketplace.
+   Umsetzung/Abnahmetestsnoch offen; anschließendWP23bisWP29inIndexreihenfolge.
+   QuickJS0.32.0exaktgepinnt(package/lock); WindowsBunadd scheitertebeimKopieren
+   derlokalen@inker/contracts-Abhängigkeit auchmitcopyfile. QuickJSund9neuePakete
+   sindinstalliert; gebauteContractsmanifest/README/dist manuellnachnode_modules
+   zurückkopiert,requirebeiderPaketeerfolgreich. LinuxfrozenInstallnochzuprüfen.
+   Root: isolation-contract.ts mitProxy/Getter/Hook-sichererbegrenzterJSONkopie,
+   zentralerRedaction; isolated-executor.ts mit2Prozessen/16Wartenden,2,5sDeadline,
+   leerenv,beschränktenPipes,SIGKILL undawaitclose; eigenständigeProzesstests.
+   MainTypecheckgrün. GuestagentimplementiertWASM+Liquid; Callsiteagentbereitetnur
+   Tests vor. Tool-SicherheitsprüfungverlangtbelegteExecutor-Negativtestsvor
+   ausführbarerAPI/Worker-Anbindung; dieseAnbindungwirdbisNachweisausgesetzt,
+   keineUmgehung. Neuerread-onlyAgentisolation_reviewprüftParent/Contract.
+   Grenze inzwischen tatsächlich getestet und reguläre Toolfreigabe für Anbindung
+   erhalten. JS/Liquid laufen jetzt nur im Gast; Source-Transformation ist optional,
+   versioniert und verwendet ausschließlich normalisierte Daten. Gefundene Lücken
+   behoben: quadratische Redaction, unwirksames alleiniges QuickJS-Heaplimit
+   (jetzt feste32MiB-WASM-Memory), Bun-.env-Autoload, Webpack-Liquid-Assetauflösung,
+   Settings vor IPC entfernt. Hauptagent:721Backendtests/3446Assertions,
+   38Contracts/261,80Frontend grün. Source+Migration41/575 durchAgent grün;
+   zusätzliche88Integrationen/1715 grün. Redis125,54s:Recovery61,874s,
+   100Events6,671s=15,0/s. Typecheck Anwendung+Tests undgezieltesLint0Errors,
+   1bestehendesWarning. LinuxfrozenInstall+Imagebuild erfolgreich.
+   Container-Smoke mit eigenem WP22-Helper läuft, nochkeinAbschlussnachweis.
+   Reviewer prüfte Gast/Parent/Callsites/Fences; kein weiterer P1/P2 außer
+   Source-Recovery bei beschädigtem Altsecret: Agent ergänzt eng begrenzte
+   Disable/Clear/Rotate-Ausnahme bei identischen öffentlichen Feldern samtTests.
+   Danach finalesImage/Smoke undWP22Handoff/Commit; WP23–29 weiterhin offen.
 
-Kein Foundation-Abschluss behauptet. WP-22 bis WP-29 sind noch offen.
+   WP22 jetzt abgenommen: finale722Backend/38Contracts/80Frontend,36Source/585,
+   10Migration/66 sowie88sonstigeIntegration/1715. AbschließendesImage/SmokeExit0:
+   tatsächlicherSIGSTOP→Parentkill2521,9ms,PIDcleanup,SourceSecretRepair,
+   Login104,7ms,20API/Artefaktreads p9561,3ms,RestartundSecretauditgrün.
+   EigeneContainer/Volumesbereinigt. ADR010akzeptiert,WP22Handoff+Operations+Phase6
+   aktualisiert. Nächster lokaler Commit schließtWP22 ab.
+6. WP23 ist nächstes sequenzielles Paket; vollständigeAnforderung+Architektur4/5/
+   6.4/6.6/7/8+ADRs gelesen. Read-onlySubagentinventar: Contractsvorhanden,
+   keinepersistiertenPublicationActions; view.next sollPlaybackadvancewiederverwenden,
+   aberReceipt+Änderung+OutboxmüsseneineTransaktionsein. AuthbrauchtDeviceCredential-
+   Principal,keineLegacyHTTP_IDCommands. DuplicatevorCurrentRevision/Timewindowprüfen.
+   Parallel erlaubt: WP28Agentwp19_renderer bearbeitet NUR neue Observability-
+   Contract-/Context-/Logschema-/Metricsdateien+Tests,keinIndexexport/Schema/Bootstrap.
+   WP28bleibtbisIntegrationundRemoteanschlussnachWP27unabgenommen.
+
+Kein Foundation-Abschluss behauptet. WP-23 bis WP-29 sind noch offen.

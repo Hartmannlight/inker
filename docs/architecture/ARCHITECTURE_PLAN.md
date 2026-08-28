@@ -507,20 +507,23 @@ unveränderte Pull-Geräte erhalten `304 Not Modified`.
 **Warum:** Spätere Mail-, Smart-Home- und Grafana-Abfragen dürfen weder API noch
 Rendering blockieren.
 
-- [ ] API- und Worker-Bootstrap logisch und optional prozessseitig trennen.
-- [ ] Queue-Konfiguration zentralisieren und Jobverträge versionieren.
-- [ ] Globale, providerbezogene und connectorbezogene Concurrency-Grenzen
+- [x] API- und Worker-Bootstrap logisch und optional prozessseitig trennen.
+- [x] Queue-Konfiguration zentralisieren und Jobverträge versionieren.
+- [x] Globale, providerbezogene und connectorbezogene Concurrency-Grenzen
   implementieren.
-- [ ] Timeout, Abbruch, Retry mit Jitter und Circuit Breaker standardisieren.
-- [ ] SourceDefinition, Secret-Referenz und SourceSnapshot persistieren.
-- [ ] Snapshot-Schema und Freshness-/Stale-Regeln implementieren.
-- [ ] Einen Fixture-/Demo-Connector ohne externe Credentials bauen.
-- [ ] Einen absichtlich langsamen und fehlerhaften Testconnector bauen.
-- [ ] Nicht abbrechbare Arbeit in Worker-Threads/Subprozesse verschieben.
-- [ ] Generischen Plugin-Code vom API-Prozess und von Provider-Tokens isolieren.
+- [x] Timeout, Abbruch, Retry mit Jitter und Circuit Breaker standardisieren.
+- [x] SourceDefinition, Secret-Referenz und SourceSnapshot persistieren.
+- [x] Snapshot-Schema und Freshness-/Stale-Regeln implementieren.
+- [x] Einen Fixture-/Demo-Connector ohne externe Credentials bauen.
+- [x] Einen absichtlich langsamen und fehlerhaften Testconnector bauen.
+- [x] Nicht abbrechbare Arbeit in Worker-Threads/Subprozesse verschieben.
+- [x] Generischen Plugin-Code vom API-Prozess und von Provider-Tokens isolieren.
 
 **Gate:** Ein hängender Testconnector beeinflusst Login, Editor, Manifestabruf und
 bereits gerenderte Displays nicht.
+
+Nachweis: abgenommene Handoffs WP-20 bis WP-22 in `WORK_PACKAGES.md`, einschließlich
+echter Docker-/Redis-/Browserprüfung und beendeter adversarialer Kindprozesse.
 
 ### Phase 7 – Interaktionen und persistente Timer
 

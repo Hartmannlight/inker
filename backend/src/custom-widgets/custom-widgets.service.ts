@@ -3,6 +3,7 @@ import {
   NotFoundException,
   Logger,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DataSourcesService } from '../data-sources/data-sources.service';
@@ -209,9 +210,9 @@ export class CustomWidgetsService {
 
   /**
    * Get widget with rendered data
-   * Fetches latest data from source and applies template
+   * Reads persisted source data and applies the template
    */
-  async getWithData(id: number, skipFetch = false) {
+  async getWithData(id: number, skipFetch = false, signal?: AbortSignal) {
     const customWidget = await this.prisma.customWidget.findUnique({
       where: { id },
       include: {
@@ -223,18 +224,19 @@ export class CustomWidgetsService {
       throw new NotFoundException('Custom widget not found');
     }
 
-    // Get cached or fresh data from data source
+    // The data-source boundary reads persisted snapshots only.
     const data = await this.dataSourcesService.getCachedData(
       customWidget.dataSourceId,
       skipFetch,
     );
 
     // Render the data based on display type
-    const renderedContent = this.renderContent(
+    const renderedContent = await this.renderContent(
       customWidget.displayType,
       customWidget.template,
       customWidget.config as Record<string, unknown>,
       data,
+      signal,
     );
 
     return {
@@ -247,12 +249,13 @@ export class CustomWidgetsService {
   /**
    * Render content based on display type
    */
-  private renderContent(
+  private async renderContent(
     displayType: string,
     template: string | null,
     config: Record<string, unknown>,
     data: unknown,
-  ): string | string[] | Record<string, unknown> {
+    signal?: AbortSignal,
+  ): Promise<string | string[] | Record<string, unknown>> {
     switch (displayType) {
       case 'value':
         return this.renderValue(config, data);
@@ -261,10 +264,10 @@ export class CustomWidgetsService {
         return this.renderList(config, data);
 
       case 'script':
-        return this.renderScript(config, template, data);
+        return this.renderScript(config, template, data, signal);
 
       case 'grid':
-        return this.renderGrid(config, data);
+        return this.renderGrid(config, data, signal);
 
       default:
         return String(data);
@@ -372,33 +375,32 @@ export class CustomWidgetsService {
    * Executes user JavaScript code to transform data
    * Config: { scriptCode: "...", scriptOutputMode: "value" | "template", prefix?, suffix? }
    */
-  private renderScript(
+  private async renderScript(
     config: Record<string, unknown>,
     template: string | null,
     data: unknown,
-  ): string {
+    signal?: AbortSignal,
+  ): Promise<string> {
     const code = config.scriptCode as string;
     const outputMode = (config.scriptOutputMode as string) || 'value';
 
-    if (!code) {
-      return 'No script defined';
+    if (typeof code !== 'string' || !code) {
+      throw new ServiceUnavailableException('SCRIPT_EXECUTION_FAILED');
     }
 
     if (outputMode === 'value') {
-      const result = this.scriptExecutor.execute(code, data, 'value');
+      const result = await this.scriptExecutor.execute(code, data, 'value', signal);
       if (!result.success) {
-        this.logger.warn(`Script error: ${result.error}`);
-        return `Error: ${result.error}`;
+        throw new ServiceUnavailableException('SCRIPT_EXECUTION_FAILED');
       }
       const prefix = (config.prefix as string) || '';
       const suffix = (config.suffix as string) || '';
       return `${prefix}${result.value ?? ''}${suffix}`;
     } else {
       // Template mode: execute script to get variables, then apply template
-      const result = this.scriptExecutor.execute(code, data, 'template');
+      const result = await this.scriptExecutor.execute(code, data, 'template', signal);
       if (!result.success) {
-        this.logger.warn(`Script error: ${result.error}`);
-        return `Error: ${result.error}`;
+        throw new ServiceUnavailableException('SCRIPT_EXECUTION_FAILED');
       }
       // Replace {{varName}} with variable values
       const templateStr = template || '';
@@ -414,14 +416,21 @@ export class CustomWidgetsService {
    * Displays multiple values in a configurable grid layout
    * Config: { gridCols: 2, gridRows: 2, gridGap: 8, gridCells: { "0-0": { field, label, prefix, suffix, fieldType, useScript, script } } }
    */
-  private renderGrid(
+  private async renderGrid(
     config: Record<string, unknown>,
     data: unknown,
-  ): Record<string, unknown> {
-    const gridCols = (config.gridCols as number) || 2;
-    const gridRows = (config.gridRows as number) || 2;
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const gridCols = (config.gridCols as number | undefined) ?? 2;
+    const gridRows = (config.gridRows as number | undefined) ?? 2;
     const gridGap = (config.gridGap as number) || 8;
-    const gridCells = (config.gridCells as Record<string, Record<string, unknown>>) || {};
+    const gridCells = (config.gridCells as Record<string, Record<string, unknown>> | undefined) ?? {};
+    if (!Number.isSafeInteger(gridCols) || !Number.isSafeInteger(gridRows)
+      || gridCols < 1 || gridRows < 1 || gridCols * gridRows > 16
+      || typeof gridCells !== 'object' || Array.isArray(gridCells)
+      || Object.keys(gridCells).length > 16) {
+      throw new ServiceUnavailableException('SCRIPT_GRID_LIMIT_EXCEEDED');
+    }
 
     // Build array of cell data
     const cells: Array<{
@@ -441,6 +450,7 @@ export class CustomWidgetsService {
 
     for (let row = 0; row < gridRows; row++) {
       for (let col = 0; col < gridCols; col++) {
+        if (signal?.aborted) throw new ServiceUnavailableException('SCRIPT_EXECUTION_FAILED');
         const cellKey = `${row}-${col}`;
         const cellConfig = gridCells[cellKey];
 
@@ -452,17 +462,15 @@ export class CustomWidgetsService {
           let rawValue: unknown;
           let formattedValue: string;
 
-          if (useScript && script) {
-            // Execute script for this cell
-            const result = this.scriptExecutor.execute(script, data, 'value');
-            if (result.success) {
-              rawValue = result.value;
-              formattedValue = String(result.value ?? '');
-            } else {
-              this.logger.warn(`Grid cell script error: ${result.error}`);
-              rawValue = null;
-              formattedValue = `Error: ${result.error}`;
+          if (useScript) {
+            if (typeof script !== 'string' || !script) {
+              throw new ServiceUnavailableException('SCRIPT_EXECUTION_FAILED');
             }
+            // Await one cell at a time; the grid cannot fan out child processes.
+            const result = await this.scriptExecutor.execute(script, data, 'value', signal);
+            if (!result.success) throw new ServiceUnavailableException('SCRIPT_EXECUTION_FAILED');
+            rawValue = result.value;
+            formattedValue = String(result.value ?? '');
           } else {
             // Standard field extraction with prefix/suffix
             rawValue = this.extractField(data, field);

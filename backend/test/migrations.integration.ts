@@ -101,6 +101,35 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-22 adds nullable bounded transformation code without rewriting sources or snapshots', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp22-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations'), latest = '20260901000000_source_transformations';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath);
+    try {
+      database.exec("INSERT INTO source_secrets(id,ciphertext) VALUES('opaque-secret','synthetic-ciphertext');");
+      database.exec("INSERT INTO source_definitions(source_definition_id,name,connector_type,schema_version,configuration,secret_id,refresh_interval_seconds,timeout_ms,concurrency_group,next_refresh_at,updated_at) VALUES('source','Legacy source','fixture','1','{\"data\":{\"value\":7}}','opaque-secret',60,500,'provider',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);");
+      database.exec("INSERT INTO outbox_events(event_id,event_type,aggregate_type,aggregate_id,payload) VALUES('refresh','source.refresh.due','SourceDefinition','source','{}');");
+      database.exec("INSERT INTO source_refresh_jobs(event_id,source_definition_id,definition_version,connector_type,concurrency_group,scheduled_at) VALUES('refresh','source',1,'fixture','provider',CURRENT_TIMESTAMP);");
+      database.exec("INSERT INTO source_snapshots(snapshot_id,source_definition_id,definition_version,revision,schema_version,connector_version,valid_data_created_at,freshness_state,stale_after_seconds,data,content_hash,refresh_event_id,attempt) VALUES('snapshot','source',1,1,'1','builtin-fixture-v1',CURRENT_TIMESTAMP,'fresh',60,'{\"value\":7}','" + 'a'.repeat(64) + "','refresh',1);");
+      database.exec("UPDATE source_definitions SET latest_snapshot_id='snapshot',latest_valid_snapshot_id='snapshot',snapshot_revision=1 WHERE source_definition_id='source';");
+      const source = database.query('SELECT * FROM source_definitions').get() as Record<string, unknown>;
+      const tables = ['source_secrets', 'source_snapshots', 'source_refresh_jobs', 'outbox_events', 'outbox_effects', 'publications', 'render_requests'];
+      const before = tables.map(table => database.query('SELECT * FROM ' + table).all());
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      // Prepare after ALTER: Bun caches query column metadata per SQL string.
+      expect(database.query("SELECT * FROM source_definitions WHERE source_definition_id='source'").get()).toEqual({ ...source, transformation_code: null });
+      expect(tables.map(table => database.query('SELECT * FROM ' + table).all())).toEqual(before);
+      database.query("UPDATE source_definitions SET transformation_code=? WHERE source_definition_id='source'").run(' '.repeat(10_000));
+      expect(() => database.query("UPDATE source_definitions SET transformation_code=? WHERE source_definition_id='source'").run(' '.repeat(10_001))).toThrow();
+      database.exec("UPDATE source_definitions SET transformation_code=NULL WHERE source_definition_id='source';");
+      expect(() => database.exec("UPDATE source_snapshots SET data='{}' WHERE snapshot_id='snapshot';")).toThrow('source_snapshot_immutable');
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
+
   test('WP-21 adds empty source storage without changing publications, renders or outbox', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp21-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260831000000_sources';
@@ -124,6 +153,7 @@ describe("Prisma migration baseline", () => {
       for (const table of ['source_definitions', 'source_secrets', 'source_snapshots', 'source_refresh_jobs']) expect(database.query(`SELECT * FROM ${table}`).all()).toEqual([]);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -281,6 +311,7 @@ describe("Prisma migration baseline", () => {
         "20260829000000_playlist_playback",
         "20260830000000_render_cache",
         "20260831000000_sources",
+        "20260901000000_source_transformations",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

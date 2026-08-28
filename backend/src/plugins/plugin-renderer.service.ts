@@ -1,7 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { Liquid } from 'liquidjs';
-import { isJsonValue } from '@inker/contracts';
-import { redactLogValue } from '../config/secret-redaction';
+import { types } from 'node:util';
+import type { JsonValue } from '@inker/contracts';
+import { executeIsolated, IsolatedExecutionError } from '../isolation/isolated-executor';
 import { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
 import { TRMNL_CSS } from './sync/trmnl-css';
 
@@ -14,155 +14,7 @@ export type PluginLayout = 'full' | 'half_horizontal' | 'half_vertical' | 'quadr
  */
 @Injectable()
 export class PluginRendererService {
-  private readonly liquid: Liquid;
-
-  constructor(
-    readonly screenRenderer: ScreenRendererService,
-  ) {
-    this.liquid = new Liquid({
-      strictVariables: false,
-      strictFilters: false,
-      ownPropertyOnly: true,
-    });
-    this.registerTrmnlFilters();
-  }
-
-  /**
-   * Register TRMNL-compatible Liquid filters (ported from trmnl-liquid gem)
-   */
-  private registerTrmnlFilters() {
-    // number_with_delimiter: {{ 1234567 | number_with_delimiter }} → "1,234,567"
-    this.liquid.registerFilter('number_with_delimiter', (value: any, delimiter = ',', separator = '.') => {
-      if (value == null) return '';
-      const parts = String(value).split('.');
-      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, delimiter);
-      return parts.join(separator);
-    });
-
-    // number_to_currency: {{ 10420 | number_to_currency: "£" }} → "£10,420.00"
-    this.liquid.registerFilter('number_to_currency', (value: any, unit = '$', delimiter = ',', separator = '.', precision = 2) => {
-      if (value == null) return '';
-      const num = Number(value);
-      if (isNaN(num)) return String(value);
-      const fixed = num.toFixed(precision);
-      const parts = fixed.split('.');
-      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, delimiter);
-      return `${unit}${parts.join(separator)}`;
-    });
-
-    // days_ago: {{ 3 | days_ago }} → "2026-03-23"
-    this.liquid.registerFilter('days_ago', (value: any, _timezone = 'UTC') => {
-      const days = Number(value) || 0;
-      const d = new Date();
-      d.setDate(d.getDate() - days);
-      return d.toISOString().split('T')[0];
-    });
-
-    // pluralize: {{ "book" | pluralize: 2 }} → "2 books"
-    this.liquid.registerFilter('pluralize', (singular: any, count: any, options?: any) => {
-      const n = Number(count) || 0;
-      const plural = options?.plural || `${singular}s`;
-      return `${n} ${n === 1 ? singular : plural}`;
-    });
-
-    // group_by: {{ items | group_by: "category" }}
-    this.liquid.registerFilter('group_by', (collection: any, key: string) => {
-      if (!Array.isArray(collection)) return {};
-      const groups: Record<string, any[]> = {};
-      for (const item of collection) {
-        const k = String(item?.[key] ?? '');
-        if (!groups[k]) groups[k] = [];
-        groups[k].push(item);
-      }
-      return groups;
-    });
-
-    // find_by: {{ items | find_by: "name", "Ryan" }}
-    this.liquid.registerFilter('find_by', (collection: any, key: string, value: any, fallback?: any) => {
-      if (!Array.isArray(collection)) return fallback ?? null;
-      return collection.find(item => item?.[key] == value) ?? fallback ?? null;
-    });
-
-    // json: {{ data | json }}
-    this.liquid.registerFilter('json', (value: any) => {
-      try { return JSON.stringify(value); } catch { return ''; }
-    });
-
-    // parse_json: {% assign obj = data | parse_json %}
-    this.liquid.registerFilter('parse_json', (value: any) => {
-      try { return JSON.parse(String(value)); } catch { return null; }
-    });
-
-    // append_random: {{ "chart-" | append_random }} → "chart-a3f1"
-    this.liquid.registerFilter('append_random', (value: any) => {
-      const hex = Math.random().toString(16).slice(2, 6);
-      return `${value ?? ''}${hex}`;
-    });
-
-    // sample: {{ items | sample }} → random element
-    this.liquid.registerFilter('sample', (arr: any) => {
-      if (!Array.isArray(arr) || arr.length === 0) return null;
-      return arr[Math.floor(Math.random() * arr.length)];
-    });
-
-    // map_to_i: {{ "5, 4, 3" | split: ", " | map_to_i }}
-    this.liquid.registerFilter('map_to_i', (arr: any) => {
-      if (!Array.isArray(arr)) return arr;
-      return arr.map(v => parseInt(String(v), 10) || 0);
-    });
-
-    // ordinalize: {{ "2025-10-02" | ordinalize: "%A, %B <<ordinal_day>>, %Y" }}
-    this.liquid.registerFilter('ordinalize', (value: any, format?: string) => {
-      const d = new Date(String(value));
-      if (isNaN(d.getTime())) return String(value);
-      const day = d.getDate();
-      const suffix = [11,12,13].includes(day % 100) ? 'th'
-        : day % 10 === 1 ? 'st' : day % 10 === 2 ? 'nd' : day % 10 === 3 ? 'rd' : 'th';
-      if (!format) return `${day}${suffix}`;
-      const weekdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-      const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-      return format
-        .replace('<<ordinal_day>>', `${day}${suffix}`)
-        .replace('%A', weekdays[d.getDay()])
-        .replace('%B', months[d.getMonth()])
-        .replace('%Y', String(d.getFullYear()))
-        .replace('%y', String(d.getFullYear()).slice(-2))
-        .replace('%m', String(d.getMonth() + 1).padStart(2, '0'))
-        .replace('%d', String(day).padStart(2, '0'));
-    });
-
-    // l_date: {{ "2025-01-11" | l_date: "%y %b" }}
-    this.liquid.registerFilter('l_date', (value: any, format?: string, locale = 'en') => {
-      let d: Date;
-      if (value === 'now' || value === 'today') d = new Date();
-      else if (typeof value === 'number' && value > 1e9) d = new Date(value * 1000);
-      else d = new Date(String(value));
-      if (isNaN(d.getTime())) return String(value);
-      if (!format) return d.toLocaleDateString(locale);
-      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      const fullMonths = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-      const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      return format
-        .replace('%Y', String(d.getFullYear()))
-        .replace('%y', String(d.getFullYear()).slice(-2))
-        .replace('%B', fullMonths[d.getMonth()])
-        .replace('%b', months[d.getMonth()])
-        .replace('%A', ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()])
-        .replace('%a', weekdays[d.getDay()])
-        .replace('%m', String(d.getMonth() + 1).padStart(2, '0'))
-        .replace('%d', String(d.getDate()).padStart(2, '0'))
-        .replace('%H', String(d.getHours()).padStart(2, '0'))
-        .replace('%M', String(d.getMinutes()).padStart(2, '0'))
-        .replace('%S', String(d.getSeconds()).padStart(2, '0'))
-        .replace('%I', String(d.getHours() % 12 || 12).padStart(2, '0'))
-        .replace('%p', d.getHours() >= 12 ? 'PM' : 'AM');
-    });
-
-    // where_exp: {{ items | where_exp: "item", "item.active == true" }}
-    this.liquid.registerFilter('where_exp', () => {
-      throw new ServiceUnavailableException('PLUGIN_ISOLATION_REQUIRED');
-    });
-  }
+  constructor(readonly screenRenderer: ScreenRendererService) {}
 
   /**
    * Render a plugin's Liquid template with data to HTML string
@@ -171,20 +23,35 @@ export class PluginRendererService {
     markup: string,
     locals: Record<string, any>,
     _settings: Record<string, any> = {},
+    signal?: AbortSignal,
   ): Promise<string> {
-    if (!isJsonValue(locals) || !locals || typeof locals !== 'object' || Array.isArray(locals)) {
+    if (!locals || typeof locals !== 'object' || types.isProxy(locals) || Array.isArray(locals)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(locals)) || Object.getOwnPropertySymbols(locals).length) {
       throw new ServiceUnavailableException('SOURCE_SNAPSHOT_INVALID');
     }
+    if (typeof markup !== 'string') throw new ServiceUnavailableException('PLUGIN_TEMPLATE_UNAVAILABLE');
     if (/\|\s*where_exp\b/.test(markup) || /\{%-?\s*(?:include|render|layout)\b/.test(markup)) {
       throw new ServiceUnavailableException('PLUGIN_ISOLATION_REQUIRED');
     }
     try {
-      // Settings are configuration and may contain credentials. Templates see
-      // only normalized persisted data, never a settings or OAuth object.
-      const context = { ...(redactLogValue(locals) as Record<string, unknown>), settings: {} };
-      return await this.liquid.parseAndRender(markup, context);
-    } catch {
-      // Liquid error text may contain supplied data; do not return or log it.
+      // Drop settings descriptors before reading any value or serializing IPC.
+      // Keep other descriptors intact so the execution boundary rejects accessors.
+      const descriptors = Object.getOwnPropertyDescriptors(locals);
+      delete descriptors.settings;
+      const data = Object.create(null, descriptors);
+      data.settings = {};
+      // Only descriptor-validated, normalized data enters the guest. Settings
+      // never cross the boundary; the Liquid guest always supplies settings={}.
+      const html = await executeIsolated({
+        version: 1, kind: 'liquid', code: markup, data: data as JsonValue,
+      }, signal);
+      if (typeof html !== 'string') throw new ServiceUnavailableException('PLUGIN_TEMPLATE_UNAVAILABLE');
+      return html;
+    } catch (error) {
+      if (error instanceof IsolatedExecutionError && error.code === 'ISOLATION_INVALID_INPUT') {
+        throw new ServiceUnavailableException('SOURCE_SNAPSHOT_INVALID');
+      }
+      // Guest text, parser details and supplied values must not enter errors/logs.
       throw new ServiceUnavailableException('PLUGIN_TEMPLATE_UNAVAILABLE');
     }
   }
@@ -218,8 +85,10 @@ ${innerHtml}
     width: number = 800,
     height: number = 480,
     mode: 'device' | 'preview' | 'einkPreview' = 'device',
+    signal?: AbortSignal,
   ): Promise<Buffer> {
-    const innerHtml = await this.renderToHtml(markup, locals, settings);
+    const innerHtml = await this.renderToHtml(markup, locals, settings, signal);
+    if (signal?.aborted) throw new ServiceUnavailableException('PLUGIN_TEMPLATE_UNAVAILABLE');
     const fullPage = this.buildFullPage(innerHtml, width, height);
 
     // Render HTML to raw PNG via Puppeteer

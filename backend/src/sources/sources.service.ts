@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { parseSourceDefinition } from '@inker/contracts';
@@ -8,13 +8,14 @@ import { validateConnectorConfiguration, type ConnectorType } from './connectors
 import { scheduleSource } from './source-job';
 import { publicDefinition } from './source-read.service';
 import { sourceWrite } from './source-writes';
+import { canonicalJson } from '../publications/publication-content';
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestException('SOURCE_INVALID_COMMAND');
   return value as Record<string, unknown>;
 }
 function containsSecret(value: unknown, secret: string): boolean {
-  if (typeof value === 'string') return value.includes(secret);
+  if (typeof value === 'string') return value.includes(secret) || value.includes(JSON.stringify(secret).slice(1, -1));
   if (Array.isArray(value)) return value.some(item => containsSecret(item, secret));
   if (value && typeof value === 'object') return Object.entries(value).some(([key, item]) => key.includes(secret) || containsSecret(item, secret));
   return false;
@@ -25,11 +26,13 @@ export class SourcesService {
   constructor(private readonly prisma: PrismaService, private readonly encryption: EncryptionService) {}
   private input(body: unknown, update: boolean) {
     const value = record(body);
-    const allowed = ['protocolVersion', 'name', 'connectorType', 'schemaVersion', 'configuration', 'secret', 'refreshIntervalSeconds', 'timeoutMs', 'concurrencyGroup', 'enabled', ...(update ? ['expectedDefinitionVersion'] : [])];
+    const allowed = ['protocolVersion', 'name', 'connectorType', 'schemaVersion', 'configuration', 'transformationCode', 'secret', 'refreshIntervalSeconds', 'timeoutMs', 'concurrencyGroup', 'enabled', ...(update ? ['expectedDefinitionVersion'] : [])];
     if (Object.keys(value).some(key => !allowed.includes(key)) || value.protocolVersion !== '1.0'
       || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 120
       || !['fixture', 'slow', 'failure'].includes(String(value.connectorType)) || value.schemaVersion !== '1'
       || (value.enabled !== undefined && typeof value.enabled !== 'boolean')
+      || (value.transformationCode !== undefined && value.transformationCode !== null
+        && (typeof value.transformationCode !== 'string' || value.transformationCode.length > 10_000))
       || (update && (!Number.isSafeInteger(value.expectedDefinitionVersion) || Number(value.expectedDefinitionVersion) < 1))
       || (value.secret !== undefined && value.secret !== null && (typeof value.secret !== 'string' || !value.secret.length || value.secret.length > 4096))) {
       throw new BadRequestException('SOURCE_INVALID_COMMAND');
@@ -39,6 +42,7 @@ export class SourcesService {
     catch { throw new BadRequestException('SOURCE_INVALID_CONFIGURATION'); }
     const data = { name: value.name.trim(), connectorType: value.connectorType as ConnectorType,
       schemaVersion: '1', configuration: configuration as unknown as Prisma.InputJsonObject,
+      ...(value.transformationCode !== undefined ? { transformationCode: value.transformationCode as string | null } : {}),
       refreshIntervalSeconds: value.refreshIntervalSeconds as number, timeoutMs: value.timeoutMs as number,
       concurrencyGroup: value.concurrencyGroup as string, enabled: value.enabled !== false };
     if (!parseSourceDefinition({ ...data, protocolVersion: '1.0', sourceDefinitionId: randomUUID(), definitionVersion: 1, secretReferences: {} }).success) throw new BadRequestException('SOURCE_INVALID_COMMAND');
@@ -61,12 +65,34 @@ export class SourcesService {
       const previous = await tx.sourceDefinition.findUnique({ where: { sourceDefinitionId: id } });
       if (!previous) throw new NotFoundException('SOURCE_NOT_FOUND');
       if (previous.definitionVersion !== input.expectedVersion) throw new ConflictException('SOURCE_VERSION_CONFLICT');
+      const effectiveData = { ...input.data,
+        transformationCode: input.data.transformationCode === undefined ? previous.transformationCode : input.data.transformationCode };
+      // An omitted secret/code means preserve. Check the effective public data
+      // against retained and rotated credentials before creating any new row.
+      if (previous.secretId) {
+        const storedSecret = await tx.sourceSecret.findUniqueOrThrow({ where: { id: previous.secretId } });
+        let previousSecret: string | undefined;
+        try { previousSecret = this.encryption.decrypt(storedSecret.ciphertext); }
+        catch {
+          // A lost/corrupt credential must not prevent disable, clear or rotate.
+          // Without its plaintext, permit only recovery that introduces no new
+          // public data; ordinary edits still require the old-secret copy check.
+          const fields = ['name', 'connectorType', 'schemaVersion', 'configuration', 'transformationCode',
+            'refreshIntervalSeconds', 'timeoutMs', 'concurrencyGroup'] as const;
+          const recovery = effectiveData.enabled === false || input.secret === null || typeof input.secret === 'string';
+          if (!recovery || fields.some(field => canonicalJson(effectiveData[field]) !== canonicalJson(previous[field]))) {
+            throw new ServiceUnavailableException('SOURCE_SECRET_UNAVAILABLE');
+          }
+        }
+        if (previousSecret !== undefined && containsSecret(effectiveData, previousSecret)) throw new BadRequestException('SOURCE_SECRET_IN_PUBLIC_CONFIGURATION');
+      }
+      if (typeof input.secret === 'string' && containsSecret(effectiveData, input.secret)) throw new BadRequestException('SOURCE_SECRET_IN_PUBLIC_CONFIGURATION');
       let secretId = previous.secretId;
       if (input.secret === null) secretId = null;
       else if (input.secret !== undefined) secretId = (await tx.sourceSecret.create({ data: { ciphertext: this.encryption.encrypt(input.secret) } })).id;
       const now = new Date();
       const source = await tx.sourceDefinition.update({ where: { sourceDefinitionId: id }, data: {
-        ...input.data, secretId, definitionVersion: { increment: 1 }, nextRefreshAt: now,
+        ...effectiveData, secretId, definitionVersion: { increment: 1 }, nextRefreshAt: now,
         consecutiveFailures: 0, circuitOpenUntil: null,
       } });
       // Old running jobs observe the definition fence; pending work is terminal.

@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { closeIsolatedExecution } from './isolation/isolated-executor';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
@@ -120,6 +121,7 @@ async function bootstrap() {
       stopping = true;
       logger.log(`Received ${signal}, starting graceful shutdown...`);
       try {
+        await closeIsolatedExecution();
         await app.get(ApiDeliveryLifecycle).stop();
         await app.get(OutboxRedisService).close();
         await app.close();

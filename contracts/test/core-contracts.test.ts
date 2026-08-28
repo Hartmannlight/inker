@@ -153,6 +153,18 @@ describe('SourceDefinition contract', () => {
     return await loadFixture('source-definition.json') as Record<string, unknown>;
   }
 
+  it('accepts an optional nullable bounded transformation without changing legacy definitions', async () => {
+    const fixture = await definition();
+    for (const transformationCode of [undefined, null, '', 'return $.value * 2;', ' '.repeat(10_000)]) {
+      expect(parseSourceDefinition({ ...fixture, transformationCode }).success).toBe(true);
+    }
+    for (const transformationCode of [42, false, {}, [], 'x'.repeat(10_001)]) {
+      const parsed = parseSourceDefinition({ ...fixture, transformationCode });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) expect(parsed.errors.some(issue => issue.path === '$.transformationCode')).toBe(true);
+    }
+  });
+
   it('validates the fixture and retains a generic connector type and opaque references', async () => {
     const fixture = await definition();
     expect(isJsonValue(fixture)).toBe(true);

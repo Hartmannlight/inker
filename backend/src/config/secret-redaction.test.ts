@@ -2,6 +2,15 @@ import { describe, expect, test } from 'bun:test';
 import { redactLogValue, redactSecretText } from './secret-redaction';
 
 describe('secret redaction', () => {
+  test('long non-secret tokens cannot cause quadratic redaction before an isolation deadline', () => {
+    const token = 'a'.repeat(65_500);
+    const started = performance.now();
+    expect(redactSecretText(token)).toBe(token);
+    expect(redactSecretText(`prefix ${token}api_key=synthetic-value`)).toBe(`prefix ${token}api_key=[REDACTED]`);
+    expect(redactSecretText(JSON.stringify({ label: token, apiKey: 'synthetic-value' })))
+      .toBe(JSON.stringify({ label: token, apiKey: '[REDACTED]' }));
+    expect(performance.now() - started).toBeLessThan(250);
+  });
   test('redacts sensitive structured fields at any nesting depth', () => {
     const redacted = redactLogValue({
       message: 'startup failed',

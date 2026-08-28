@@ -23,6 +23,8 @@ export interface SourceDefinition {
   connectorType: string;
   schemaVersion: string;
   configuration: JsonObject;
+  /** Optional pure JavaScript transformation; executed without connector secrets. */
+  transformationCode?: string | null;
   /** Connector input names mapped to opaque IDs in the worker's secret store. */
   secretReferences: Record<string, string>;
   refreshIntervalSeconds: number;
@@ -76,6 +78,10 @@ function validateSourceDefinition(
   requiredString(record, 'name', context, path);
   requiredString(record, 'connectorType', context, path);
   requiredString(record, 'schemaVersion', context, path);
+  if (record.transformationCode !== undefined && record.transformationCode !== null
+    && (typeof record.transformationCode !== 'string' || record.transformationCode.length > 10_000)) {
+    addIssue(context, 'error', 'invalid_transformation', path + '.transformationCode', 'Transformation must be null or JavaScript source of at most 10000 characters.');
+  }
   if (
     !isJsonValue(record.configuration) ||
     record.configuration === null ||
