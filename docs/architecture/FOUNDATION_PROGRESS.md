@@ -21,18 +21,13 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
-- WP-11 und WP-14 sind in `e1a7bee` bzw. `2f3ff2b` implementiert; offene
-  Indexmarkierungen werden gegen Code/Tests geprüft, nicht erneut implementiert.
-- WP-11-Review fand eine konkrete Text-Redaction-Lücke bei API-Key-Aliasen,
-  serialisiertem JSON und Basic Authorization. Korrigiert und durch Hauptagent
-  verifiziert: 569 Backendtests, sieben Redaction-/vier Startupintegrationen,
-  Typecheck, Build und gezieltes Lint bestanden; Index geschlossen.
-- WP-14: gezielte HTTP-/SQLite-/Restart-Prüfung bestätigt vorhandene Umsetzung;
-  physische Firmwaremessungen bleiben offen wie im bestehenden Handoff.
-- WP-19: vollständiges Paket, zugehörige Architektur und ADR-001/002/003/007
-  gelesen. Renderer-Subtask getrennt von Cache-/Persistenzintegration.
-  GETs bleiben ohne SQL-Writes. Dauerhafte, deduplizierte Renderabsicht und
-  Outbox vor Queue; Artefakte außerhalb des öffentlichen Uploadverzeichnisses.
+- WP-00 bis WP-23 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
+  Handoffs abgeglichen; keine erneute Implementierung. Hardwaremessungen offen.
+- Letzter lokaler Commit: `eb5e5eb` (WP-22). Branch unverändert.
+- WP-23 abgenommen: vollständige Containerwiederholung mit Restart/Secret-Audit
+  Exit 0. Lokaler Paketcommit folgt unmittelbar; Details unten in Schritt 6.
+- Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-23 aufnehmen.
+  WP-24 nur gelesen/vorbereitet, noch nicht implementiert. WP-25 bis WP-29 offen.
 
 ## Nächste Schritte
 
@@ -186,7 +181,7 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    tatsächlicherSIGSTOP→Parentkill2521,9ms,PIDcleanup,SourceSecretRepair,
    Login104,7ms,20API/Artefaktreads p9561,3ms,RestartundSecretauditgrün.
    EigeneContainer/Volumesbereinigt. ADR010akzeptiert,WP22Handoff+Operations+Phase6
-   aktualisiert. Nächster lokaler Commit schließtWP22 ab.
+   aktualisiert. WP22 lokal in `eb5e5eb` committed; danach Arbeitsbaum sauber.
 6. WP23 ist nächstes sequenzielles Paket; vollständigeAnforderung+Architektur4/5/
    6.4/6.6/7/8+ADRs gelesen. Read-onlySubagentinventar: Contractsvorhanden,
    keinepersistiertenPublicationActions; view.next sollPlaybackadvancewiederverwenden,
@@ -195,5 +190,29 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    Parallel erlaubt: WP28Agentwp19_renderer bearbeitet NUR neue Observability-
    Contract-/Context-/Logschema-/Metricsdateien+Tests,keinIndexexport/Schema/Bootstrap.
    WP28bleibtbisIntegrationundRemoteanschlussnachWP27unabgenommen.
+   WP23 inzwischen implementiert: DeviceCredential-Bearer-HTTP-Endpoint/Context,
+   unveränderliche PublicationActions (kein Recht bei Cachefallback), Registry und
+   view.next über Playbacktransaktion. Receipt/Domain/Outbox atomar, SQLite-Writerlock,
+   persistente Quoten/Sequenz, enge Zeit-/Payloadgrenzen, kein Token/Payload im Audit.
+   Review gefundene Handlerresult-Projektion behoben; echte Rollbacktests grün.
+   Agent:16 Interaktionen/396Assertions,11 Migrationen/95; Root:740 Backend/4815,
+   48 Contracts/440 (enthalten unabhängigen WP28-Kern), Typecheck+gezieltesLint grün.
+   Produktionsimage und gesamte Integrationsregression laufen; noch NICHT abgenommen.
+   Root arbeitet HTTP-Smoke in eigener Containerfixture, danach Operations/Handoff,
+   finaler Nachweis und lokaler WP23-Commit OHNE acht unintegrierte WP28-Dateien.
+   Final751Backend/4937Assertions,48Contracts/440,80Frontend,alleTypechecksgrün.
+   GesamteIntegrationsregression147/2793grün. ErstesProduktionsimage+HTTP/Restart
+   erfolgreich, aber abschließenderSecret-Audit scheiterte imTesthelfer: reproduziert
+   Prisma/Bun-console.log-Ausgabeabbruch bei64KiB. AuchBun.write reproduzierbar
+   ungeeignet (Duplikat/Blockade). Korrigiert auf4KiB-writeSync-Blöcke+5sEAGAIN-
+   Deadline,16–256KiBsynthetischvollständiggeprüft;256KiBRegressionjetztimSmoke.
+   VollständigerContainerlaufwirdmitunverändertemProduktionsimagewiederholt.
+   Rootsession76843 schreibt `.tmp/goal-wp23-container-final.log`; erstExit0,
+   SecretAuditundCleanupabwarten. KeineAbnahmekriterienabgeschwächt.
+   FinalerContainerlaufjetztExit0inklusiveReceipt/PlaybacküberRestartundvollständigem
+   SecretAudit. SIGSTOP→Kill2522,4ms,Login102,6ms,API/Artefaktp9559,7ms,
+   eingefrorenerWorkerAPIp9530,2ms. WP23Index/Handoff/Phase7undBetriebsdokumentation
+   aktualisiert. WP28CoreReviewfandProxyOriginalrückgabeimContract; Sourceagent
+   korrigiertausschließlichdie2neuenWP28Contractdateien,separatvomWP23Commit.
 
 Kein Foundation-Abschluss behauptet. WP-23 bis WP-29 sind noch offen.

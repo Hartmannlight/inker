@@ -5,6 +5,7 @@ export {
 } from './device-status';
 export {
   isJsonValue,
+  utf8ByteLength,
   type JsonArray,
   type JsonObject,
   type JsonPrimitive,
@@ -60,6 +61,7 @@ export {
 export {
   parseCommandResult,
   parseInteractionEvent,
+  INTERACTION_LIMITS,
   type CommandError,
   type CommandResult,
   type InteractionEvent,

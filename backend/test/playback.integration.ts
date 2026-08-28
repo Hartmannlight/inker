@@ -12,6 +12,7 @@ import { PublicationCleanupService } from "../src/publications/publication-clean
 import { PrismaService } from "../src/prisma/prisma.service";
 import { OutboxStore } from "../src/events/outbox.store";
 import {
+  PLAYBACK_CHANGED,
   PLAYBACK_DUE,
   parsePlaybackEvent,
 } from "../src/playback/playback.events";
@@ -182,6 +183,74 @@ describe("WP-18 persistent playback", () => {
     expect([0, 73], err).toContain(exit);
     return { exit, ...(out ? JSON.parse(out) : {}) };
   }
+
+  test("WP-23 transaction helper commits playback and outbox without a separate playback receipt", async () => {
+    const receipts = await p.playbackCommand.count();
+    const started = await p.$transaction((tx) =>
+      playback.executeInTransaction(tx, deviceId, body()),
+    );
+    expect(started).toMatchObject({ version: 1, desiredSequence: 1, currentItemId: itemIds[0] });
+    expect((await playback.read(deviceId)).state).toMatchObject({ version: 1, currentItemId: itemIds[0] });
+    expect(await p.devicePublicationState.findUnique({ where: { deviceId } })).toMatchObject({
+      desiredSequence: 1, desiredPublicationRevisionId: revisionIds[0],
+    });
+    expect(await p.outboxEvent.count({ where: { eventType: PLAYBACK_DUE, status: "pending" } })).toBe(1);
+    expect(await p.outboxEvent.count({ where: { eventType: PLAYBACK_CHANGED } })).toBe(1);
+    expect(await p.playbackCommand.count()).toBe(receipts);
+
+    // The existing admin wrapper still writes one receipt and returns its replay.
+    const command = body("advance", 1, 1);
+    const advanced = await playback.execute(deviceId, command);
+    expect(advanced).toMatchObject({ version: 2, desiredSequence: 2, currentItemId: itemIds[1] });
+    expect(await playback.execute(deviceId, command)).toEqual(advanced);
+    expect(await p.playbackCommand.count()).toBe(receipts + 1);
+    expect((await playback.read(deviceId)).version).toBe(2);
+  });
+
+  test("WP-23 an error after the helper rolls back playback, assignment, outbox and receipts together", async () => {
+    await execute();
+    const snapshot = async () => ({
+      playback: await p.playbackState.findUnique({ where: { deviceId } }),
+      assignment: await p.devicePublicationState.findUnique({ where: { deviceId } }),
+      device: await p.device.findUnique({ where: { id: deviceId } }),
+      outbox: await p.outboxEvent.findMany({ orderBy: { eventId: "asc" } }),
+      receipts: await p.playbackCommand.findMany({ orderBy: { keyHash: "asc" } }),
+    });
+    const before = await snapshot();
+    await expect(p.$transaction(async (tx) => {
+      const advanced = await playback.executeInTransaction(tx, deviceId, body("advance", 1, 1));
+      expect(advanced).toMatchObject({ version: 2, desiredSequence: 2, currentItemId: itemIds[1] });
+      expect(await tx.playbackState.findUnique({ where: { deviceId } })).toMatchObject({ version: 2 });
+      expect(await tx.devicePublicationState.findUnique({ where: { deviceId } })).toMatchObject({ desiredSequence: 2 });
+      expect(await tx.outboxEvent.count()).toBeGreaterThan(before.outbox.length);
+      expect(await tx.playbackCommand.count()).toBe(before.receipts.length);
+      throw new Error("INTERACTION_RECEIPT_WRITE_FAILED_AFTER_PLAYBACK");
+    })).rejects.toThrow("INTERACTION_RECEIPT_WRITE_FAILED_AFTER_PLAYBACK");
+    expect(await snapshot()).toEqual(before);
+  });
+
+  test("WP-23 transaction helper validates the full command and preserves version fences", async () => {
+    await execute();
+    const valid = body("advance", 1, 1);
+    const receipts = await p.playbackCommand.count(), events = await p.outboxEvent.count();
+    const invalid = [
+      { ...valid, version: 2 }, { ...valid, idempotencyKey: undefined }, { ...valid, idempotencyKey: "invalid" },
+      { ...valid, expectedVersion: -1 }, { ...valid, expectedDesiredSequence: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, action: "view.next" }, { ...valid, playlistRevisionId: release.playlistRevisionId },
+      { ...valid, arbitraryCommand: true },
+    ];
+    for (const command of invalid) {
+      await expect(p.$transaction((tx) => playback.executeInTransaction(tx, deviceId, command)))
+        .rejects.toMatchObject({ status: 400 });
+    }
+    for (const command of [{ ...valid, expectedVersion: 0 }, { ...valid, expectedDesiredSequence: 0 }]) {
+      await expect(p.$transaction((tx) => playback.executeInTransaction(tx, deviceId, command)))
+        .rejects.toMatchObject({ status: 409, message: "Playback or desired sequence conflict" });
+    }
+    expect((await playback.read(deviceId)).version).toBe(1);
+    expect(await p.playbackCommand.count()).toBe(receipts);
+    expect(await p.outboxEvent.count()).toBe(events);
+  });
 
   test("explicit publication freezes order, durations and references; draft mutation/deletion has no delivery effect", async () => {
     const started = await execute();

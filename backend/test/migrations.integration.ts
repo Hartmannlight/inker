@@ -101,6 +101,93 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
+  test('WP-23 preserves existing data and enforces interaction identity and lifecycle constraints', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp23-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations'), latest = '20260902000000_interactions';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath, { strict: true });
+    try {
+      database.exec(`PRAGMA foreign_keys=ON;
+        INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,render_revision,updated_at)
+          VALUES(10,'interaction-upgrade','interaction-upgrade','browser-hd-1920x1080','reference-connected-browser',42,7,CURRENT_TIMESTAMP),
+                (11,'other-device','other-device','browser-hd-1920x1080','reference-connected-browser',1,0,CURRENT_TIMESTAMP);
+        INSERT INTO device_credentials(credential_id,device_id,token_hash) VALUES('credential-a',10,'synthetic-hash-a'),('credential-b',11,'synthetic-hash-b');
+        INSERT INTO publications(publication_id,publication_key) VALUES('publication','interaction-upgrade');
+        INSERT INTO publication_revisions(publication_revision_id,publication_id,revision,protocol_version,content,content_hash)
+          VALUES('revision','publication',1,'1.0','{}','legacy-hash');
+        INSERT INTO device_publication_states(device_id,desired_publication_revision_id,acknowledged_publication_revision_id,desired_sequence,updated_at)
+          VALUES(10,'revision','revision',42,CURRENT_TIMESTAMP);
+        INSERT INTO published_playlists(id,playlist_id,revision,content_hash) VALUES('playlist-release',1,1,'playlist-hash');
+        INSERT INTO published_playlist_entries(playlist_revision_id,ordinal,item_id,duration_ms,publication_revision_id)
+          VALUES('playlist-release',0,1,60000,'revision');
+        INSERT INTO playback_states(id,device_id,playlist_revision_id,version,status,anchor_index,anchor_at,elapsed_ms,evaluated_at,current_item_id)
+          VALUES('playback',10,'playlist-release',3,'paused',0,CURRENT_TIMESTAMP,1234,CURRENT_TIMESTAMP,1);
+        INSERT INTO render_requests(key,publication_revision_id,target,renderer_version) VALUES('${'a'.repeat(64)}','revision','{}','test');
+        INSERT INTO source_secrets(id,ciphertext) VALUES('opaque-secret','synthetic-ciphertext');
+        INSERT INTO source_definitions(source_definition_id,name,connector_type,schema_version,configuration,secret_id,refresh_interval_seconds,timeout_ms,concurrency_group,next_refresh_at,updated_at,transformation_code)
+          VALUES('source','Existing source','fixture','1','{"data":{"value":7}}','opaque-secret',60,500,'provider',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'return data;');
+        INSERT INTO outbox_events(event_id,event_type,aggregate_type,aggregate_id,payload)
+          VALUES('refresh','source.refresh.due','SourceDefinition','source','{}');
+        INSERT INTO source_refresh_jobs(event_id,source_definition_id,definition_version,connector_type,concurrency_group,scheduled_at)
+          VALUES('refresh','source',1,'fixture','provider',CURRENT_TIMESTAMP);
+        INSERT INTO source_snapshots(snapshot_id,source_definition_id,definition_version,revision,schema_version,connector_version,valid_data_created_at,freshness_state,stale_after_seconds,data,content_hash,refresh_event_id,attempt)
+          VALUES('snapshot','source',1,1,'1','builtin-fixture-v1',CURRENT_TIMESTAMP,'fresh',60,'{"value":7}','${'b'.repeat(64)}','refresh',1);
+        UPDATE source_definitions SET latest_snapshot_id='snapshot',latest_valid_snapshot_id='snapshot',snapshot_revision=1 WHERE source_definition_id='source';`);
+      expect(database.query('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+      const tables = database.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(({ name }) => name);
+      const rows = () => tables.map(table => database.query(`SELECT * FROM "${table}"`).all());
+      const before = rows();
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(rows()).toEqual(before);
+      for (const table of ['interaction_receipts', 'interaction_rates', 'interaction_sequences']) expect(database.query(`SELECT * FROM ${table}`).all()).toEqual([]);
+      expect(database.query("PRAGMA index_info('interaction_receipts_created_at_idx')").all()).toEqual([{ seqno: 0, cid: 10, name: 'created_at' }]);
+
+      // All destructive lifecycle checks use this isolated fixture and roll back.
+      database.exec('SAVEPOINT interaction_constraints');
+      const receipt = database.query(`INSERT INTO interaction_receipts(device_id,event_id,command_id,credential_id,publication_id,publication_revision,action,request_hash,result)
+        VALUES(?,?,?,?,'publication','1','playback.next','request-hash','{"status":"accepted"}')`);
+      receipt.run(10, 'event', 'command-a', 'credential-a');
+      receipt.run(11, 'event', 'command-b', 'credential-b');
+      expect(() => receipt.run(10, 'event', 'command-c', 'credential-a')).toThrow('UNIQUE constraint failed');
+      expect(() => receipt.run(11, 'different-event', 'command-a', 'credential-b')).toThrow('UNIQUE constraint failed');
+      expect(() => receipt.run(999, 'event', 'command-orphan', 'credential-a')).toThrow('FOREIGN KEY constraint failed');
+      expect(database.query('SELECT count(*) AS count FROM interaction_receipts').get()).toEqual({ count: 2 });
+      expect(database.query("SELECT result,target_id,created_at IS NOT NULL AS timestamped FROM interaction_receipts WHERE device_id=10").get())
+        .toEqual({ result: '{"status":"accepted"}', target_id: null, timestamped: 1 });
+
+      const rate = database.query('INSERT INTO interaction_rates(device_id,minute_at,minute_count,second_at,second_count) VALUES(?,CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP,1)');
+      rate.run(10); rate.run(11);
+      expect(() => rate.run(10)).toThrow('UNIQUE constraint failed');
+      expect(() => rate.run(999)).toThrow('FOREIGN KEY constraint failed');
+      const sequence = database.query('INSERT INTO interaction_sequences(credential_id,last_sequence,updated_at) VALUES(?,7,CURRENT_TIMESTAMP)');
+      sequence.run('credential-a'); sequence.run('credential-b');
+      expect(() => sequence.run('credential-a')).toThrow('UNIQUE constraint failed');
+      expect(() => sequence.run('missing-credential')).toThrow('FOREIGN KEY constraint failed');
+
+      database.exec("UPDATE device_credentials SET credential_id='credential-a-renamed' WHERE credential_id='credential-a'");
+      expect(database.query("SELECT last_sequence FROM interaction_sequences WHERE credential_id='credential-a-renamed'").get()).toEqual({ last_sequence: 7 });
+      database.exec("DELETE FROM device_credentials WHERE credential_id='credential-a-renamed'");
+      expect(database.query("SELECT credential_id FROM interaction_sequences ORDER BY credential_id").all()).toEqual([{ credential_id: 'credential-b' }]);
+      // Receipts retain the original credential identity after rotation/deletion.
+      expect(database.query('SELECT credential_id FROM interaction_receipts WHERE device_id=10').get()).toEqual({ credential_id: 'credential-a' });
+      database.exec('UPDATE devices SET id=12 WHERE id=10');
+      expect(database.query('SELECT device_id FROM interaction_receipts ORDER BY device_id').all()).toEqual([{ device_id: 11 }, { device_id: 12 }]);
+      expect(database.query('SELECT device_id FROM interaction_rates ORDER BY device_id').all()).toEqual([{ device_id: 11 }, { device_id: 12 }]);
+      database.exec('DELETE FROM devices WHERE id=12');
+      expect(database.query('SELECT device_id FROM interaction_receipts').all()).toEqual([{ device_id: 11 }]);
+      expect(database.query('SELECT device_id FROM interaction_rates').all()).toEqual([{ device_id: 11 }]);
+      database.exec('DELETE FROM devices WHERE id=11');
+      for (const table of ['interaction_receipts', 'interaction_rates', 'interaction_sequences']) expect(database.query(`SELECT * FROM ${table}`).all()).toEqual([]);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+      database.exec('ROLLBACK TO interaction_constraints; RELEASE interaction_constraints');
+      expect(rows()).toEqual(before);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
+
   test('WP-22 adds nullable bounded transformation code without rewriting sources or snapshots', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp22-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260901000000_source_transformations';
@@ -126,6 +213,7 @@ describe("Prisma migration baseline", () => {
       expect(() => database.exec("UPDATE source_snapshots SET data='{}' WHERE snapshot_id='snapshot';")).toThrow('source_snapshot_immutable');
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
+    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -312,6 +400,7 @@ describe("Prisma migration baseline", () => {
         "20260830000000_render_cache",
         "20260831000000_sources",
         "20260901000000_source_transformations",
+        "20260902000000_interactions",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

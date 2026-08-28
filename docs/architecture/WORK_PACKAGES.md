@@ -78,7 +78,7 @@ müssen.
 | [x] | WP-20 | Getrennter Worker-Bootstrap und verbindliche Queue-Policies | WP-16 |
 | [x] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
 | [x] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
-| [ ] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
+| [x] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
 | [ ] | WP-24 | Persistente Timer-Domäne | WP-23 |
 | [ ] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
 | [ ] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
@@ -2846,13 +2846,13 @@ CommandResult und Audit.
 
 **Aufgaben:**
 
-- [ ] Akzeptiere InteractionEvent über den gemeinsamen Contract.
-- [ ] Prüfe DeviceCredential und in Publication erlaubte Aktion.
-- [ ] Speichere `eventId`/Resultat für idempotente Wiederholung.
-- [ ] Begrenze Payload, Frequenz und Zeitfenster.
-- [ ] Route zu registrierten CommandHandlern ohne Widget-Switch im Controller.
-- [ ] Antworte synchron mit accepted/rejected/duplicate und Correlation-ID.
-- [ ] Implementiere/teste `view.next` als vertikalen Durchstich.
+- [x] Akzeptiere InteractionEvent über den gemeinsamen Contract.
+- [x] Prüfe DeviceCredential und in Publication erlaubte Aktion.
+- [x] Speichere `eventId`/Resultat für idempotente Wiederholung.
+- [x] Begrenze Payload, Frequenz und Zeitfenster.
+- [x] Route zu registrierten CommandHandlern ohne Widget-Switch im Controller.
+- [x] Antworte synchron mit accepted/rejected/duplicate und Correlation-ID.
+- [x] Implementiere/teste `view.next` als vertikalen Durchstich.
 
 **Abnahme:** Ein doppelter Touch erzeugt genau eine Zustandsänderung; nicht
 publizierte Aktionen werden abgelehnt.
@@ -2860,6 +2860,52 @@ publizierte Aktionen werden abgelehnt.
 **Validierung:** Auth-, Replay-, Duplicate-, Rate-Limit- und Handler-Tests.
 
 **Handoff:** Handlerregistrierung und Timerpayload-Anforderungen notieren.
+
+### Handoff WP-23 (2026-08-28, abgenommen)
+
+- HTTP `POST /api/interactions` und schreibfreier `GET /api/interactions/context`,
+  ausschließlich aktives DeviceCredential-Bearer; keine Admin-/Legacy-Commandrechte.
+  Geräteidentität ist `externalId`, Publicationrevision nicht Playbackversion oder
+  Zuweisungssequenz. `CommandResult.commandId` ist `X-Correlation-ID`.
+- Explizite `allowedActions` sind Teil unveränderlicher Publicationinhalte und
+  Hashes. Legacy/leer/fehlend sowie Cachemiss/Fallback erlauben nichts. Exakte
+  Action-/Targetbindung, Pull-ETag berücksichtigt Rechteentzug. Registry ohne
+  Widget-Switch; `view.next` verwendet vorhandene Playbacklogik mit Versionsfences.
+- Migration `20260902000000_interactions`: Receipt, persistente Gerätequote und
+  Credentialsequenz. SQLite-Writerlock vor Auth/Receipt; Domain/Outbox/Receipt atomar.
+  Handler-Savepoint verhindert Teiländerungen bei fachlicher Ablehnung; unerwartete
+  Fehler/abgelaufene Credentials rollen alles zurück. Deduplizierung vor erneuter
+  Zeit-/Publicationprüfung, aber nach aktueller Authentifizierung.
+- Grenzen: Event 8 KiB, Payload 4 KiB/Tiefe 8, 8/s und 60/min pro Gerät, 5 Minuten
+  Vergangenheit/30 Sekunden Zukunft; optionale erfolgreiche Credentialsequenz.
+  Audit speichert Identität, Hash und sicheres Ergebnis, keine Rohpayloads/Tokens.
+  Review gefundene ungeprüfte Handlerresult-Weitergabe durch kopierte, begrenzte
+  Ergebnisprojektion behoben; acht Negativfälle beweisen vollständigen Rollback.
+- Hauptagent: 751 Backendtests/4.937 Assertions, 48 Contracts/440, 80 Frontend;
+  147 Integrationen/2.793 Assertions einschließlich echter Zwei-Prozess-Duplikate,
+  Auth, Quoten, Replay, Triggerfehler, Playback, Cache, Sources und WebSocket grün.
+  Die Gesamtsuiten enthalten separat 13 Backend-/9 Contracttests des unabhängigen
+  WP-28-Kerns; dessen Integration/Abnahme ist damit nicht erfolgt.
+  Agent: vollständige Migrationen 11/95 grün, Registry/Handler 11/122 und
+  Interaktionen 16/396 (in obigen Gesamtläufen enthalten). Anwendung, Contracts,
+  Frontend und neue Tests typgeprüft; gezieltes ESLint/Whitespace grün, kein Skip.
+- Lokales Produktionsimage `inker:wp23-test`: Linux-Frozeninstall/Build erfolgreich.
+  Echter HTTP-Smoke belegt parallelen Doppel-Tap mit genau einem Wechsel,
+  identische Correlation/Receipt, verbotene Aktionen, Payloadgrenze und widerrufene
+  Wiederholung; Receipt/Playback über Containerneustart stabil. Vollständiger
+  abschließender Secret-Audit und Cleanup erfolgreich, Exit 0.
+  Regression: tatsächlicher Gast-SIGSTOP/Parentkill 2.522,4 ms, Login 102,6 ms,
+  20 API-/Artefaktreads p95 59,7 ms; eingefrorener Worker API-p95 30,2 ms.
+- Erster Containerlauf scheiterte ausschließlich am Audit-Testhelfer:
+  reproduzierter Bun/Prisma-Pipeabbruch ab 64 KiB. Begrenzte synchrone Blöcke mit
+  EAGAIN-Deadline ersetzen ungeflushte Konsolenausgabe; 16–256 KiB synthetisch
+  geprüft und 256-KiB-Regression im final vollständig wiederholten Smoke enthalten.
+  Nachweise lokal `.tmp/goal-wp23-*.log`; keine Secrets/Prüfartefakte committed.
+- [Betrieb und Handlervertrag](INTERACTION_OPERATIONS.md): neue Timerhandler in
+  `InteractionsModule` registrieren, eigenes versioniertes Payload mit Fences,
+  Fachberechtigung zusätzlich zu Publicationrechten, Schreiben nur über `tx`.
+  Keine UI-/Firmwareänderung in WP-23; physischer Touch bleibt Hardwareprüfung.
+  Nächster Schritt: WP-24 Timerdomäne, danach WP-25 Scheduling/Push/Testscreen.
 
 ## WP-24 – Persistente Timer-Domäne implementieren
 

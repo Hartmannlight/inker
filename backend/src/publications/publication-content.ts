@@ -1,8 +1,9 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { parseProtocolVersion, type RenderFormat } from '@inker/contracts';
+import { parseProtocolVersion, type AllowedAction, type RenderFormat } from '@inker/contracts';
 import type { PublicationRevision } from '@prisma/client';
 import { PULL_FIXTURE_ARTIFACTS } from '../device-platform/pull-fixture-artifacts';
+import { normalizePublicationActions } from './publication-actions';
 
 export interface PublishedArtifact {
   format: RenderFormat;
@@ -27,7 +28,7 @@ export type PublishedSourceReference = {
 export type PublicationContent = (
   | { schemaVersion: 1; fixtureArtifacts: string[] }
   | { schemaVersion: 1; image: { png: string; width: number; height: number; sha256: string } }
-) & { sourceSnapshot?: PublishedSourceReference };
+) & { sourceSnapshot?: PublishedSourceReference; allowedActions?: AllowedAction[] };
 
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 
@@ -44,6 +45,18 @@ export function fixtureIds(value: unknown): string[] | null {
   if (!Array.isArray(value) || !value.length || value.length > PULL_FIXTURE_ARTIFACTS.length ||
     value.some(id => typeof id !== 'string' || !PULL_FIXTURE_ARTIFACTS.some(a => a.fixtureId === id)) || new Set(value).size !== value.length) return null;
   return [...value].sort();
+}
+
+/** Rights originate only in verified, immutable publication content. */
+export function publicationAllowedActions(revision: PublicationRevision): AllowedAction[] {
+  try {
+    const content = revision.content;
+    if (!content || typeof content !== 'object' || Array.isArray(content)
+      || content.schemaVersion !== 1 || content.allowedActions === undefined
+      || sha256(canonicalJson(content)) !== revision.contentHash) return [];
+    publicationArtifacts(revision);
+    return normalizePublicationActions(content.allowedActions);
+  } catch { return []; }
 }
 
 /** Reads only immutable snapshot data and the fixed WP-14 fixture catalog. */

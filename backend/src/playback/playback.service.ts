@@ -176,6 +176,85 @@ export class PlaybackService {
   }
 
   async execute(deviceId: number, body: unknown) {
+    const { input } = this.executionInput(deviceId, body);
+    return this.command(
+      { kind: "playback", deviceId, ...input },
+      (tx) => this.executeInTransaction(tx, deviceId, input),
+    );
+  }
+
+  /**
+   * Apply a validated command in the caller's transaction. The caller owns
+   * idempotency, serialization and commit; no PlaybackCommand receipt is used.
+   * Keep the complete version-1 command shape, including a valid UUID key.
+   */
+  async executeInTransaction(tx: Prisma.TransactionClient, deviceId: number, body: unknown) {
+    const { input, action, replace } = this.executionInput(deviceId, body);
+    this.validateCommandIdentity(input);
+    const device = await tx.device.findFirst({
+      where: { id: deviceId, isActive: true },
+      include: { publicationState: true },
+    });
+    if (!device) throw new NotFoundException("Target device not found");
+    const previous = await tx.playbackState.findUnique({
+      where: { deviceId },
+    });
+    if (
+      (previous?.version ?? 0) !== input.expectedVersion ||
+      (device.publicationState?.desiredSequence ??
+        device.presentationRevision) !== input.expectedDesiredSequence
+    )
+      throw new ConflictException("Playback or desired sequence conflict");
+    const oldEntries = previous
+      ? await this.entries(tx, previous.playlistRevisionId)
+      : [];
+    const revisionId = replace
+      ? String(input.playlistRevisionId)
+      : previous?.playlistRevisionId;
+    if (!revisionId) throw new ConflictException("Playback not started");
+    const entries = replace
+      ? await this.entries(tx, revisionId)
+      : oldEntries;
+    const now = this.clock.now();
+    let next: PlaybackAnchor;
+    try {
+      next = transition(
+        previous ? anchor(previous) : null,
+        oldEntries,
+        action,
+        now,
+        entries,
+      );
+    } catch {
+      throw new ConflictException("Invalid playback transition");
+    }
+    // Restart/recovery before a boundary is a no-op, including paused/stopped playback.
+    const due =
+      previous?.nextTransitionAt &&
+      now >= previous.nextTransitionAt.getTime();
+    if (
+      previous &&
+      ((action === "restart" && !due) ||
+        (revisionId === previous.playlistRevisionId &&
+          canonicalJson(next) === canonicalJson(anchor(previous))))
+    )
+      return this.result(
+        previous,
+        device.publicationState?.desiredSequence ??
+          device.presentationRevision,
+      );
+    return this.persist(
+      tx,
+      deviceId,
+      previous,
+      revisionId,
+      next,
+      entries,
+      action,
+    );
+  }
+
+  private executionInput(deviceId: number, body: unknown) {
     const input = object(body, [
       "version",
       "idempotencyKey",
@@ -210,72 +289,7 @@ export class PlaybackService {
       throw new BadRequestException(
         "Playlist revision required only for start/change",
       );
-    return this.command(
-      { kind: "playback", deviceId, ...input },
-      async (tx) => {
-        const device = await tx.device.findFirst({
-          where: { id: deviceId, isActive: true },
-          include: { publicationState: true },
-        });
-        if (!device) throw new NotFoundException("Target device not found");
-        const previous = await tx.playbackState.findUnique({
-          where: { deviceId },
-        });
-        if (
-          (previous?.version ?? 0) !== input.expectedVersion ||
-          (device.publicationState?.desiredSequence ??
-            device.presentationRevision) !== input.expectedDesiredSequence
-        )
-          throw new ConflictException("Playback or desired sequence conflict");
-        const oldEntries = previous
-          ? await this.entries(tx, previous.playlistRevisionId)
-          : [];
-        const revisionId = replace
-          ? String(input.playlistRevisionId)
-          : previous?.playlistRevisionId;
-        if (!revisionId) throw new ConflictException("Playback not started");
-        const entries = replace
-          ? await this.entries(tx, revisionId)
-          : oldEntries;
-        const now = this.clock.now();
-        let next: PlaybackAnchor;
-        try {
-          next = transition(
-            previous ? anchor(previous) : null,
-            oldEntries,
-            action,
-            now,
-            entries,
-          );
-        } catch {
-          throw new ConflictException("Invalid playback transition");
-        }
-        // Restart/recovery before a boundary is a no-op, including paused/stopped playback.
-        const due =
-          previous?.nextTransitionAt &&
-          now >= previous.nextTransitionAt.getTime();
-        if (
-          previous &&
-          ((action === "restart" && !due) ||
-            (revisionId === previous.playlistRevisionId &&
-              canonicalJson(next) === canonicalJson(anchor(previous))))
-        )
-          return this.result(
-            previous,
-            device.publicationState?.desiredSequence ??
-              device.presentationRevision,
-          );
-        return this.persist(
-          tx,
-          deviceId,
-          previous,
-          revisionId,
-          next,
-          entries,
-          action,
-        );
-      },
-    );
+    return { input, action, replace };
   }
 
   async read(deviceId: number, now = this.clock.now()) {
@@ -518,10 +532,7 @@ export class PlaybackService {
     };
   }
 
-  private async command(
-    input: Record<string, unknown>,
-    operation: (tx: Tx) => Promise<Prisma.InputJsonValue>,
-  ) {
+  private validateCommandIdentity(input: Record<string, unknown>): asserts input is Record<string, unknown> & { version: 1; idempotencyKey: string } {
     if (
       input.version !== 1 ||
       typeof input.idempotencyKey !== "string" ||
@@ -530,6 +541,13 @@ export class PlaybackService {
       )
     )
       throw new BadRequestException("Invalid playback command version or key");
+  }
+
+  private async command(
+    input: Record<string, unknown>,
+    operation: (tx: Tx) => Promise<Prisma.InputJsonValue>,
+  ) {
+    this.validateCommandIdentity(input);
     const { idempotencyKey, ...request } = input;
     const keyHash = sha256(idempotencyKey.toLowerCase()),
       requestHash = sha256(canonicalJson(request));

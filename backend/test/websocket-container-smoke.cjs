@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const { execFile, execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp22-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp23-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
-let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, sourceBeforeRestart, stage = 'start';
+let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, sourceBeforeRestart, interactionBeforeRestart, stage = 'start';
 let workerPaused = false;
 const sockets = [];
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 90_000, env: { ...process.env, ADMIN_PIN: password } });
@@ -21,9 +21,23 @@ async function until(predicate, attempts = 200) {
   throw new Error('Smoke condition timed out');
 }
 function db(code, input = {}) {
+  // Prisma shutdown can end Bun before console.log drains a >64KiB pipe.
+  // Capture one JSON result, disconnect, then drain bounded writeSync blocks.
+  // Docker's nonblocking pipe can return EAGAIN; retry with a fixed deadline.
   return JSON.parse(execFileSync('docker', ['exec', '-i', name, 'bun', '-e',
-    `const {PrismaClient}=require('@prisma/client'); const p=new PrismaClient(); const input=JSON.parse(await Bun.stdin.text()); try { ${code} } finally {await p.$disconnect();}`],
-    { input: JSON.stringify(input), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000 }));
+    `const {PrismaClient}=require('@prisma/client'); const p=new PrismaClient();
+     const input=JSON.parse(await Bun.stdin.text()); const outputs=[];
+     console.log=value=>outputs.push(String(value));
+     try { ${code} } finally {await p.$disconnect();}
+     if(outputs.length!==1)throw new Error('SMOKE_DB_OUTPUT_COUNT');
+     const bytes=Buffer.from(outputs[0]+'\\n'), {writeSync}=require('node:fs');
+     const deadline=Date.now()+5000;
+     for(let offset=0;offset<bytes.length;) {
+       if(Date.now()>deadline)throw new Error('SMOKE_DB_OUTPUT_TIMEOUT');
+       try {offset+=writeSync(1,bytes,offset,Math.min(4096,bytes.length-offset));}
+       catch(error) {if(error.code!=='EAGAIN')throw error; await new Promise(resolve=>setTimeout(resolve,1));}
+     }`],
+    { input: JSON.stringify(input), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }));
 }
 async function request(path, { method = 'GET', data, admin = false, headers = {} } = {}) {
   const response = await fetch(base + path, { method, signal: AbortSignal.timeout(5000), headers: { ...(data ? { 'Content-Type': 'application/json' } : {}), ...(admin ? { Cookie: cookie, 'X-CSRF-Token': csrf } : {}), ...headers }, body: data ? JSON.stringify(data) : undefined });
@@ -75,8 +89,10 @@ async function main() {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
       '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets',
-      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp22-test');
+      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp23-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
+    stage = 'large database inspection pipe regression';
+    assert.equal(db("await p.$queryRawUnsafe('SELECT 1'); console.log(JSON.stringify('x'.repeat(256000)));").length, 256000);
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
     cookie = login.response.headers.get('set-cookie').split(';')[0]; csrf = login.response.headers.get('x-csrf-token'); secrets.push(cookie.split('=')[1], csrf);
@@ -314,6 +330,7 @@ async function main() {
       login: () => request('/api/auth/login', { method: 'POST', data: { password } }) });
     stage = 'pull-create';
     const pull = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 pull', macAddress: 'AA:15:00:00:00:01' } })).body;
+    interactionBeforeRestart = await require('./fixtures/interaction-container-check.cjs')({ request, db, renderedFor, secrets, setStage: value => { stage = value; } });
     stage = 'pull-setup';
     const setup = await request('/api/setup', { headers: { HTTP_ID: 'AA:15:00:00:00:01' } }); assert.equal(setup.response.status, 200);
     pull.apiKey = setup.body.api_key; assert.ok(pull.apiKey); secrets.push(pull.apiKey);
@@ -354,11 +371,15 @@ async function main() {
     const restartedImage = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: { Authorization: `Bearer ${rotated}` } });
     const restartedBytes = Buffer.from(await (await fetch(base + restartedImage.body.content.url, { headers: { Authorization: `Bearer ${rotated}` } })).arrayBuffer());
     assert.equal(createHash('sha256').update(restartedBytes).digest('hex'), renderBeforeRestart.artifactHash);
+    const interactionReceipt = db('console.log(JSON.stringify(await p.interactionReceipt.findUniqueOrThrow({where:{deviceId_eventId:{deviceId:input.deviceId,eventId:input.eventId}}})));', interactionBeforeRestart);
+    assert.equal(interactionReceipt.commandId, interactionBeforeRestart.commandId);
+    assert.equal(interactionReceipt.result.status, 'accepted');
+    assert.equal(db('console.log(JSON.stringify(await p.playbackState.findUniqueOrThrow({where:{deviceId:input.deviceId}})));', interactionBeforeRestart).version, interactionBeforeRestart.version);
     stage = 'secret-audit';
     const logs = docker('logs', name);
     const sessions = db('console.log(JSON.stringify(await p.adminSession.findMany()));');
     const telemetry = db('console.log(JSON.stringify(await p.device.findMany({select:{telemetry:true}})));');
-    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),publications:await p.publicationRevision.findMany(),sources:await p.sourceDefinition.findMany(),snapshots:await p.sourceSnapshot.findMany(),sourceJobs:await p.sourceRefreshJob.findMany()}));');
+    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),interactions:await p.interactionReceipt.findMany(),publications:await p.publicationRevision.findMany(),sources:await p.sourceDefinition.findMany(),snapshots:await p.sourceSnapshot.findMany(),sourceJobs:await p.sourceRefreshJob.findMany()}));');
     for (const secret of secrets.filter(Boolean)) { assert.equal(logs.includes(secret), false); assert.equal(JSON.stringify(sessions).includes(secret), false); assert.equal(JSON.stringify(telemetry).includes(secret), false); assert.equal(JSON.stringify(durable).includes(secret), false); }
     assert.equal(logs.includes('device-configuration.catalog'), false, 'The production seed catalog must load successfully');
     console.info('WP-15 production smoke passed: admin/CSRF, pairing, heartbeat, idle revocation, reconnect, pull/304/policy/artifact, TRMNL display, restart/key identity, secret audit');
@@ -374,6 +395,8 @@ async function main() {
     if (sourceLocation) console.error(`Source fixture location: ${sourceLocation[1]}:${sourceLocation[2]}`);
     const isolationLocation = typeof error?.stack === 'string' && error.stack.match(/isolation-container-check\.cjs:(\d+):(\d+)/);
     if (isolationLocation) console.error(`Isolation fixture location: ${isolationLocation[1]}:${isolationLocation[2]}`);
+    const interactionLocation = typeof error?.stack === 'string' && error.stack.match(/interaction-container-check\.cjs:(\d+):(\d+)/);
+    if (interactionLocation) console.error(`Interaction fixture location: ${interactionLocation[1]}:${interactionLocation[2]}`);
     {
       try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
     }

@@ -28,6 +28,7 @@ import { DevicePlatformModule } from './device-platform/device-platform.module';
 import { PublicationsModule } from './publications/publications.module';
 import { PlaybackModule } from './playback/playback.module';
 import { SourcesModule } from './sources/sources.module';
+import { InteractionsModule } from './interactions/interactions.module';
 import { DeviceEnrollmentModule } from './device-enrollment/device-enrollment.module';
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
@@ -88,6 +89,7 @@ import { validationSchema } from './config/validation.schema';
     PublicationsModule,
     PlaybackModule,
     SourcesModule,
+    InteractionsModule,
     DeviceEnrollmentModule,
     SettingsModule,
     PluginsModule,

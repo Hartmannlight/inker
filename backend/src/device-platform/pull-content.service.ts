@@ -6,7 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ProfileResolverService } from './profile-resolver.service';
 import { DeliveryPolicyRegistry } from './delivery-policy.registry';
 import { TransportAdapterRegistry } from './transport-adapter.registry';
-import { publicationArtifacts } from '../publications/publication-content';
+import { publicationAllowedActions, publicationArtifacts } from '../publications/publication-content';
 import { PullLastSeenService } from './pull-last-seen.service';
 import { RenderCacheService } from '../render-cache/render-cache.service';
 
@@ -40,11 +40,16 @@ export class PullContentService {
       display.colorSpace === artifact.colorSpace && display.bitDepth === artifact.bitDepth && display.rotation === artifact.rotation);
     const artifact = display.renderFormats.flatMap((format) => candidates.filter((candidate) => candidate.format === format))[0];
     if (!artifact) throw new NotAcceptableException('No compatible published artifact');
+    const allowedActions = cached && !cached.fallback && revision.publicationRevisionId === desired.publicationRevisionId
+      ? publicationAllowedActions(revision) : [];
 
     const variantId = `${artifact.format}-${artifact.width}x${artifact.height}-${artifact.bitDepth}-${artifact.rotation}`;
     const contentTag = createHash('sha256').update(JSON.stringify([
       '1.0', revision.publicationId, revision.publicationRevisionId, revision.revision,
       configuration.profile.profileId, variantId, artifact.sha256,
+      // Revoking rights on fallback must invalidate an authorized manifest even
+      // when its previously rendered image and revision remain identical.
+      ...(allowedActions.length ? [allowedActions] : []),
     ])).digest('hex');
     const artifactEtag = `"${artifact.sha256}"`;
     const manifest: PresentationManifest = {
@@ -55,7 +60,8 @@ export class PullContentService {
       artifacts: [{ artifactId: artifact.sha256, role: 'primary',
         url: `/api/v1/device-content/artifacts/${artifact.sha256}`,
         mimeType: artifact.mimeType, sizeBytes: artifact.bytes.length, sha256: artifact.sha256, etag: artifactEtag }],
-      refresh: { refreshAfterSeconds: hints.refreshAfterSeconds }, allowedActions: [],
+      refresh: { refreshAfterSeconds: hints.refreshAfterSeconds },
+      allowedActions,
       ...(cached?.fallback ? { fallbackRevision: String(revision.revision) } : {}),
       metadata: { desiredRevision: String(desired.revision), fallback: cached?.fallback ?? false,
         ...(cached ? { rendererVersion: cached.rendererVersion } : {}),

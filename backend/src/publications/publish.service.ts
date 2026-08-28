@@ -4,13 +4,15 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import * as sharpModule from 'sharp';
 import type sharpFactory from 'sharp';
+import type { AllowedAction } from '@inker/contracts';
 const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 import { PrismaService } from '../prisma/prisma.service';
 import { PublicationPersistenceService } from './publication-persistence.service';
 import { canonicalJson, fixtureIds, publicationArtifacts, sha256, type PublicationContent } from './publication-content';
+import { normalizePublicationActions } from './publication-actions';
 
 type Draft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string } | { sourceSnapshotId: string };
-type PublishInput = { idempotencyKey: string; expectedRevision: number; draft: Draft; deviceIds: number[] };
+type PublishInput = { idempotencyKey: string; expectedRevision: number; draft: Draft; deviceIds: number[]; allowedActions: AllowedAction[] };
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestException('Invalid publication command');
@@ -29,7 +31,9 @@ export class PublishService {
     if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(publicationKey)) throw new BadRequestException('Invalid publication key');
     const input = this.parse(body);
     const keyHash = sha256(input.idempotencyKey);
-    const requestHash = sha256(canonicalJson({ publicationKey, expectedRevision: input.expectedRevision, draft: input.draft, deviceIds: input.deviceIds }));
+    // Empty/absent rights preserve the pre-WP23 command identity byte for byte.
+    const actions = input.allowedActions.length ? { allowedActions: input.allowedActions } : {};
+    const requestHash = sha256(canonicalJson({ publicationKey, expectedRevision: input.expectedRevision, draft: input.draft, deviceIds: input.deviceIds, ...actions }));
     // Replay precedes draft lookup: deletion/edit after success cannot change a retry.
     const previous = await this.prisma.publicationCommand.findUnique({ where: { keyHash } });
     if (previous) return this.replay(previous, requestHash);
@@ -48,8 +52,9 @@ export class PublishService {
           if (!screen || screen.updatedAt.toISOString() !== input.draft.expectedUpdatedAt || screen.imageUrl !== prepared.imageUrl) throw new ConflictException('Draft changed; reload before publishing');
         }
         if (await tx.device.count({ where: { id: { in: input.deviceIds }, isActive: true } }) !== input.deviceIds.length) throw new NotFoundException('Target device not found');
-        const contentHash = sha256(canonicalJson(prepared.content));
-        const data = { protocolVersion: '1.0', content: prepared.content as Prisma.InputJsonValue, contentHash };
+        const content = { ...prepared.content, ...actions };
+        const contentHash = sha256(canonicalJson(content));
+        const data = { protocolVersion: '1.0', content: content as unknown as Prisma.InputJsonValue, contentHash };
         const revision = publication
           ? await this.persistence.appendRevision({ ...data, publicationId: publication.publicationId }, tx)
           : (await this.persistence.createPublication({ ...data, publicationKey }, tx)).revision;
@@ -97,7 +102,10 @@ export class PublishService {
 
   private parse(body: unknown): PublishInput {
     const input = object(body);
-    keys(input, ['idempotencyKey', 'expectedRevision', 'draft', 'deviceIds']);
+    keys(input, ['idempotencyKey', 'expectedRevision', 'draft', 'deviceIds', 'allowedActions']);
+    let allowedActions: AllowedAction[];
+    try { allowedActions = normalizePublicationActions(input.allowedActions); }
+    catch { throw new BadRequestException('Invalid publication actions'); }
     if (typeof input.idempotencyKey !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.idempotencyKey) ||
       !Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 0 || !Array.isArray(input.deviceIds) ||
       input.deviceIds.length > 100 || !input.deviceIds.every(positive)) throw new BadRequestException('Invalid publication command');
@@ -117,7 +125,7 @@ export class PublishService {
       if (!positive(draft.screenId) || typeof draft.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(draft.expectedUpdatedAt) || !Number.isFinite(Date.parse(draft.expectedUpdatedAt))) throw new BadRequestException('Only fixture or uploaded screen drafts are publishable');
       parsed = { screenId: draft.screenId, expectedUpdatedAt: draft.expectedUpdatedAt };
     }
-    return { idempotencyKey: input.idempotencyKey.toLowerCase(), expectedRevision: Number(input.expectedRevision), draft: parsed, deviceIds: [...new Set(input.deviceIds as number[])].sort((a, b) => a - b) };
+    return { idempotencyKey: input.idempotencyKey.toLowerCase(), expectedRevision: Number(input.expectedRevision), draft: parsed, deviceIds: [...new Set(input.deviceIds as number[])].sort((a, b) => a - b), allowedActions };
   }
 
   private async snapshot(draft: Draft): Promise<{ content: PublicationContent; imageUrl?: string }> {

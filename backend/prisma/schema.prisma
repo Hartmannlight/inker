@@ -64,6 +64,8 @@ model Device {
   publicationState  DevicePublicationState?
   playbackState     PlaybackState?
   renderBindings    RenderBinding[]
+  interactionReceipts InteractionReceipt[]
+  interactionRate InteractionRate?
 
   @@map("devices")
 }
@@ -83,6 +85,44 @@ model DeviceProfile {
   devices Device[]
 
   @@map("device_profiles")
+}
+
+// Command receipts contain only normalized identity, a request hash and safe
+// result data. Payloads and bearer credentials never enter the audit record.
+model InteractionReceipt {
+  deviceId Int @map("device_id")
+  eventId String @map("event_id")
+  commandId String @unique @map("command_id")
+  credentialId String @map("credential_id")
+  publicationId String @map("publication_id")
+  publicationRevision String @map("publication_revision")
+  action String
+  targetId String? @map("target_id")
+  requestHash String @map("request_hash")
+  result Json
+  createdAt DateTime @default(now()) @map("created_at")
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@id([deviceId, eventId])
+  @@index([createdAt])
+  @@map("interaction_receipts")
+}
+
+model InteractionRate {
+  deviceId Int @id @map("device_id")
+  minuteAt DateTime @map("minute_at")
+  minuteCount Int @map("minute_count")
+  secondAt DateTime @map("second_at")
+  secondCount Int @map("second_count")
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@map("interaction_rates")
+}
+
+model InteractionSequence {
+  credentialId String @id @map("credential_id")
+  lastSequence Int @map("last_sequence")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  credential DeviceCredential @relation(fields: [credentialId], references: [credentialId], onDelete: Cascade)
+  @@map("interaction_sequences")
 }
 
 // Delivery policy is persisted separately from profiles because power source
@@ -114,6 +154,8 @@ model DeviceCredential {
   createdAt    DateTime  @default(now()) @map("created_at")
 
   device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  interactionSequence InteractionSequence?
 
   @@index([deviceId])
   @@map("device_credentials")

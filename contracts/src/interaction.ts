@@ -1,4 +1,4 @@
-import { isJsonValue, type JsonObject, type JsonValue } from './json-value';
+import { isJsonValue, utf8ByteLength, type JsonObject, type JsonValue } from './json-value';
 import { validateProtocolVersion, type ProtocolVersion } from './protocol';
 import {
   addIssue,
@@ -28,6 +28,12 @@ export interface InteractionEvent {
   clientSequence?: number;
 }
 
+export const INTERACTION_LIMITS = Object.freeze({
+  messageBytes: 8192, payloadBytes: 4096, payloadDepth: 8,
+  maxAgeMs: 300_000, maxFutureMs: 30_000, perMinute: 60, perSecond: 8,
+  maxClientSequence: 2_147_483_647,
+});
+
 export interface CommandError {
   code: string;
   message: string;
@@ -46,7 +52,17 @@ export interface CommandResult {
 }
 
 export function parseInteractionEvent(value: unknown): ParseResult<InteractionEvent> {
-  return parseContract(value, validateInteractionEvent);
+  const parsed = parseContract(value, validateInteractionEvent);
+  if (!parsed.success) return parsed;
+  const event = parsed.data;
+  // Forward-compatible minor metadata is never retained as command input/audit.
+  return { ...parsed, data: {
+    protocolVersion: event.protocolVersion, eventId: event.eventId, deviceId: event.deviceId,
+    credentialId: event.credentialId, publicationId: event.publicationId, revision: event.revision,
+    action: event.action, ...(event.targetId === undefined ? {} : { targetId: event.targetId }),
+    payload: event.payload, occurredAt: event.occurredAt,
+    ...(event.clientSequence === undefined ? {} : { clientSequence: event.clientSequence }),
+  } };
 }
 
 export function parseCommandResult(value: unknown): ParseResult<CommandResult> {
@@ -73,6 +89,30 @@ function validateInteractionEvent(
   }
   validateIsoTimestamp(record, 'occurredAt', context, path);
   optionalInteger(record, 'clientSequence', context, path, { minimum: 0 });
+  for (const key of ['eventId', 'deviceId', 'credentialId', 'publicationId', 'targetId']) {
+    const text = record[key];
+    if (text !== undefined && (typeof text !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text))) {
+      addIssue(context, 'error', 'invalid_identifier', `${path}.${key}`, 'Expected a bounded identifier.');
+    }
+  }
+  if (typeof record.action !== 'string' || record.action.length > 64 || !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(record.action)) {
+    addIssue(context, 'error', 'invalid_action', `${path}.action`, 'Expected a bounded dotted action.');
+  }
+  if (typeof record.revision !== 'string' || record.revision.length > 128) {
+    addIssue(context, 'error', 'invalid_revision', `${path}.revision`, 'Expected a bounded revision.');
+  }
+  if (record.clientSequence !== undefined && (!Number.isSafeInteger(record.clientSequence) || Number(record.clientSequence) > INTERACTION_LIMITS.maxClientSequence)) {
+    addIssue(context, 'error', 'invalid_sequence', `${path}.clientSequence`, 'Sequence is outside the supported range.');
+  }
+  const bounded = (input: JsonValue, depth: number): boolean => {
+    if (input === null || typeof input !== 'object') return true;
+    if (depth >= INTERACTION_LIMITS.payloadDepth) return false;
+    return Object.values(input).every(item => bounded(item, depth + 1));
+  };
+  if (isJsonObject(record.payload) && (!bounded(record.payload, 0)
+    || utf8ByteLength(JSON.stringify(record.payload)) > INTERACTION_LIMITS.payloadBytes)) {
+    addIssue(context, 'error', 'payload_limit', `${path}.payload`, 'Payload exceeds the depth or byte limit.');
+  }
   return context.errors.length === 0;
 }
 

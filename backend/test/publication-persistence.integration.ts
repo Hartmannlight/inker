@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { PrismaClient } from "@prisma/client";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +22,10 @@ import { hashToken } from '../src/common/utils/crypto.util';
 import { randomUUID } from 'node:crypto';
 import { PublishService } from '../src/publications/publish.service';
 import { PresentationService } from '../src/device-platform/presentation.service';
-import { canonicalJson, sha256 } from '../src/publications/publication-content';
+import { canonicalJson, publicationAllowedActions, sha256 } from '../src/publications/publication-content';
+import { normalizePublicationActions } from '../src/publications/publication-actions';
+import { ArtifactStore } from '../src/render-cache/artifact-store';
+import { RenderCacheService, RENDER_REQUESTED } from '../src/render-cache/render-cache.service';
 import { PULL_FIXTURE_ARTIFACTS } from '../src/device-platform/pull-fixture-artifacts';
 import { OutboxStore } from '../src/events/outbox.store';
 import { parseOutboxEvent } from '../src/events/outbox.types';
@@ -99,6 +102,131 @@ describe("publication persistence boundary", () => {
     return { idempotencyKey: randomUUID(), expectedRevision, deviceIds,
       draft: { fixtureArtifacts: ['mono-800x480-white-bmp', 'mono-800x480-white-png'] } };
   }
+
+  test('WP-23 publishes explicit canonical immutable rights and replays reordered requests', async () => {
+    const actions = [
+      { action: 'view.next', targetId: 'playlist-b', payloadSchemaVersion: '1.0' },
+      { action: 'future.command', payloadSchemaVersion: '1.0' },
+      { action: 'view.next', targetId: 'playlist-a', payloadSchemaVersion: '1.0' },
+    ];
+    const input = { ...command(), allowedActions: actions };
+    const published = await publisher.publish('action-rights', input) as any;
+    const revision = await prisma.publicationRevision.findUniqueOrThrow({ where: { publicationRevisionId: published.publicationRevisionId } });
+    expect(publicationAllowedActions(revision)).toEqual(normalizePublicationActions(actions));
+    expect(revision.content).toMatchObject({ allowedActions: normalizePublicationActions(actions) });
+    expect(revision.contentHash).toBe(sha256(canonicalJson(revision.content)));
+    writes.length = 0;
+    expect(await publisher.publish('action-rights', { ...input, allowedActions: [...actions].reverse() })).toEqual(published);
+    expect(writes).toEqual([]);
+    await expect(publisher.publish('action-rights', { ...input, allowedActions: [actions[0]] })).rejects.toThrow('Idempotency key');
+    await expect(Promise.resolve(prisma.publicationRevision.update({ where: { publicationRevisionId: revision.publicationRevisionId },
+      data: { content: { schemaVersion: 1, fixtureArtifacts: ['mono-800x480-white-bmp'], allowedActions: [] } } }))).rejects.toThrow();
+    actions[0].action = 'changed.action';
+    expect(await prisma.publicationRevision.findUnique({ where: { publicationRevisionId: revision.publicationRevisionId } })).toEqual(revision);
+    expect(await prisma.publicationRevision.count()).toBe(1);
+  });
+
+  test('WP-23 absent and empty rights retain legacy hashes, receipts and no implicit inherited permissions', async () => {
+    const input = command(), publicationKey = 'legacy-rights';
+    const legacyRequestHash = sha256(canonicalJson({ publicationKey, expectedRevision: input.expectedRevision,
+      draft: input.draft, deviceIds: input.deviceIds }));
+    const expectedContent = { schemaVersion: 1, fixtureArtifacts: input.draft.fixtureArtifacts };
+    const first = await publisher.publish(publicationKey, input) as any;
+    const receipt = await prisma.publicationCommand.findUniqueOrThrow({ where: { keyHash: sha256(input.idempotencyKey) } });
+    expect(receipt.requestHash).toBe(legacyRequestHash);
+    expect(first.contentHash).toBe(sha256(canonicalJson(expectedContent)));
+    const firstRevision = await prisma.publicationRevision.findUniqueOrThrow({ where: { publicationRevisionId: first.publicationRevisionId } });
+    expect(firstRevision.content).toEqual(expectedContent);
+    expect(publicationAllowedActions(firstRevision)).toEqual([]);
+    writes.length = 0;
+    expect(await publisher.publish(publicationKey, { ...input, allowedActions: [] })).toEqual(first);
+    expect(writes).toEqual([]);
+    const second = await publisher.publish(publicationKey, { ...command([], 1),
+      allowedActions: [{ action: 'view.next', payloadSchemaVersion: '1.0' }] }) as any;
+    expect(second.contentHash).not.toBe(first.contentHash);
+    const third = await publisher.publish(publicationKey, { ...command([], 2), allowedActions: [] }) as any;
+    const thirdRevision = await prisma.publicationRevision.findUniqueOrThrow({ where: { publicationRevisionId: third.publicationRevisionId } });
+    expect(third.contentHash).toBe(first.contentHash);
+    expect(thirdRevision.content).toEqual(expectedContent);
+    expect(publicationAllowedActions(thirdRevision)).toEqual([]);
+    expect(await prisma.publicationRevision.findUnique({ where: { publicationRevisionId: first.publicationRevisionId } })).toEqual(firstRevision);
+  });
+
+  test('WP-23 rejects unknown fields and invalid action lists before SQL writes', async () => {
+    const action = { action: 'view.next', payloadSchemaVersion: '1.0' };
+    writes.length = 0;
+    for (const allowedActions of [
+      null, {}, [action, action], [{ ...action, targetId: '../secret' }],
+      [{ ...action, payloadSchemaVersion: '2.0' }], [{ ...action, payload: {} }],
+      Array.from({ length: 17 }, (_, index) => ({ ...action, targetId: 'target-' + index })),
+    ]) await expect(publisher.publish('invalid-rights', { ...command(), allowedActions })).rejects.toThrow('Invalid publication actions');
+    await expect(publisher.publish('invalid-rights', { ...command(), actions: [action] })).rejects.toThrow('Unknown publication command field');
+    await expect(publisher.publish('invalid-rights', { ...command(), draft: { ...command().draft, allowedActions: [action] } })).rejects.toThrow('Unknown publication command field');
+    expect(writes).toEqual([]);
+    expect(await prisma.publicationRevision.count()).toBe(0);
+    expect(await prisma.publicationCommand.count()).toBe(0);
+    expect(await prisma.outboxEvent.count()).toBe(0);
+  });
+
+  test('WP-23 actual rendered pull rights are revoked on cache miss, fallback and mismatched revision', async () => {
+    const device = await target('action-pull', true);
+    const allowedActions = [{ action: 'view.next', payloadSchemaVersion: '1.0' }];
+    await publisher.publish('pull-rights', { ...command([device.id]), allowedActions });
+    const previousCachePath = process.env.INKER_RENDER_CACHE_PATH;
+    process.env.INKER_RENDER_CACHE_PATH = path + '.artifacts';
+    const files = new ArtifactStore();
+    if (previousCachePath === undefined) delete process.env.INKER_RENDER_CACHE_PATH;
+    else process.env.INKER_RENDER_CACHE_PATH = previousCachePath;
+    const cache = new RenderCacheService(prisma as PrismaService, files), store = new OutboxStore(prisma as PrismaService);
+    const module = await Test.createTestingModule({ imports: [DiscoveryModule], providers: [
+      PullContentService, PullLastSeenService, ProfileResolverService, DeviceConfigurationService,
+      HttpPullTransportAdapter, TransportAdapterRegistry,
+      { provide: PrismaService, useValue: prisma }, { provide: RenderCacheService, useValue: cache },
+      { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy()]) },
+    ] }).compile();
+    await module.init();
+    const reload = () => prisma.device.findUniqueOrThrow({ where: { id: device.id }, include: { profile: true, deliveryPolicy: true } });
+    const read = async () => module.get(PullContentService).read(await reload());
+    async function render() {
+      const key = await cache.request(device.id);
+      const requested = await prisma.outboxEvent.findFirstOrThrow({ where: { eventType: RENDER_REQUESTED, aggregateId: key } });
+      const event = await store.claim('action-render', new Date(), { eventId: requested.eventId });
+      expect(event).not.toBeNull();
+      await cache.render(event!);
+      expect(await store.ack(event!)).toBe(true);
+    }
+    try {
+      expect((await read()).manifest.allowedActions).toEqual([]);
+      await render();
+      const ready = await read();
+      expect(ready.manifest.allowedActions).toEqual(allowedActions);
+      expect(ready.manifest.metadata?.fallback).toBe(false);
+      const withoutCache = new PullContentService(prisma as PrismaService, module.get(ProfileResolverService),
+        module.get(DeliveryPolicyRegistry), module.get(TransportAdapterRegistry), module.get(PullLastSeenService));
+      expect((await withoutCache.read(await reload())).manifest.allowedActions).toEqual([]);
+      const nextActions = [{ action: 'view.next', targetId: 'next-target', payloadSchemaVersion: '1.0' }];
+      await publisher.publish('pull-rights', { ...command([device.id], 1), allowedActions: nextActions });
+      await cache.request(device.id);
+      const fallback = await read();
+      expect(fallback.manifest.allowedActions).toEqual([]);
+      expect(fallback.manifest.metadata?.fallback).toBe(true);
+      expect(fallback.manifest.revision).toBe(ready.manifest.revision);
+      expect(fallback.artifact.sha256).toBe(ready.artifact.sha256);
+      expect(fallback.etag).not.toBe(ready.etag);
+      const desired = (await prisma.devicePublicationState.findUniqueOrThrow({ where: { deviceId: device.id }, include: { desiredRevision: true } })).desiredRevision!;
+      const oldCached = await cache.read(await reload(), desired);
+      const wrongFlag = spyOn(cache, 'read').mockResolvedValue({ ...oldCached!, fallback: false });
+      try { expect((await read()).manifest.allowedActions).toEqual([]); }
+      finally { wrongFlag.mockRestore(); }
+      await render();
+      const current = await read();
+      expect(current.manifest.allowedActions).toEqual(nextActions);
+      expect(current.manifest.metadata?.fallback).toBe(false);
+      writes.length = 0;
+      for (let index = 0; index < 10; index++) expect((await read()).etag).toBe(current.etag);
+      expect(writes).toEqual([]);
+    } finally { await module.close(); }
+  }, 30_000);
 
   test('WP-17 explicit publish validates input, hashes canonical content and atomically assigns with two events', async () => {
     const d = await target();

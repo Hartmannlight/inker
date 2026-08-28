@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   assessProtocolVersion,
   isJsonValue,
+  utf8ByteLength,
   parseCommandResult,
   parseDeliveryPolicy,
   parseDeviceCapabilities,
@@ -68,6 +69,24 @@ describe('device profile fixtures', () => {
 });
 
 describe('core contract fixtures', () => {
+  it('bounds interaction identity, sequence and UTF-8 payloads and projects minor metadata', async () => {
+    const fixture = await loadFixture('interaction-event.json') as Record<string, unknown>;
+    const projected = unwrap(parseInteractionEvent({ ...fixture, futureMetadata: 'must not enter commands' }));
+    expect(projected).not.toHaveProperty('futureMetadata');
+    for (const change of [
+      { eventId: 'x'.repeat(129) }, { action: 'view/next' }, { targetId: 'bad target' },
+      { clientSequence: 2147483648 }, { clientSequence: Number.MAX_SAFE_INTEGER + 1 },
+      { payload: { text: '😀'.repeat(1024) } },
+    ]) expect(parseInteractionEvent({ ...fixture, ...change }).success).toBe(false);
+    let deep: Record<string, unknown> = {};
+    for (let index = 0; index < 9; index++) deep = { nested: deep };
+    expect(parseInteractionEvent({ ...fixture, payload: deep }).success).toBe(false);
+    expect(parseInteractionEvent({ ...fixture, payload: { value: '😀'.repeat(100) } }).success).toBe(true);
+    for (const text of ['', 'ASCII', 'ä', '漢', '😀', '\ud800', 'a😀漢']) {
+      expect(utf8ByteLength(text)).toBe(new TextEncoder().encode(text).length);
+    }
+  });
+
   it('validates a widget-neutral presentation manifest', async () => {
     const fixture = await loadFixture('presentation-manifest.json');
     const manifest = unwrap(parsePresentationManifest(fixture));
