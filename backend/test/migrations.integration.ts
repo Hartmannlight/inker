@@ -101,11 +101,14 @@ afterEach(() => {
 });
 
 describe("Prisma migration baseline", () => {
-  test('WP-26 adds empty federation storage without changing any existing rows or table definitions', async () => {
-    const databasePath = join(createTemporaryDirectory(), 'wp26-upgrade.db');
-    const migrations = join(prismaDirectory, 'migrations'), latest = '20260904000000_federation_shares';
+  test.each([
+    ['WP-26', '20260904000000_federation_shares', '20260903000000_timers', ['federation_identity', 'share_credentials']],
+    ['WP-27', '20260905000000_remote_subscriptions', '20260904000000_federation_shares', ['remote_servers', 'remote_credentials', 'remote_subscriptions', 'remote_sync_jobs']],
+  ] as const)('%s adds empty storage without changing any existing rows or table definitions', async (_label, latest, previous, addedTables) => {
+    const databasePath = join(createTemporaryDirectory(), 'federation-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
     const names = readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort();
-    expect(names[names.length - 1]).toBe('20260903000000_timers');
+    expect(names[names.length - 1]).toBe(previous);
     applySql(databasePath, [join(migrations, names[0], 'migration.sql'),
       join(import.meta.dir, 'fixtures', 'inker-0.6.0-data.sql'),
       ...names.slice(1).map(name => join(migrations, name, 'migration.sql'))]);
@@ -146,6 +149,11 @@ describe("Prisma migration baseline", () => {
           VALUES(1,CURRENT_TIMESTAMP,7,CURRENT_TIMESTAMP,2);
         INSERT INTO interaction_sequences(credential_id,last_sequence,updated_at)
           VALUES('existing-device-credential',42,CURRENT_TIMESTAMP);`);
+      if (latest === '20260905000000_remote_subscriptions') {
+        database.exec(`INSERT INTO federation_identity(id,server_id) VALUES(1,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+          INSERT INTO share_credentials(credential_id,publication_id,token_hash,created_by_admin_id)
+          VALUES('existing-share','existing-publication','${'a'.repeat(64)}','existing-admin');`);
+      }
       expect(database.query('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
       const tables = database.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -163,8 +171,7 @@ describe("Prisma migration baseline", () => {
       database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
       expect(rows()).toEqual(beforeRows);
       expect(definitions()).toEqual(beforeDefinitions);
-      expect(database.query('SELECT * FROM federation_identity').all()).toEqual([]);
-      expect(database.query('SELECT * FROM share_credentials').all()).toEqual([]);
+      for (const table of addedTables) expect(database.query('SELECT * FROM "' + table + '"').all()).toEqual([]);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
     // Finish any later migrations before comparing with the current datamodel.
@@ -595,6 +602,7 @@ describe("Prisma migration baseline", () => {
         "20260902000000_interactions",
         "20260903000000_timers",
         "20260904000000_federation_shares",
+        "20260905000000_remote_subscriptions",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

@@ -28,6 +28,7 @@ import { Extensions } from './pages/extensions';
 import { PluginLibrary, InstalledPlugins, PluginCreator, PluginInstanceForm, OAuthCallback } from './pages/plugins';
 import { GrafanaGeneratorPage } from './components/plugins/GrafanaGeneratorModal';
 import { WebDisplay } from './pages/display/WebDisplay';
+import { Remotes } from './pages/remotes/Remotes';
 
 /**
  * Main App component with routing
@@ -175,6 +176,7 @@ function App() {
             />
 
             {/* Settings */}
+            <Route path="/remotes" element={<ProtectedRoute><Remotes /></ProtectedRoute>} />
             <Route
               path="/settings"
               element={

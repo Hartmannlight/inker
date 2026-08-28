@@ -21,17 +21,26 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
-- WP-00 bis WP-26 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
-  Handoffs abgeglichen; keine erneute Implementierung. Hardwaremessungen offen.
-- Letzter lokaler Commit: `7b29bed` (WP-25). Branch unverändert.
-- WP-25 abgenommen: Scheduling, private Push/Pull, Clock-Skew, echtes Docker/Browser,
-  Integration und abschließender Secret-Audit grün. Lokal committed.
-- WP-26 abgenommen, Paketcommit folgt. Danach WP-27 sichere Remote-Abonnements.
-- Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-26 aufnehmen.
-  WP-28-Core-P2 (Originalrückgabe/Proxy) durch begrenzte Detachedkopie behoben.
-  WP-26 bis WP-29 offen.
+- WP-00 bis WP-27 abgenommen. WP-11/WP-14-Index und Handoffs abgeglichen;
+  keine erneute Implementierung. Hardwareprüfungen bleiben offen.
+- Basis: `711164f` (WP-26), auf ausdrücklichen Einzelauftrag an Hartmannlight/inker
+  gepusht. Kein weiterer Push, Merge oder Deployment autorisiert.
+- Dieser Paketstand enthält nur WP-27. WP-28 bleibt separate Arbeit und ist
+  nicht Teil dieser Abnahme; danach folgt WP-29 mit allen Architektur-12-Gates.
+- Reale neue SQLite-Prüfungen nach ausdrücklicher Nutzerfreigabe: 18/228,
+  vier konkurrierende Workerprozesse, SQL-Rollback, Versions-/Claimschutz,
+  persistierter Leaseablauf und Commit-vor-Ack-Replay. Keine DB-Mocks.
+- Isoliert: Backend 1028/4916, Contracts 70/1209, Frontend 107,
+  Migrationen 14/250; verwandte SQLite-Integrationen 81/2651; Fixturetests 3/3.
+  Typecheck/ESLint, Produktionsbuild, echter Drei-Server-Smoke und Browser-QA grün.
+- Isoliertes Image `3f2e3dd6d083d378143ec222328315e3fdd56d6dbed1d63187c400721ffc8f4f`.
+  Seit dem Image nur Tests und Dokumentation ergänzt; Produktionsquellen unverändert.
+- Nachweise und sechs geschlossene SQLite-Lücken: Abschluss WP-27 in WORK_PACKAGES.md.
+  Lokale Prüfprotokolle `.tmp/goal-wp27-*.log`; keine Testzugänge committen.
+- Nächster Schritt: getrennte WP-28-Abnahme und anschließend WP-29.
+  Keine zusätzlichen Widgets, produktiven Connectoren oder Firmware.
 
-## Nächste Schritte
+## Bisheriger Paketverlauf
 
 1. WP-11-Korrektur und WP-11/WP-14-Index/Handoffs in `6b6139f` lokal committed.
    WP-14 nicht erneut implementiert.

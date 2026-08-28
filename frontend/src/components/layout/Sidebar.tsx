@@ -79,6 +79,13 @@ export function Sidebar() {
       ),
     },
     {
+      to: '/remotes',
+      label: 'Remote publications',
+      icon: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+        <circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c5 5 5 13 0 18M12 3c-5 5-5 13 0 18" />
+      </svg>,
+    },
+    {
       to: '/plugins',
       label: 'Plugins',
       icon: (

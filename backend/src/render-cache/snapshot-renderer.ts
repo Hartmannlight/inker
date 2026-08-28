@@ -107,11 +107,12 @@ export async function renderSnapshot(revision: PublicationRevision, target: Rend
     const { top, right, bottom, left } = target.safeArea;
     const width = target.width - left - right;
     const height = target.height - top - bottom;
-    const swapped = target.rotation === 90 || target.rotation === 270;
+    const rotation = (target.rotation - source.rotation + 360) % 360;
+    const swapped = rotation === 90 || rotation === 270;
     const sourceWidth = swapped ? source.height : source.width;
     const sourceHeight = swapped ? source.width : source.height;
     if (target.scaling === 'none' && (sourceWidth > width || sourceHeight > height)) throw unavailable();
-    image = image.rotate(target.rotation).flatten({ background: '#ffffff' }).toColourspace('srgb');
+    image = image.rotate(rotation).flatten({ background: '#ffffff' }).toColourspace('srgb');
     if (target.scaling === 'none') {
       const padX = width - sourceWidth;
       const padY = height - sourceHeight;

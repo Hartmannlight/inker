@@ -267,7 +267,7 @@ describe('WP-25 durable timer scheduling and worker recovery', () => {
     const domainBefore = await p.timer.findUniqueOrThrow({ where: { timerId: timer.timerId } });
     const changesBefore = await p.outboxEvent.findMany({ where: { eventType: TIMER_CHANGED }, orderBy: { eventId: 'asc' } });
     const dispatcher = new OutboxDispatcher(p as PrismaService, store,
-      {} as never, {} as never, {} as never, {} as never, {} as never, worker);
+      {} as never, {} as never, {} as never, {} as never, {} as never, worker, {} as never);
     // Exercise the real dispatch/catch branch without starting its unrelated poll loop.
     (dispatcher as unknown as { stopped: boolean }).stopped = true;
     const fail = spyOn(store, 'fail');

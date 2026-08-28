@@ -47,4 +47,19 @@ describe('startup configuration validation', () => {
     );
     expect(result.error?.message).not.toContain('must-not-be-used');
   });
+
+  test('remote origins default closed and private exceptions require an exact allowed origin', () => {
+    const defaults = validationSchema.validate(secureEnvironment);
+    expect(defaults.value.FEDERATION_ALLOWED_ORIGINS).toBe('');
+    expect(defaults.value.FEDERATION_PRIVATE_ORIGINS).toBe('');
+    expect(validationSchema.validate({ ...secureEnvironment, FEDERATION_ALLOWED_ORIGINS: 'https://HOME.example:443, https://remote.example',
+      FEDERATION_PRIVATE_ORIGINS: 'https://home.example' }).error).toBeUndefined();
+    for (const value of ['*', 'http://remote.example', 'https://remote.example/path', 'https://user:secret@remote.example',
+      'https://127.1', 'https://remote.example,', Array(33).fill('https://remote.example').join(',')])
+      expect(validationSchema.validate({ ...secureEnvironment, FEDERATION_ALLOWED_ORIGINS: value }).error).toBeDefined();
+    for (const value of ['https://remote.example:444', 'https://other.example', '*'])
+      expect(validationSchema.validate({ ...secureEnvironment, FEDERATION_ALLOWED_ORIGINS: 'https://remote.example',
+        FEDERATION_PRIVATE_ORIGINS: value }).error).toBeDefined();
+    expect(validationSchema.validate({ ...secureEnvironment, FEDERATION_PRIVATE_ORIGINS: 'https://private.example' }).error).toBeDefined();
+  });
 });

@@ -82,7 +82,7 @@ müssen.
 | [x] | WP-24 | Persistente Timer-Domäne | WP-23 |
 | [x] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
 | [x] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
-| [ ] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
+| [x] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
 | [ ] | WP-28 | Strukturierte Logs, Metriken und Betriebszustände | WP-20 |
 | [ ] | WP-29 | Last-, Fault-, Backup- und Security-Freigabegate | WP-19, WP-21, WP-25, WP-27, WP-28 |
 
@@ -3162,14 +3162,14 @@ Diagnostik und minimale Admin-UI.
 
 **Aufgaben:**
 
-- [ ] Persistiere kanonische Basis-URL, Remote-ID, Credentialreferenz und Status.
-- [ ] Validiere HTTPS, DNS, Redirects, Zieladressen und Antwortgrößen gegen SSRF/
+- [x] Persistiere kanonische Basis-URL, Remote-ID, Credentialreferenz und Status.
+- [x] Validiere HTTPS, DNS, Redirects, Zieladressen und Antwortgrößen gegen SSRF/
   Rebinding.
-- [ ] Synchronisiere Manifest per Conditional GET mit begrenzter Concurrency.
-- [ ] Lade Artefakte hashgeprüft und atomar in lokalen Cache.
-- [ ] Liefere bei Remote-Ausfall die letzte gültige Version mit `stale`-Status.
-- [ ] Zeige Vertrauen, letzte Synchronisation, Fehler und Widerruf im Admin-UI.
-- [ ] Teste zwei Remotes, Ausfall, Credentialwiderruf und Protokollmismatch.
+- [x] Synchronisiere Manifest per Conditional GET mit begrenzter Concurrency.
+- [x] Lade Artefakte hashgeprüft und atomar in lokalen Cache.
+- [x] Liefere bei Remote-Ausfall die letzte gültige Version mit `stale`-Status.
+- [x] Zeige Vertrauen, letzte Synchronisation, Fehler und Widerruf im Admin-UI.
+- [x] Teste zwei Remotes, Ausfall, Credentialwiderruf und Protokollmismatch.
 
 **Abnahme:** Zwei Remote-Publications bleiben nach Abschalten der Remote-Server aus
 lokalem Cache sichtbar; Fehler sind eindeutig erkennbar.
@@ -3178,6 +3178,111 @@ lokalem Cache sichtbar; Fehler sind eindeutig erkennbar.
 
 **Handoff:** Unterstützte Federation-Versionen und bewusst nicht unterstützte
 direkte Displayverbindungen notieren.
+
+### Zwischenstand WP-27 (2026-08-28, nicht abgenommen)
+
+- Implementiert: persistente RemoteServer/RemoteCredential/RemoteSubscription/
+  RemoteSyncJob-Modelle mit Migration; verschlüsselte Share-Credentials,
+  explizites Vertrauen, Admin-/CSRF-geschützte Verwaltung und minimale UI.
+  Worker-Queue mit dauerhaften Aufträgen, Versions-/Claimfences, begrenzter
+  Concurrency, Backoff und Circuit-Cooldown. HTTPS-Origin-Allowlist, vollständige
+  DNS-Adressprüfung mit IP-Pinning und TLS-Verifikation, keine Redirects,
+  begrenzter HTTP-Parser, Hash-/Pixelprüfung und atomarer lokaler Publication-Cache.
+- Remote-Ausfall, Widerruf und Protokollmismatch erhalten die letzte gültige
+  Revision mit sichtbarem Fehler. Tokenrotation entfernt den bekannten Fehler
+  erst nach bestätigtem Sync. Federation 1.0; fremde Major-Versionen abgelehnt.
+  Displays bleiben ausschließlich am Home-Server. Keine Remote-Aktionen,
+  Timer, Sources, produktiven Connectoren oder Firmware hinzugefügt.
+- Root-Prüfungen: Linux-Backend 1057 Tests/6328 Assertions/0 Fehler, 69,85 s;
+  Migrationen 14/250 einschließlich WP-26→WP-27-Erhalt; Worker/Job 39/197;
+  Importer 6/36; Renderer 12/71; Contracts 82/1433; Frontend 107.
+  Produktions- und expliziter Test-Typecheck sowie gezieltes ESLint bestanden.
+  Die Gesamtsuite enthält auch separat unintegrierte WP-28-Coretests und den
+  noch nicht abgenommenen zentralen WP-28-Redactor; kein WP-28-Abnahmenachweis.
+- Docker mit eigenem Home und zwei TLS-Remotes: Auth/CSRF/Trust/Origin,
+  echte 304, Revisionwechsel, Protokollmismatch, Ausfall beider Remotes,
+  lokaler Browser-/Pullcache, Home-Neustart (Recovery 11662 ms), Widerruf und
+  Secret-Audit bestanden. Tatsächliche Browserprüfung: Adminverwaltung,
+  zwei Displays mit 1920×1080, Offline-Bildreload, Widerrufsdiagnose und
+  Tokenrotation bei pausiertem Worker bestanden; Konsole ohne Fehler.
+  Eigene Testcontainer/Volumes/Netzwerke und Browser-Tabs entfernt.
+- Erneuter Imagebuild mit finalem Worker-ETag-Limit 200: Exit 0,
+  Manifest `07da779d76c0100a0c213859b69c71a872cee6f4274b52bc3686da8faf03820e`.
+  Vollständiger Drei-Server-Smoke erneut Exit 0, Recovery 11548 ms, 304 A: 2/B: 3,
+  Secret-Audit und Cleanup erfolgreich (`.tmp/goal-wp27-container-final.log`).
+  Dieser Kandidat enthält den parallelen WP-28-Redactor; die Prüfung des
+  getrennten WP-27-Commitstands bleibt deshalb erforderlich.
+- Prüfprotokolle lokal unter `.tmp/goal-wp27-*.log`; Betriebsanleitung:
+  `FEDERATION_OPERATIONS.md`. Frühere Windows-Bun-TLS-Abstürze/Hänger sind
+  nicht als bestandener Test gewertet; vollständige Linux-Suite mit finalem
+  Transport-Testpeer erfolgreich. Ursache des Windows-Problems bleibt offen.
+- **Offen:** Das Freigabesystem hat das Anlegen von
+  `backend/test/remote-subscriptions.integration.ts` wegen Nutzungslimit
+  ausdrücklich abgelehnt. Datei nicht angelegt, keine Umgehung. Erneute
+  ausdrückliche Nutzerfreigabe angefragt. Zusätzliche reale SQLite-Nachweise
+  für atomaren Rollback, Konkurrenz und Claim-/Versionsfences bleiben offen.
+  Danach Regression, Image des exakten WP-27-Stands ohne parallele WP-28-
+  Änderungen, vollständiger Docker-Smoke und abschließendes Review erneut
+  ausführen. Erst dann Checkboxen und Abnahme aktualisieren und lokal committen.
+- Git: uncommitted auf `codex/device-platform-spike`, letzter abgenommener
+  Paketcommit `711164f` (WP-26). Hardwareprüfungen weiterhin offen.
+
+### Isolierter Nachweis WP-27 (2026-08-28, Abnahme weiterhin offen)
+
+- Detached Prüfarbeitsbaum `.tmp/wp27-acceptance-20260828` auf `711164f`:
+  ausschließlich WP-27, ohne WP-28-Redactor, Correlation oder Operations.
+  Unabhängiges Trennungsreview ohne Findings. Hauptarbeitsbaum erhalten.
+- Frischer Produktionsbuild inklusive Contracts, Prisma und Frontend: Exit 0.
+  `inker:wp27-isolated-test`, Image-ID
+  `3f2e3dd6d083d378143ec222328315e3fdd56d6dbed1d63187c400721ffc8f4f`.
+- Backend **1028/4916** (83 Dateien, 69,27 s), Contracts **70/1209**,
+  Frontend **107** (16 Dateien), Migrationen **14/250** bestanden.
+  Expliziter Test-Typecheck fand einen zu breiten Rotationstyp im neuen
+  Renderertest. Mit `as const` in Haupt- und Prüfarbeitsbaum korrigiert;
+  Typecheck, gezieltes ESLint und Renderer **12/71** anschließend bestanden.
+  Keine Laufzeitlogik oder Testassertion verändert.
+- Vollständiger Drei-Server-Smoke mit genau diesem Image: Exit 0; reale TLS-
+  Synchronisation, Conditional GET (304 A: 2/B: 3), Revisionwechsel,
+  Protokollmismatch, Ausfall beider Remotes, lokaler Browser-/Pullcache,
+  Home-Neustart, Widerruf und Secret-Audit bestanden. Gemessene Recovery
+  29627 ms während weiterer lokaler Prüfungen; kein Last-/Kapazitätsnachweis.
+- Logs `.tmp/goal-wp27-isolated-*.log`. Root bestätigte nach Abschluss leere
+  gelabelte Container-/Volume-/Netzwerklisten und entfernten Fixture-State.
+  Der Prüfarbeitsbaum bleibt für die Fortsetzung erhalten.
+- Fehlende Freigabe für die zusätzliche SQLite-Suite unverändert. Weder
+  Ersatzdatei noch Paketabschluss/Commit. Nach Freigabe die fehlenden
+  Atomaritäts-/Konkurrenz-/Fence-Nachweise ergänzen und finale Paketprüfung
+  durchführen; anschließend WP-27 und WP-28 getrennt lokal committen.
+
+### Abschluss WP-27
+
+- Status: abgenommen am 2026-08-28. Die frühere Testdateiblockade wurde durch
+  ausdrückliche Nutzerzustimmung aufgehoben. Keine Ersatzsuite oder umgangene
+  Berechtigung; alle sechs dokumentierten SQLite-Nachweislücken geschlossen.
+- Neue reale SQLite-Suite: **18 Tests / 228 Assertions**. Echte Services,
+  verschlüsselte Credentials, migrierte temporäre Datenbanken, SQL-Trigger für
+  späte Fehler, vier Workerprozesse, konkurrierende API-Clients, persistierter
+  Leaseablauf und abrupter Prozessabbruch nach Commit vor Ack. Nur Remote-Netzwerk
+  und gezielte Fehlerzeitpunkte ersetzt, keine gemockten DB-Transaktionen.
+- Root-Läufe: isoliertes WP-27-Linux **18/228**, integriertes WP-28-Linux **18/228**;
+  zusätzlich unabhängiger WP-27-Linux- und Windows-Bun-Lauf jeweils **18/228**.
+  Verwandte Publication-/Outbox-/Render-/Timer-/Federation-Integrationen **81/2651**.
+  Fixture-Sicherheit **3/3**, expliziter Test-Typecheck und ESLint bestanden.
+- Die oben dokumentierten isolierten Produktions-, Backend- (1028/4916),
+  Frontend- (107), Contract- (70/1209), Migrations- (14/250), Drei-Server- und
+  Browsernachweise bleiben gültig: Nach dem geprüften Image änderten sich nur
+  Tests und Dokumentation, keine Produktionsquellen. Root bestätigte die finale
+  Leaseprüfung und Pakettrennung. Compose validiert mit temporärem Test-Adminwert.
+- Architektur-Queue-Liste, ADR-002 und Worker-Betriebsanleitung nennen nun auch
+  `remote-sync` samt tatsächlichen Budgets. Federation-Version 1.0; ausschließlich
+  Home-Server-Hub, keine direkten Displayverbindungen oder Remote-Aktionen.
+- Prüflogs: `.tmp/goal-wp27-sqlite-root.log`, `goal-wp28-remote-sqlite-root.log`,
+  `goal-wp27-isolated-dependent-integrations.log`, `goal-wp27-isolated-fixture-final.log`
+  und die zuvor genannten Build-/Docker-/Browsernachweise.
+- Keine offenen WP-27-Paketblocker. Windows-Bun-TLS-Probleme bleiben ein bekannter
+  Host-Toolchain-P2 mit Linux als geprüftem Produktionspfad; Hardware offen.
+  WP-29 muss die kombinierte Last-/Fault-/Security-/Restore-Freigabe nachweisen.
+- Git: getrennt geprüfter Paketstand, lokaler Paketcommit folgt; kein weiterer Push.
 
 ## WP-28 – Observability und Betriebszustände
 

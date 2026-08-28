@@ -325,6 +325,7 @@ Geplante Queue-Gruppen:
 - `delivery`: Push-Benachrichtigungen und Wiederholungen
 - `timer`: dauerhafte zeitgesteuerte Aktionen
 - `maintenance`: Cleanup, Rotation und Diagnose
+- `remote-sync`: read-only Publication-Abonnements mit eigenem Abrufbudget (WP-27)
 
 Jeder Jobtyp definiert:
 
@@ -558,14 +559,14 @@ belasten.
 
 - [x] Einen minimalen versionierten Publication-Feed definieren.
 - [x] Read-only ShareCredential auf genau eine Publication begrenzen.
-- [ ] RemoteServer und RemoteSubscription persistieren.
-- [ ] HTTPS-Verifikation, URL-Normalisierung und Vertrauensanzeige implementieren.
-- [ ] Remote-Manifeste per Conditional GET und begrenztem Worker abrufen.
-- [ ] Remote-Artefakte lokal cachen und bei Ausfall weiterverwenden.
-- [ ] SSRF-, DNS-Rebinding-, Redirect- und Größenlimits übernehmen.
-- [ ] Konflikte zwischen lokalen und Remote-Namen eindeutig darstellen.
-- [ ] Widerruf, Ablauf und Protokollinkompatibilität sichtbar behandeln.
-- [ ] Direkte Multi-Server-Verbindung am Display nur dokumentieren, noch nicht
+- [x] RemoteServer und RemoteSubscription persistieren.
+- [x] HTTPS-Verifikation, URL-Normalisierung und Vertrauensanzeige implementieren.
+- [x] Remote-Manifeste per Conditional GET und begrenztem Worker abrufen.
+- [x] Remote-Artefakte lokal cachen und bei Ausfall weiterverwenden.
+- [x] SSRF-, DNS-Rebinding-, Redirect- und Größenlimits übernehmen.
+- [x] Konflikte zwischen lokalen und Remote-Namen eindeutig darstellen.
+- [x] Widerruf, Ablauf und Protokollinkompatibilität sichtbar behandeln.
+- [x] Direkte Multi-Server-Verbindung am Display nur dokumentieren, noch nicht
   implementieren.
 
 **Gate:** Der Home-Server kann je eine Test-Publication von zwei Remote-Servern

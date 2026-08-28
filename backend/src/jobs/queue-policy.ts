@@ -1,7 +1,7 @@
 import type { RedisOptions } from 'ioredis';
 
 export const QUEUE_NAMES = Object.freeze([
-  'source-refresh', 'render', 'delivery', 'timer', 'maintenance',
+  'source-refresh', 'render', 'delivery', 'timer', 'maintenance', 'remote-sync',
 ] as const);
 export type QueueName = (typeof QUEUE_NAMES)[number];
 export const JOB_VERSION = 1;
@@ -61,6 +61,7 @@ function policy(
 /** Limits apply across worker processes as well as within each process. */
 export const QUEUE_POLICIES: Readonly<Record<QueueName, QueuePolicy>> = Object.freeze({
   'source-refresh': policy(8_000, 2, 4, 8),
+  'remote-sync': policy(20_000, 1, 2, 4),
   render: policy(20_000, 1, 1, 4),
   delivery: policy(OUTBOX_POLICY.dispatchTimeoutMs, 4, 4, 32),
   timer: policy(8_000, 2, 2, 16),

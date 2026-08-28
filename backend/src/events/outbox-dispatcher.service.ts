@@ -19,6 +19,8 @@ import { SourceWorkerService } from '../sources/source-worker.service';
 import { SOURCE_REFRESH } from '../sources/source-job';
 import { TimerWorkerService } from '../timers/timer-worker.service';
 import { TIMER_DUE } from '../timers/timer-scheduling';
+import { RemoteWorkerService } from '../federation/remote-worker.service';
+import { REMOTE_SYNC } from '../federation/remote-job';
 
 @Injectable()
 export class OutboxDispatcher
@@ -45,6 +47,7 @@ export class OutboxDispatcher
     private readonly renderCache: RenderCacheService,
     private readonly sources: SourceWorkerService,
     private readonly timers: TimerWorkerService,
+    private readonly remotes: RemoteWorkerService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -88,15 +91,17 @@ export class OutboxDispatcher
         this.reconcileAt = Date.now() + POLICY.pollMs;
         await this.renderCache.reconcile();
         await this.sources.schedule();
+        await this.remotes.schedule();
       }
       if (Date.now() >= this.timerReconcileAt) {
         await this.timers.reconcile();
         this.timerReconcileAt = Date.now() + 5000;
       }
-      for (const name of ['delivery', 'render', 'timer', 'maintenance', 'source-refresh'] as const) {
+      for (const name of ['delivery', 'render', 'timer', 'maintenance', 'source-refresh', 'remote-sync'] as const) {
         for (let i = 0; i < QUEUE_POLICIES[name].globalConcurrency && !this.stopped; i++) {
         const filter = this.queueFilter(name);
         const event = name === 'source-refresh' ? await this.sources.claim(this.owner)
+          : name === 'remote-sync' ? await this.remotes.claim(this.owner)
           : await this.store.claim(this.owner, new Date(), filter,
             { where: filter, limit: QUEUE_POLICIES[name].globalConcurrency });
         if (!event) break;
@@ -122,7 +127,8 @@ export class OutboxDispatcher
   }
 
   private queueFilter(name: QueueName): Prisma.OutboxEventWhereInput {
-    const special = [RENDER_REQUESTED, PLAYBACK_DUE, TIMER_DUE, MAINTENANCE_DUE, SOURCE_REFRESH];
+    const special = [RENDER_REQUESTED, PLAYBACK_DUE, TIMER_DUE, MAINTENANCE_DUE, SOURCE_REFRESH, REMOTE_SYNC];
+    if (name === 'remote-sync') return { eventType: REMOTE_SYNC };
     if (name === 'source-refresh') return { eventType: SOURCE_REFRESH };
     if (name === 'render') return { eventType: RENDER_REQUESTED };
     if (name === 'timer') return { eventType: { in: [PLAYBACK_DUE, TIMER_DUE] } };
@@ -142,11 +148,19 @@ export class OutboxDispatcher
       this.counts.stale++;
       return;
     }
-    const expectedQueue = event.eventType === SOURCE_REFRESH ? 'source-refresh' : event.eventType === RENDER_REQUESTED ? 'render'
+    const expectedQueue = event.eventType === REMOTE_SYNC ? 'remote-sync'
+      : event.eventType === SOURCE_REFRESH ? 'source-refresh' : event.eventType === RENDER_REQUESTED ? 'render'
       : [PLAYBACK_DUE, TIMER_DUE].includes(event.eventType) ? 'timer' : event.eventType === MAINTENANCE_DUE ? 'maintenance' : 'delivery';
     if (queue && queue !== expectedQueue) { this.counts.stale++; return; }
     try {
       signal.throwIfAborted();
+      if (event.eventType === REMOTE_SYNC) {
+        const outcome = await this.remotes.execute(event, signal);
+        if (outcome === 'failed') { this.counts.failed++; return; }
+        if (await this.store.ack(event)) this.counts.delivered++;
+        else this.counts.stale++;
+        return;
+      }
       if (event.eventType === TIMER_DUE) {
         await this.timers.completeDue(event, signal);
         signal.throwIfAborted();

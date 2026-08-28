@@ -1,5 +1,8 @@
 import * as Joi from 'joi';
 import { isIP } from 'node:net';
+import { RemoteTransport } from '../federation/remote-transport';
+
+const origins = (value: string) => value === '' ? [] : value.split(',').map(origin => origin.trim());
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string()
@@ -38,6 +41,16 @@ export const validationSchema = Joi.object({
   FEDERATION_TRUSTED_PROXIES: Joi.string().allow('').default('').custom((value: string, helpers) => {
     const addresses = value === '' ? [] : value.split(',').map(address => address.trim());
     return addresses.length <= 32 && addresses.every(address => isIP(address)) ? value : helpers.error('any.invalid');
+  }),
+  FEDERATION_ALLOWED_ORIGINS: Joi.string().allow('').default('').custom((value: string, helpers) => {
+    try { new RemoteTransport({ allowedOrigins: origins(value) }); return value; }
+    catch { return helpers.error('any.invalid'); }
+  }),
+  FEDERATION_PRIVATE_ORIGINS: Joi.string().allow('').default('').custom((value: string, helpers) => {
+    try {
+      new RemoteTransport({ allowedOrigins: origins(helpers.state.ancestors[0].FEDERATION_ALLOWED_ORIGINS ?? ''), privateOrigins: origins(value) });
+      return value;
+    } catch { return helpers.error('any.invalid'); }
   }),
 
   // File uploads

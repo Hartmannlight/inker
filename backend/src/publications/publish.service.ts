@@ -45,7 +45,9 @@ export class PublishService {
         await tx.$executeRaw`INSERT INTO publication_commands (key_hash, request_hash) VALUES (${keyHash}, ${requestHash}) ON CONFLICT (key_hash) DO NOTHING`;
         const receipt = await tx.publicationCommand.findUniqueOrThrow({ where: { keyHash } });
         if (receipt.result || receipt.requestHash !== requestHash) return this.replay(receipt, requestHash);
-        const publication = await tx.publication.findUnique({ where: { publicationKey }, include: { revisions: { orderBy: { revision: 'desc' }, take: 1 } } });
+          const publication = await tx.publication.findUnique({ where: { publicationKey }, include: { revisions: { orderBy: { revision: 'desc' }, take: 1 } } });
+          if (publication && await tx.remoteSubscription.findUnique({ where: { localPublicationId: publication.publicationId }, select: { subscriptionId: true } }))
+            throw new ConflictException('Remote publications are read-only');
         if ((publication?.revisions[0]?.revision ?? 0) !== input.expectedRevision) throw new ConflictException('Publication revision conflict');
         if ('screenId' in input.draft) {
           const screen = await tx.screen.findUnique({ where: { id: input.draft.screenId } });

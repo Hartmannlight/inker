@@ -1,6 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { parseProtocolVersion, type AllowedAction, type RenderFormat } from '@inker/contracts';
+import { FEDERATION_LIMITS, parseFederationPublicationFeed, parseProtocolVersion, type AllowedAction, type FederationPublicationFeed, type RenderFormat } from '@inker/contracts';
 import type { PublicationRevision } from '@prisma/client';
 import { PULL_FIXTURE_ARTIFACTS } from '../device-platform/pull-fixture-artifacts';
 import { normalizePublicationActions } from './publication-actions';
@@ -28,6 +28,7 @@ export type PublishedSourceReference = {
 export type PublicationContent = (
   | { schemaVersion: 1; fixtureArtifacts: string[] }
   | { schemaVersion: 1; image: { png: string; width: number; height: number; sha256: string } }
+  | { schemaVersion: 2; feed: FederationPublicationFeed; artifactBytes: string[] }
 ) & { sourceSnapshot?: PublishedSourceReference; allowedActions?: AllowedAction[] };
 
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -65,7 +66,24 @@ export function publicationArtifacts(revision: PublicationRevision): PublishedAr
   const content = revision.content;
   if (!parseProtocolVersion(revision.protocolVersion).success || !content || typeof content !== 'object' || Array.isArray(content)) return unavailable();
   if (content.schemaVersion !== undefined) {
-    if (content.schemaVersion !== 1 || sha256(canonicalJson(content)) !== revision.contentHash) return unavailable();
+    if (![1, 2].includes(Number(content.schemaVersion)) || sha256(canonicalJson(content)) !== revision.contentHash) return unavailable();
+  }
+  if (content.schemaVersion === 2) {
+    const feed = parseFederationPublicationFeed(content.feed);
+    const encoded = content.artifactBytes;
+    if (!feed.success || !Array.isArray(encoded) || encoded.length !== feed.data.artifacts.length
+      || Object.keys(content).some(key => !['schemaVersion', 'feed', 'artifactBytes'].includes(key))) return unavailable();
+    let total = 0;
+    return feed.data.artifacts.map((artifact, index) => {
+      const text = encoded[index];
+      if (typeof text !== 'string' || text.length > Math.ceil(FEDERATION_LIMITS.artifactBytes / 3) * 4) return unavailable();
+      const bytes = Buffer.from(text, 'base64');
+      total += bytes.length;
+      if (total > FEDERATION_LIMITS.totalArtifactBytes || bytes.length !== artifact.sizeBytes
+        || bytes.toString('base64') !== text || sha256(bytes) !== artifact.sha256) return unavailable();
+      const { format, mimeType, width, height, colorSpace, bitDepth, rotation } = artifact;
+      return { format, mimeType, width, height, colorSpace, bitDepth, rotation, bytes, sha256: artifact.sha256 };
+    });
   }
   // Read compatibility for already persisted WP-14 fixture publications. Never
   // rewrite those immutable rows or adopt arbitrary legacy snapshot fields.
@@ -78,5 +96,5 @@ export function publicationArtifacts(revision: PublicationRevision): PublishedAr
   const bytes = Buffer.from(image.png, 'base64');
   if (sha256(bytes) !== image.sha256) return unavailable();
   return [{ bytes, sha256: image.sha256, width: Number(image.width), height: Number(image.height),
-    format: 'png', mimeType: 'image/png', colorSpace: 'rgb', bitDepth: 8, rotation: 0 }];
+    format: 'png', mimeType: 'image/png', colorSpace: 'rgb', bitDepth: 24, rotation: 0 }];
 }

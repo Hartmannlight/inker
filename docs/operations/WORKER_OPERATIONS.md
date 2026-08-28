@@ -13,7 +13,7 @@ in `docs/architecture/WORK_PACKAGES.md`.
 | Process | Command | Responsibilities |
 |---|---|---|
 | API | `bun run start:prod` | HTTP, auth, commands, manifests, authenticated files, sockets and their delivery acknowledgements |
-| Worker | `bun run start:worker:prod` | Durable outbox dispatch, source refresh, rendering, playlist transitions and maintenance |
+| Worker | `bun run start:worker:prod` | Durable outbox dispatch, source refresh, rendering, playlist/timer transitions, remote synchronization and maintenance |
 
 Development can start the worker with `bun run start:worker`. Both processes use
 the same validated environment, instance key file, `DATABASE_URL`, private render
@@ -58,6 +58,7 @@ only the event ID and claim token; the authoritative input lives in SQLite.
 | delivery | 8 s | 4 / 4 | 32 |
 | timer | 8 s | 2 / 2 | 16 |
 | maintenance | 20 s | 1 / 1 | 2 |
+| remote-sync | 20 s | 1 / 2 | 4 |
 
 WP-21 activates source refresh for the built-in fixture, slow and failure
 connectors only. The global limit is four, with two per provider group, two per
@@ -65,6 +66,13 @@ connector type and one per source. These limits are claimed atomically in SQLite
 Provider credentials stay outside snapshots and rendering. See
 `SOURCE_OPERATIONS.md` for scheduling, timeouts, retries and circuit breakers;
 the old model poller and direct provider refresh paths remain disabled.
+
+WP-27 adds read-only remote publication synchronization. In addition to the
+global budget, at most one job may own a given remote or subscription at once.
+The complete network phase is bounded to 15 seconds. Origin/DNS/TLS rules,
+credential handling, conditional GETs, local cache and circuit behavior are
+documented in [federation operations](../architecture/FEDERATION_OPERATIONS.md).
+Displays still connect only to their home server.
 
 Durable attempts are bounded at five, with exponential 1–60 second backoff plus
 0–20% additive jitter. Each fenced Redis job has only one transport attempt, so

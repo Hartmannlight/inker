@@ -101,3 +101,12 @@ export {
   type FederationCapabilities,
   type FederationPublicationFeed,
 } from './federation';
+export {
+  REMOTE_ERROR_CODES,
+  REMOTE_SUBSCRIPTION_LIMITS,
+  parseRemoteSubscriptionView,
+  parseRemoteSubscriptionList,
+  type RemoteErrorCode,
+  type RemoteSubscriptionStatus,
+  type RemoteSubscriptionView,
+} from './remote-subscription';

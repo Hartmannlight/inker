@@ -27,6 +27,15 @@ Prozess- oder Redis-Ausfall sicher sein. Queue-Inhalt, Locks, Presence und
 Verbindungslisten dürfen verloren gehen, ohne Timer, Pairings, Publications,
 Snapshots oder ausstehende Aktionen zu verlieren.
 
+### Ergänzung WP-27 (2026-08-28)
+
+Remote-Publication-Abonnements verwenden zusätzlich die Queue `remote-sync`.
+Ihr eigenes Budget schützt Source-Refresh und andere Jobgruppen vor langsamen
+Remote-Servern: ein lokaler, zwei globale Jobs, höchstens einer pro Remote und
+Abonnement, 20 Sekunden Jobfrist bei 15 Sekunden Gesamt-Netzwerkfrist. Claim-
+Budgets und Versionsfences werden in SQLite geprüft; Redis bleibt rekonstruierbar.
+Dies erweitert die Jobgruppen für ADR-004, nicht die Persistenzentscheidung.
+
 ## Folgen
 
 - Redis-Ausfall darf bestehende Manifeste und Artefakte nicht unlesbar machen;

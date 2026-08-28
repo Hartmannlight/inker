@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { PublicationRevision } from '@prisma/client';
 import sharp from 'sharp';
 import { PULL_FIXTURE_ARTIFACTS } from '../device-platform/pull-fixture-artifacts';
-import { canonicalJson, sha256, type PublishedArtifact } from '../publications/publication-content';
+import { canonicalJson, publicationArtifacts, sha256, type PublishedArtifact } from '../publications/publication-content';
 import { MAX_RENDER_BYTES, MAX_RENDER_PIXELS, type RenderTarget } from './render-input';
 import { renderSnapshot, validateRenderedArtifact } from './snapshot-renderer';
 
@@ -24,6 +24,26 @@ async function rgb(artifact: PublishedArtifact): Promise<Buffer> {
 }
 
 describe('snapshot-only renderer', () => {
+  it('declares uploaded RGB888 pixels as panel RGB24 and does not rotate a remote snapshot twice', async () => {
+    const pixels = Buffer.from([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255]);
+    const original = await snapshot(2, 3, pixels);
+    expect(publicationArtifacts(original)[0].bitDepth).toBe(24);
+    for (const rotation of [90, 180, 270] as const) {
+    const width = rotation === 180 ? 2 : 3, height = rotation === 180 ? 3 : 2;
+    const rotated = await sharp(publicationArtifacts(original)[0].bytes).rotate(rotation).png().toBuffer();
+    const hash = sha256(rotated);
+    const imported = revision({ schemaVersion: 2, artifactBytes: [rotated.toString('base64')], feed: {
+      protocolVersion: '1.0', serverId: '00000000-0000-4000-8000-000000000001', publicationId: 'remote', publicationRevisionId: 'remote-rev',
+      revision: 1, publishedAt: '2026-01-01T00:00:00.000Z', artifacts: [{ artifactId: hash, sha256: hash,
+        mimeType: 'image/png', format: 'png', width, height, colorSpace: 'rgb', bitDepth: 24,
+        rotation, sizeBytes: rotated.length, url: `/api/federation/v1/publications/remote/revisions/1/artifacts/${hash}` }],
+    } });
+    const same = await renderSnapshot(imported, target({ width, height, rotation, scaling: 'none' }));
+    expect(await rgb(same)).toEqual(await sharp(rotated).removeAlpha().raw().toBuffer());
+    const restored = await renderSnapshot(imported, target({ width: 2, height: 3, rotation: 0, scaling: 'none' }));
+    expect(await rgb(restored)).toEqual(pixels);
+    }
+  });
   it('preserves native fixture bytes and hashes without returning mutable catalog buffers', async () => {
     for (const fixture of PULL_FIXTURE_ARTIFACTS) {
       const output = await renderSnapshot(revision({ schemaVersion: 1, fixtureArtifacts: [fixture.fixtureId] }),

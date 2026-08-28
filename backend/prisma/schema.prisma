@@ -273,6 +273,7 @@ model Publication {
   createdAt      DateTime              @default(now()) @map("created_at")
   revisions      PublicationRevision[]
   shares         ShareCredential[]
+  remoteSubscription RemoteSubscription? @relation("RemoteLocalPublication")
 
   @@map("publications")
 }
@@ -283,6 +284,73 @@ model FederationIdentity {
   serverId  String   @unique @default(uuid()) @map("server_id")
   createdAt DateTime @default(now()) @map("created_at")
   @@map("federation_identity")
+}
+
+// Trust binds an explicitly allowed origin to a manually verified remote UUID.
+model RemoteServer {
+  remoteServerId String @id @default(uuid()) @map("remote_server_id")
+  baseUrl String @unique @map("base_url")
+  serverId String @unique @map("server_id")
+  trusted Boolean @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  subscriptions RemoteSubscription[]
+  @@map("remote_servers")
+}
+
+model RemoteCredential {
+  credentialId String @id @default(uuid()) @map("credential_id")
+  ciphertext String
+  createdAt DateTime @default(now()) @map("created_at")
+  subscription RemoteSubscription?
+  @@map("remote_credentials")
+}
+
+model RemoteSubscription {
+  subscriptionId String @id @default(uuid()) @map("subscription_id")
+  name String
+  remoteServerId String @map("remote_server_id")
+  remotePublicationId String @map("remote_publication_id")
+  credentialId String @unique @map("credential_id")
+  enabled Boolean @default(true)
+  version Int @default(1)
+  refreshIntervalSeconds Int @default(60) @map("refresh_interval_seconds")
+  nextSyncAt DateTime @map("next_sync_at")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  lastSuccessAt DateTime? @map("last_success_at")
+  lastErrorCode String? @map("last_error_code")
+  consecutiveFailures Int @default(0) @map("consecutive_failures")
+  circuitOpenUntil DateTime? @map("circuit_open_until")
+  etag String?
+  remoteRevision Int? @map("remote_revision")
+  remoteRevisionId String? @map("remote_revision_id")
+  feedHash String? @map("feed_hash")
+  localPublicationId String @unique @map("local_publication_id")
+  latestLocalRevisionId String? @map("latest_local_revision_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  server RemoteServer @relation(fields: [remoteServerId], references: [remoteServerId], onDelete: Restrict)
+  credential RemoteCredential @relation(fields: [credentialId], references: [credentialId], onDelete: Restrict)
+  localPublication Publication @relation("RemoteLocalPublication", fields: [localPublicationId], references: [publicationId], onDelete: Restrict)
+  latestLocalRevision PublicationRevision? @relation("RemoteLatestRevision", fields: [latestLocalRevisionId], references: [publicationRevisionId], onDelete: Restrict)
+  syncJobs RemoteSyncJob[]
+  @@unique([remoteServerId, remotePublicationId])
+  @@index([enabled, nextSyncAt])
+  @@index([latestLocalRevisionId])
+  @@map("remote_subscriptions")
+}
+
+model RemoteSyncJob {
+  eventId String @id @map("event_id")
+  subscriptionId String @map("subscription_id")
+  subscriptionVersion Int @map("subscription_version")
+  remoteServerId String @map("remote_server_id")
+  scheduledAt DateTime @map("scheduled_at")
+  completedAt DateTime? @map("completed_at")
+  event OutboxEvent @relation(fields: [eventId], references: [eventId], onDelete: Cascade)
+  subscription RemoteSubscription @relation(fields: [subscriptionId], references: [subscriptionId], onDelete: Cascade)
+  @@index([subscriptionId, completedAt])
+  @@index([remoteServerId, completedAt])
+  @@map("remote_sync_jobs")
 }
 
 // A separate credential namespace: read-only access to one publication only.
@@ -328,6 +396,7 @@ model PublicationRevision {
   acknowledgedByDevices DevicePublicationState[] @relation("AcknowledgedPublicationRevision")
   playlistEntries       PublishedPlaylistEntry[]
   renderRequests        RenderRequest[]
+  remoteLatestFor       RemoteSubscription[] @relation("RemoteLatestRevision")
 
   @@unique([publicationId, revision])
   @@index([publicationId, publishedAt])
@@ -468,6 +537,7 @@ model OutboxEvent {
   lastError      String?   @map("last_error")
   createdAt      DateTime  @default(now()) @map("created_at")
   sourceRefresh  SourceRefreshJob?
+  remoteSync     RemoteSyncJob?
 
   @@index([status, availableAt])
   @@index([status, claimUntil])
