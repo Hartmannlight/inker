@@ -66,6 +66,8 @@ model Device {
   renderBindings    RenderBinding[]
   interactionReceipts InteractionReceipt[]
   interactionRate InteractionRate?
+  createdTimers Timer[] @relation("TimerCreator")
+  acknowledgedTimers Timer[] @relation("TimerAcknowledger")
 
   @@map("devices")
 }
@@ -87,8 +89,33 @@ model DeviceProfile {
   @@map("device_profiles")
 }
 
-// Command receipts contain only normalized identity, a request hash and safe
-// result data. Payloads and bearer credentials never enter the audit record.
+// Persistent anchors, never ticks. Shared timers survive creator deletion.
+model Timer {
+  timerId String @id @default(uuid()) @map("timer_id")
+  version Int @default(1)
+  creatorDeviceId Int? @map("creator_device_id")
+  creatorExternalId String @map("creator_external_id")
+  visibility String
+  status String
+  durationMs Int @map("duration_ms")
+  startedAt DateTime @map("started_at")
+  endsAt DateTime? @map("ends_at")
+  pausedRemainingMs Int? @map("paused_remaining_ms")
+  evaluatedAt DateTime @map("evaluated_at")
+  completedAt DateTime? @map("completed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  acknowledgedAt DateTime? @map("acknowledged_at")
+  acknowledgedByDeviceId Int? @map("acknowledged_by_device_id")
+  acknowledgedByExternalId String? @map("acknowledged_by_external_id")
+  creator Device? @relation("TimerCreator", fields: [creatorDeviceId], references: [id], onDelete: SetNull)
+  acknowledger Device? @relation("TimerAcknowledger", fields: [acknowledgedByDeviceId], references: [id], onDelete: SetNull)
+  @@index([status, endsAt])
+  @@index([creatorDeviceId, status])
+  @@index([visibility, status])
+  @@map("timers")
+}
+
+// Command receipts omit raw request payloads and bearer credentials.
 model InteractionReceipt {
   deviceId Int @map("device_id")
   eventId String @map("event_id")

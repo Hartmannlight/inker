@@ -533,7 +533,7 @@ Persistenz, Zeit und mehrere Displays.
 - [x] Versionierte InteractionEvents und Command-Ergebnisse implementieren (WP-23).
 - [x] Event-IDs deduplizieren und Wiederholungen idempotent beantworten (WP-23).
 - [x] Publication-spezifische Aktionsrechte prüfen (WP-23).
-- [ ] Persistentes Timer-Modell und Zustandsautomat implementieren.
+- [x] Persistentes Timer-Modell und Zustandsautomat implementieren (WP-24).
 - [ ] Timerabschluss als durable Queue-Aufgabe planen.
 - [ ] Timer nach Neustart rekonstruieren und überfällige Abschlüsse nachholen.
 - [ ] Serverzeit/-offset an Clients liefern; Countdown lokal aus `endsAt`

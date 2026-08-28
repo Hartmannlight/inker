@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const { execFile, execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
-const name = `inker-wp23-${randomUUID().slice(0, 8)}`;
+const name = `inker-wp24-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
 const secrets = [password];
-let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, sourceBeforeRestart, interactionBeforeRestart, stage = 'start';
+let cookie, csrf, playbackBeforeRestart, renderBeforeRestart, sourceBeforeRestart, interactionBeforeRestart, timersBeforeRestart, stage = 'start';
 let workerPaused = false;
 const sockets = [];
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 90_000, env: { ...process.env, ADMIN_PIN: password } });
@@ -89,7 +89,7 @@ async function main() {
     // Test-only HTTP budget for 200 reads. Production's existing limit stays 100/min.
     docker('run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18715:80', '-e', 'ADMIN_PIN', '-e', 'THROTTLE_LIMIT=1000', '-e', 'PAIRING_ALLOW_INSECURE_HTTP=true', '-e', 'DEVICE_WS_TRUSTED_PROXIES=127.0.0.1,::1',
       '--mount', 'type=volume,destination=/app/uploads', '--mount', 'type=volume,destination=/app/secrets',
-      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp23-test');
+      '--mount', 'type=volume,destination=/app/render-cache', process.env.INKER_SMOKE_IMAGE || 'inker:wp24-test');
     await until(async () => { try { return (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status === 400; } catch { return false; } }, 600);
     stage = 'large database inspection pipe regression';
     assert.equal(db("await p.$queryRawUnsafe('SELECT 1'); console.log(JSON.stringify('x'.repeat(256000)));").length, 256000);
@@ -331,6 +331,7 @@ async function main() {
     stage = 'pull-create';
     const pull = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 pull', macAddress: 'AA:15:00:00:00:01' } })).body;
     interactionBeforeRestart = await require('./fixtures/interaction-container-check.cjs')({ request, db, renderedFor, secrets, setStage: value => { stage = value; } });
+    timersBeforeRestart = await require('./fixtures/timer-domain-container-check.cjs')({ request, db, renderedFor, until, secrets, setStage: value => { stage = value; } });
     stage = 'pull-setup';
     const setup = await request('/api/setup', { headers: { HTTP_ID: 'AA:15:00:00:00:01' } }); assert.equal(setup.response.status, 200);
     pull.apiKey = setup.body.api_key; assert.ok(pull.apiKey); secrets.push(pull.apiKey);
@@ -375,11 +376,15 @@ async function main() {
     assert.equal(interactionReceipt.commandId, interactionBeforeRestart.commandId);
     assert.equal(interactionReceipt.result.status, 'accepted');
     assert.equal(db('console.log(JSON.stringify(await p.playbackState.findUniqueOrThrow({where:{deviceId:input.deviceId}})));', interactionBeforeRestart).version, interactionBeforeRestart.version);
+    for (const expected of timersBeforeRestart) {
+      const row = db('console.log(JSON.stringify(await p.timer.findUniqueOrThrow({where:{timerId:input.timerId}})));', expected);
+      assert.equal(row.version, expected.version); assert.equal(row.status, expected.status);
+    }
     stage = 'secret-audit';
     const logs = docker('logs', name);
     const sessions = db('console.log(JSON.stringify(await p.adminSession.findMany()));');
     const telemetry = db('console.log(JSON.stringify(await p.device.findMany({select:{telemetry:true}})));');
-    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),interactions:await p.interactionReceipt.findMany(),publications:await p.publicationRevision.findMany(),sources:await p.sourceDefinition.findMany(),snapshots:await p.sourceSnapshot.findMany(),sourceJobs:await p.sourceRefreshJob.findMany()}));');
+    const durable = db('console.log(JSON.stringify({outbox:await p.outboxEvent.findMany(),playback:await p.playbackState.findMany(),receipts:await p.playbackCommand.findMany(),interactions:await p.interactionReceipt.findMany(),timers:await p.timer.findMany(),publications:await p.publicationRevision.findMany(),sources:await p.sourceDefinition.findMany(),snapshots:await p.sourceSnapshot.findMany(),sourceJobs:await p.sourceRefreshJob.findMany()}));');
     for (const secret of secrets.filter(Boolean)) { assert.equal(logs.includes(secret), false); assert.equal(JSON.stringify(sessions).includes(secret), false); assert.equal(JSON.stringify(telemetry).includes(secret), false); assert.equal(JSON.stringify(durable).includes(secret), false); }
     assert.equal(logs.includes('device-configuration.catalog'), false, 'The production seed catalog must load successfully');
     console.info('WP-15 production smoke passed: admin/CSRF, pairing, heartbeat, idle revocation, reconnect, pull/304/policy/artifact, TRMNL display, restart/key identity, secret audit');
@@ -397,6 +402,8 @@ async function main() {
     if (isolationLocation) console.error(`Isolation fixture location: ${isolationLocation[1]}:${isolationLocation[2]}`);
     const interactionLocation = typeof error?.stack === 'string' && error.stack.match(/interaction-container-check\.cjs:(\d+):(\d+)/);
     if (interactionLocation) console.error(`Interaction fixture location: ${interactionLocation[1]}:${interactionLocation[2]}`);
+    const timerLocation = typeof error?.stack === 'string' && error.stack.match(/timer-domain-container-check\.cjs:(\d+):(\d+)/);
+    if (timerLocation) console.error(`Timer fixture location: ${timerLocation[1]}:${timerLocation[2]}`);
     {
       try { console.error(db('console.log(JSON.stringify({events:await p.outboxEvent.findMany({select:{status:true,attempts:true,lastError:true}}),targets:await p.outboxTarget.findMany({select:{delivered:true,lastError:true}})}));')); } catch {}
     }

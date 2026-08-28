@@ -106,11 +106,11 @@ telemetry can still write SQLite. Follow `DATABASE_BACKUP.md` and
 
 ## Repeat the process checks
 
-After building a local `inker:wp23-test` image, run from `backend/`:
+After building a local `inker:wp24-test` image, run from `backend/`:
 
 ```text
-INKER_SMOKE_IMAGE=inker:wp23-test node test/websocket-container-smoke.cjs
-INKER_SMOKE_IMAGE=inker:wp23-test node test/worker-startup-container.cjs
+INKER_SMOKE_IMAGE=inker:wp24-test node test/websocket-container-smoke.cjs
+INKER_SMOKE_IMAGE=inker:wp24-test node test/worker-startup-container.cjs
 bun test ./test/outbox-redis.integration.ts
 ```
 
@@ -122,4 +122,6 @@ The normal smoke proves worker exit zero, queue recovery, existing WebSocket
 continuity, cached artifacts and 20 reads with an actually frozen worker.
 It also checks the authenticated [interaction pipeline](../architecture/INTERACTION_OPERATIONS.md),
 concurrent duplicate touch events and their durable receipt after restart.
-On PowerShell set `$env:INKER_SMOKE_IMAGE='inker:wp23-test'` before the Node command.
+The [timer domain](../architecture/TIMER_OPERATIONS.md) fixture covers private/shared
+authorization, state transitions and persistent anchors without database ticks.
+On PowerShell set `$env:INKER_SMOKE_IMAGE='inker:wp24-test'` before the Node command.

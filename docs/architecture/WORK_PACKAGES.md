@@ -79,7 +79,7 @@ müssen.
 | [x] | WP-21 | SourceDefinition, SourceSnapshot und Resilienz-Testconnectoren | WP-20 |
 | [x] | WP-22 | Isolationsgrenze für blockierenden/unbekannten Plugin-Code | WP-20, WP-21 |
 | [x] | WP-23 | Versionierte, idempotente Interaction-/Command-Pipeline | WP-04, WP-15, WP-16 |
-| [ ] | WP-24 | Persistente Timer-Domäne | WP-23 |
+| [x] | WP-24 | Persistente Timer-Domäne | WP-23 |
 | [ ] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
 | [ ] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
 | [ ] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
@@ -2922,12 +2922,12 @@ Scheduling/Push folgt WP-25.
 
 **Aufgaben:**
 
-- [ ] Modelliere Timer, Sichtbarkeit, Erstellergerät und Zustände.
-- [ ] Implementiere create, pause, resume, cancel und acknowledge idempotent.
-- [ ] Verwende Serverzeit und persistiere `endsAt`/Restzeit statt Ticks.
-- [ ] Definiere Berechtigungen für private/geteilte Timer.
-- [ ] Erzeuge Outbox-Events bei fachlichen Zustandsänderungen.
-- [ ] Teste Grenzwerte, ungültige Übergänge, Doppelbefehle und Uhrfortschritt.
+- [x] Modelliere Timer, Sichtbarkeit, Erstellergerät und Zustände.
+- [x] Implementiere create, pause, resume, cancel und acknowledge idempotent.
+- [x] Verwende Serverzeit und persistiere `endsAt`/Restzeit statt Ticks.
+- [x] Definiere Berechtigungen für private/geteilte Timer.
+- [x] Erzeuge Outbox-Events bei fachlichen Zustandsänderungen.
+- [x] Teste Grenzwerte, ungültige Übergänge, Doppelbefehle und Uhrfortschritt.
 
 **Abnahme:** Der Zustandsautomat ist mit kontrollierter Uhr deterministisch und
 benötigt zwischen Start und Ende keinen periodischen Write.
@@ -2935,6 +2935,56 @@ benötigt zwischen Start und Ende keinen periodischen Write.
 **Validierung:** Table-driven Unit-, Prisma- und Command-Integrationstests.
 
 **Handoff:** Timer-Events, nächste Fälligkeiten und UI-Datenmodell notieren.
+
+### Handoff WP-24 (2026-08-28, abgenommen)
+
+- Reine `transitionTimer`-Zustandsmaschine, persistente Timeranker und fünf
+  `timer.create/pause/resume/cancel/acknowledge`-Handler in der WP-23-Registry.
+  Serverzeit, `endsAt`, pausierte Restdauer und monotone `evaluatedAt`-Bewertung;
+  keine Tickwrites. Überfällige Befehle schließen erfolgreich ab; acknowledge kann
+  Abschluss und Quittierung in einer Revision verbinden. Terminale Zustände werden
+  nicht wiederbelebt. No-ops erzeugen keine weitere Timerrevision/Outbox.
+- Eigener gemeinsamer Contract für Create-/Mutationpayload und TimerSnapshot;
+  strikte, unabhängige DTO-Projektion, keine Getter-/Originalobjektweitergabe.
+  Dauer 1 Sekunde bis 7 Tage, erwartete Timerversion für Änderungen. Höchstens
+  32 eigene/100 globale ausstehende Timer einschließlich unquittierter Abschlüsse.
+- Private Timer nur für das aktive Erstellergerät, shared für lokale aktive Geräte;
+  Änderungen zusätzlich nur mit explizit publizierter Aktion. Creator/Quittierer
+  kommen aus dem Principal. Credentialrotation ändert Eigentum nicht. Geräte-FKs
+  `SET NULL` bewahren geteilte Timer und externe Auditidentitäten; private Orphans
+  bleiben unzugänglich und belegen keine nutzbare globale Kapazität.
+- Migration `20260903000000_timers`: Zustands-/Integer-/Unixzeit-Checks sowie
+  `(status,endsAt)`-Index. Review durch reale SQLite-Repros gefundene Typaffinitäts-
+  und Zeitvergleichslücken korrigiert; Float/Text/Negativ-/Overflowfälle abgelehnt.
+  Domainänderung und `timer.state.changed` gemeinsam mit Interaction-Receipt
+  committed. Strikter Outboxparser quittiert WP-24-Events ohne Deliveryziele;
+  kein vorgezogener Scheduler oder Transport aus WP-25.
+- Hauptagent: finale 825 Backendtests/5.426 Assertions, 61 Contracts/949,
+  80 Frontend grün. Bestehende Integrationsregression 147/2.793 und neue
+  Timer-/Eventintegration 18/418 grün. Die neuen 13 Timerintegrationen prüfen
+  echte SQLite-/Publication-/Render-/Commandpfade, Rechte, Quoten, Triggerrollback,
+  Credential-/Gerätelöschung und zwei unabhängige Prozesse: genau eine Erstellung
+  beziehungsweise genau eine Mutation bei konkurrierender erwarteter Version.
+  Fünf Eventtests sind auch in der Backend-Gesamtsuite enthalten. Separater
+  unabhängiger WP-28-Kern in Gesamtsuiten (13 Backend-/12 Contracttests) bleibt
+  ausdrücklich ohne Integration/Abnahme und außerhalb dieses Paketcommits.
+- Agent: komplette Migrationen 12/194 grün, Datenbewahrung/Prisma-Schemavergleich,
+  Null-/Zustands-/Datentyp-Checks und Creator-/Quittierer-FKs. Reine Domäne
+  69/309, Timervertrag 10/448 (in Gesamtsuiten enthalten). Typechecks für Anwendung,
+  Contracts, Frontend und neue Tests, gezieltes ESLint/Whitespace grün; keine Skips.
+- Finales lokales `inker:wp24-test` mit korrigierter DDL gebaut. Vollständiger
+  Produktionscontainer-Smoke Exit 0: echte doppelte HTTP-Erstellung, geteiltes
+  pause/resume/cancel, private Ablehnung, Uhrfortschritt ohne Tickwrites,
+  verspätete Quittierung, reguläre Eventzustellung ohne Deadletter; persistente
+  Timer/Receipts über Containerneustart, vollständiger Secret-Audit und Cleanup.
+  Regressionswerte: SIGSTOP→Gastkill 2.522,2 ms, Login 115,2 ms,
+  API-/Artefaktreads p95 58,7 ms; eingefrorener Worker API-p95 52,9 ms.
+  Lokale Prüfprotokolle `.tmp/goal-wp24-*.log`, keine Veröffentlichung.
+- [Timervertrag und Betrieb](TIMER_OPERATIONS.md) dokumentieren Zustände,
+  Berechtigungen, Payloads, Eventgründe und Übergabe. WP-25 plant einen Abschluss
+  pro `(timerId,version,endsAt)`, rekonstruiert ihn nach Neustart und ergänzt
+  private-sichere Push/Pull-Projektion sowie minimalen Browser-Testscreen.
+  Keine UI-/Firmware-/Hardwareabnahme in WP-24.
 
 ## WP-25 – Timer planen, wiederherstellen und verteilen
 

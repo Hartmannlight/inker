@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DeviceEvent } from './events.service';
 import { PUBLICATION_EVENT_TYPES as PUB } from '../publications/publication-persistence.types';
 import { parsePlaybackEvent, PLAYBACK_CHANGED } from '../playback/playback.events';
+import { parseTimerEvent, TIMER_CHANGED } from '../timers/timer.events';
 
 export { OUTBOX_POLICY, retryDelay } from '../jobs/queue-policy';
 
@@ -55,6 +56,11 @@ export function parseOutboxEvent(event: EventInput): {
   )
     return invalid();
   const p = event.payload as Record<string, unknown>;
+  if (event.eventType === TIMER_CHANGED) {
+    parseTimerEvent(event);
+    // WP24 records domain events; bounded timer delivery is connected in WP25.
+    return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, event.aggregateRevision!), deviceIds: [] };
+  }
   if (event.eventType === 'render.artifact.ready') {
     if (event.aggregateType !== 'RenderRequest' || !event.aggregateRevision || !/^[a-zA-Z0-9-]{1,100}$/.test(event.aggregateRevision) ||
       !/^[a-f0-9]{64}$/.test(event.aggregateId) || p.renderKey !== event.aggregateId ||

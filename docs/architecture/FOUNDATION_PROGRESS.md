@@ -21,13 +21,14 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
-- WP-00 bis WP-23 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
+- WP-00 bis WP-24 laut Index abgenommen. WP-11/WP-14 wurden mit bestehenden
   Handoffs abgeglichen; keine erneute Implementierung. Hardwaremessungen offen.
-- Letzter lokaler Commit: `eb5e5eb` (WP-22). Branch unverändert.
-- WP-23 abgenommen: vollständige Containerwiederholung mit Restart/Secret-Audit
-  Exit 0. Lokaler Paketcommit folgt unmittelbar; Details unten in Schritt 6.
+- Letzter lokaler Commit: `1d3ca19` (WP-23). Branch unverändert.
+- WP-24 abgenommen: Domain, Contracts, SQL-Checks, Integration und finaler
+  Produktionscontainer vollständig grün. Lokaler Paketcommit folgt unmittelbar.
 - Acht neue WP-28-Kerndateien liegen separat uncommitted; nicht in WP-23 aufnehmen.
-  WP-24 nur gelesen/vorbereitet, noch nicht implementiert. WP-25 bis WP-29 offen.
+  WP-28-Core-P2 (Originalrückgabe/Proxy) durch begrenzte Detachedkopie behoben.
+  WP-25 bis WP-29 offen.
 
 ## Nächste Schritte
 
@@ -215,4 +216,35 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    aktualisiert. WP28CoreReviewfandProxyOriginalrückgabeimContract; Sourceagent
    korrigiertausschließlichdie2neuenWP28Contractdateien,separatvomWP23Commit.
 
-Kein Foundation-Abschluss behauptet. WP-23 bis WP-29 sind noch offen.
+7. WP24nachWP23Commitbegonnen. VollständigesPaket+Architektur6.7/8+ADRs001/002/003/
+   006/007gelesen. Timer1000msbis7Tage,privateOwner/sharedlocal,Quittierungglobal
+   füreinencompletedTimeralsseparateackFelder. Serverzeitclamp>=evaluatedAt;
+   runningendsAt>letztepersistierteBewertung;keineTicks. Create/pause/resume/cancel/
+   acknowledgeviaWP23,MutationenmitexpectedVersion;überfälligeKommandoserfolgreiche
+   Completion,ackinklusive1Revision. Creator-FKSetNullerhältsharedTimer/externaleID;
+   privateOrphansunsichtbarundnichtkapazitätswirksam. Max32eigen/100globaloutstanding
+   (running,paused,unquittiertcompleted). RootSchema+Migration20260903000000_timers,
+   TimerService/Handlers/CoreModule;OutboxstrikterTIMER_CHANGEDParserohneDelivery
+   bisWP25. AgentDomain69Tests309grün,Contract10Tests448grün; Rootintegrationläuft.
+   Agentisolation_reviewbesitztnurneueTimerintegration/Prozessfixture;source_contract
+   nurexistierendeMigrationtests+neueTimerEventtests;RootbesitztSchema/Service/Module/
+   Index/Docs/ContainerSmoke. KeineDateikonflikte,WP24nochnichtabgenommen.
+   Roottypecheck/Lintgrün,820Backendtests/5246Assertionsgrün. Review+realeSQLite-
+   ReproszeigtenInteger-/Zeitwerte-Checklücken;SQLjetzttypeofinteger,Unixbounds,
+   vollständigeZustandsinvarianten. DDLimfinalenImageerneuert(Session88947,
+   `.tmp/goal-wp24-build-final.log`). Altpfadregression147Integrationenläuftin
+   Session95608nach`.tmp/goal-wp24-integrations.log`. AgentTimerintegrationund
+   Migration/Eventtestsnochaktiv. Timer-Containerfixtureimplementiert,aber
+   LaufnochNICHTgestartet;erstnachfinalemImageundTestfindingsausführen.
+   Final825Backend/5426,61Contracts/949,80Frontend,18Timer/Event-Integration/418
+   durchRootgrün;AgentgesamteMigration12/194grün. Typecheck+Lintfinalgrün.
+   Timerdomain13Integrationenenthält2realeProzessrennen.DDL-FixesimfinalenImage
+   enthalten;ContainerSession32373(`.tmp/goal-wp24-container.log`)hatWP24HTTP
+   erfolgreichgeprüft;abschließenderRestart/SecretAudit/Exit0nochabwarten.
+   AltpfadregressionSession95608nochaktiv. WP24Index/Handoff/Commiterstnachbeiden
+   erfolgreichenExitcodes;anschließendWP25. WP25Inventaragentnurread-only.
+   BeidefinalenLäufebeendetmitExit0:147Altintegrationen/2793undContainerinklTimer-
+   HTTP/Restart/SecretAudit. WP24jetztabgenommen;Index/Handoff/Phase7/Betriebaktualisiert.
+   NächsterSchrittlokalerWP24Commit(ohneWP28),danachWP25Scheduling/Push/Pull/Browser.
+
+Kein Foundation-Abschluss behauptet. WP-25 bis WP-29 sind noch offen.
