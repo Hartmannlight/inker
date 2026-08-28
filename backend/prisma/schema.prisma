@@ -519,6 +519,7 @@ model PlaybackCommand {
 // Status values and numeric invariants are additionally constrained by SQL.
 model OutboxEvent {
   eventId        String    @id @default(cuid()) @map("event_id")
+  correlationId  String?   @map("correlation_id")
   eventType      String    @map("event_type")
   aggregateType  String    @map("aggregate_type")
   aggregateId    String    @map("aggregate_id")

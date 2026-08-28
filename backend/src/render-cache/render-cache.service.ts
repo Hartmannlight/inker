@@ -6,6 +6,8 @@ import { canonicalJson, sha256, type PublishedArtifact } from '../publications/p
 import { ArtifactStore } from './artifact-store';
 import { RENDERER_VERSION, renderKey, targetFor, type RenderTarget } from './render-input';
 import { renderSnapshot, validateRenderedArtifact } from './snapshot-renderer';
+import { intentCorrelationId, outboxCorrelation } from '../events/outbox-correlation';
+import { observeRender, emitStructuredEvent } from '../observability/runtime-observability';
 
 export const RENDER_REQUESTED = 'render.requested';
 export const RENDER_READY = 'render.artifact.ready';
@@ -70,7 +72,7 @@ export class RenderCacheService {
       if (!request) {
         request = await tx.renderRequest.create({ data: { key, publicationRevisionId: device.publicationState.desiredRevision.publicationRevisionId,
           target: target as unknown as Prisma.InputJsonValue, rendererVersion: RENDERER_VERSION } });
-        await tx.outboxEvent.create({ data: { eventType: RENDER_REQUESTED, aggregateType: 'RenderRequest',
+        await tx.outboxEvent.create({ data: { correlationId: intentCorrelationId(), eventType: RENDER_REQUESTED, aggregateType: 'RenderRequest',
           aggregateId: key, aggregateRevision: '1', payloadVersion: 1, payload: { renderKey: key } } });
       }
       const binding = await tx.renderBinding.findUnique({ where: { deviceId_variant: { deviceId, variant } } });
@@ -81,7 +83,7 @@ export class RenderCacheService {
         } : {}) } });
       if (request.completedAt && binding?.readyKey !== key) {
         const updated = await tx.device.update({ where: { id: deviceId }, data: { renderRevision: { increment: 1 } } });
-        await tx.outboxEvent.create({ data: { eventType: RENDER_READY, aggregateType: 'RenderRequest',
+        await tx.outboxEvent.create({ data: { correlationId: intentCorrelationId(), eventType: RENDER_READY, aggregateType: 'RenderRequest',
           aggregateId: key, aggregateRevision: `${deviceId}-${updated.renderRevision}`, payloadVersion: 1,
           payload: { renderKey: key, deviceIds: [deviceId] } } });
       }
@@ -94,7 +96,7 @@ export class RenderCacheService {
     const devices = await this.prisma.device.findMany({ where: { isActive: true, publicationState: { desiredPublicationRevisionId: { not: null } } }, select: { id: true } });
     for (const device of devices) {
       try { await this.request(device.id); }
-      catch { this.counts.failures++; } // Unsupported profile does not starve unrelated devices.
+      catch { this.counts.failures++; observeRender('failed'); } // Unsupported profile does not starve unrelated devices.
     }
   }
 
@@ -134,6 +136,8 @@ export class RenderCacheService {
       await this.files.publish(artifact);
     } catch {
       this.counts.failures++;
+      observeRender('failed');
+      emitStructuredEvent('RENDER_FAILED', { ...outboxCorrelation(event), role: 'worker', queue: 'render', outcome: 'failure' });
       this.logger.warn({ code: stage, renderKey: request.key });
       throw new Error('RENDER_FAILED');
     }
@@ -154,11 +158,13 @@ export class RenderCacheService {
         await tx.device.update({ where: { id: binding.deviceId }, data: { renderRevision: { increment: 1 } } });
         deviceIds.push(binding.deviceId);
       }
-      if (deviceIds.length) await tx.outboxEvent.create({ data: { eventType: RENDER_READY, aggregateType: 'RenderRequest',
+      if (deviceIds.length) await tx.outboxEvent.create({ data: { correlationId: outboxCorrelation(event).correlationId, eventType: RENDER_READY, aggregateType: 'RenderRequest',
         aggregateId: request.key, aggregateRevision: event.eventId, payloadVersion: 1, payload: { renderKey: request.key, deviceIds } } });
       signal?.throwIfAborted();
     });
     this.counts.rendered++;
+    observeRender('rendered');
+    emitStructuredEvent('RENDER_SUCCEEDED', { ...outboxCorrelation(event), role: 'worker', queue: 'render', outcome: 'success' });
   }
 
   private current(db: Database, event: OutboxEvent) {
@@ -181,10 +187,12 @@ export class RenderCacheService {
         const artifact = await this.artifact(candidate, target);
         const fallback = candidate.key !== key;
         if (fallback) this.counts.fallbacks++; else this.counts.hits++;
+        observeRender(fallback ? 'fallback' : 'hit');
         return { artifact, revision: candidate.revision, fallback, rendererVersion: candidate.rendererVersion };
       } catch { /* Never replace last-known-good metadata due to an unreadable file. */ }
     }
     this.counts.misses++;
+    observeRender('miss');
     return null;
   }
 

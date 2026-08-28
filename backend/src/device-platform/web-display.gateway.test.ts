@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from 'b
 import { EventEmitter } from 'node:events';
 import { Logger, UnauthorizedException } from '@nestjs/common';
 import { WebDisplayGateway } from './web-display.gateway';
+import { runWithCorrelation } from '../observability/correlation-context';
 
 const settle = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
 const frame = (type: string, fields = {}) => Buffer.from(JSON.stringify({ protocolVersion: '1.0', type, ...fields }));
@@ -37,6 +38,29 @@ function setup() {
 afterEach(async () => { for (const g of gateways.splice(0)) await g.onApplicationShutdown(); setSystemTime(); });
 
 describe('WebSocket gateway security and liveness', () => {
+  test('delivery logs require a successful send callback and retain explicit job correlation', async () => {
+    const h = setup(); await h.authenticate();
+    const records: any[] = [];
+    const log = spyOn(Logger.prototype, 'log').mockImplementation(value => { records.push(value); });
+    try {
+      let release!: (error?: Error) => void;
+      h.client.send = (_value, callback) => { release = callback!; };
+      const correlation = { correlationId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', eventId: 'event-1', deliveryId: 'delivery-1' };
+      const pending = runWithCorrelation(correlation, () => h.gateway.pushTimersChanged(7,
+        { deliveryId: 'delivery-1', signal: new AbortController().signal }));
+      await settle();
+      expect(records.filter(row => row.code === 'DEVICE_DELIVERED')).toHaveLength(0);
+      release(); await pending;
+      expect(records.filter(row => row.code === 'DEVICE_DELIVERED')).toEqual([expect.objectContaining({ ...correlation, deviceId: 7, role: 'api' })]);
+      records.length = 0;
+      const failed = h.gateway.pushTimersChanged(7, { deliveryId: 'delivery-2', signal: new AbortController().signal });
+      await settle(); release(new Error('synthetic-send-failure'));
+      await expect(failed).rejects.toThrow('OUTBOX_ADAPTER_FAILED');
+      await h.gateway.pushPresentation(7);
+      expect(records.filter(row => row.code === 'DEVICE_DELIVERED')).toHaveLength(0);
+    } finally { log.mockRestore(); }
+  });
+
   test('timer notifications recheck credentials and send no presentation, IDs or timer data', async () => {
     const h = setup();
     await h.authenticate();

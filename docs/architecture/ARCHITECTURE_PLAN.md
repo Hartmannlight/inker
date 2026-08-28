@@ -581,10 +581,10 @@ sichtbar.
 - [ ] Einen kombinierten Test mit Pull-, WebSocket- und Touch-Geräten erstellen.
 - [ ] Parallele langsame Source-Jobs während Displayabrufen simulieren.
 - [ ] Grenzwerte für API-Latenz, Queue-Alter, Renderdauer und Speicher festlegen.
-- [ ] Metriken für Sources, Jobs, Render-Cache, WebSockets, Pairing und Gerätealter
+- [x] Metriken für Sources, Jobs, Render-Cache, WebSockets, Pairing und Gerätealter
   erfassen.
-- [ ] Strukturierte Logs mit Request-, Job-, Device- und Correlation-ID ausgeben.
-- [ ] Health-, Readiness- und Degraded-Status trennen.
+- [x] Strukturierte Logs mit Request-, Job-, Device- und Correlation-ID ausgeben.
+- [x] Health-, Readiness- und Degraded-Status trennen.
 - [ ] Backup, Restore, Migration und Neustart mit aktiven Timern testen.
 - [ ] Sicherheitsprüfung für öffentliche Endpunkte und Secret-Redaction
   durchführen.
@@ -593,6 +593,10 @@ sichtbar.
 **Gate:** Alle Zielgeräte und 20 simulierte Displays bleiben während langsamer
 Sources und eines kontrollierten Worker-Neustarts nutzbar; keine Secrets erscheinen
 in Logs oder Geräteantworten.
+
+WP-28 belegt die drei Observability-Aufgaben (Paket-Handoff und
+`OBSERVABILITY_OPERATIONS.md`). Die kombinierte Last-, Fault- und Restore-Freigabe
+bleibt WP-29; Hardwareprüfungen sind weiterhin ausdrücklich offen.
 
 ## 11. Teststrategie
 

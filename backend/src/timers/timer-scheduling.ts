@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Prisma, Timer } from '@prisma/client';
 import type { EventInput } from '../events/outbox.types';
+import { intentCorrelationId } from '../events/outbox-correlation';
 
 export const TIMER_DUE = 'timer.completion.due';
 export function timerCompletionId(timerId: string, version: number, dueAt: number): string {
@@ -19,7 +20,7 @@ export function parseTimerDue(event: EventInput) {
 }
 
 /** Called in the domain transaction. A deadline belongs to exactly one version. */
-export async function scheduleTimer(tx: Prisma.TransactionClient, row: Timer, recoverDeadLetters = false) {
+export async function scheduleTimer(tx: Prisma.TransactionClient, row: Timer, recoverDeadLetters = false, correlationId?: string) {
   const eventId = row.status === 'running' && row.endsAt
     ? timerCompletionId(row.timerId, row.version, row.endsAt.getTime()) : null;
   await tx.outboxEvent.updateMany({ where: { eventType: TIMER_DUE, aggregateId: row.timerId,
@@ -30,7 +31,7 @@ export async function scheduleTimer(tx: Prisma.TransactionClient, row: Timer, re
     aggregateRevision: String(row.version), payloadVersion: 1,
     payload: { timerId: row.timerId, version: row.version, dueAt: row.endsAt.getTime() },
     occurredAt: row.evaluatedAt, availableAt: row.endsAt };
-  await tx.outboxEvent.upsert({ where: { eventId }, create: { eventId, ...data }, update: {} });
+  await tx.outboxEvent.upsert({ where: { eventId }, create: { eventId, ...data, correlationId: correlationId ?? intentCorrelationId() }, update: {} });
   // Only a worker startup explicitly re-arms exhausted, still-current deadlines.
   // Ordinary reconciliation never creates an unbounded poison-job retry loop.
   if (recoverDeadLetters) await tx.outboxEvent.updateMany({ where: { eventId, status: 'dead-letter' },

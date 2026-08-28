@@ -86,6 +86,13 @@ export function Sidebar() {
       </svg>,
     },
     {
+      to: '/operations',
+      label: 'Operations',
+      icon: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12h4l3-8 4 16 3-8h4M3 21h18" />
+      </svg>,
+    },
+    {
       to: '/plugins',
       label: 'Plugins',
       icon: (

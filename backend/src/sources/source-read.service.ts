@@ -19,10 +19,14 @@ export function publicDefinition(source: SourceDefinition) {
 }
 
 /** Only persisted, immutable data enters read paths. Freshness is a projection. */
+export function sourceFreshness(row: Pick<SourceSnapshot, 'freshnessState' | 'validDataCreatedAt' | 'staleAfterSeconds'>, now = new Date()) {
+  return row.freshnessState === 'fresh' && row.validDataCreatedAt
+    && now.getTime() >= row.validDataCreatedAt.getTime() + row.staleAfterSeconds * 1000 ? 'stale' : row.freshnessState;
+}
+
 export function publicSnapshot(row: SourceSnapshot, now = new Date()) {
   if (sha256(canonicalJson(row.data)) !== row.contentHash) throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
-  const state = row.freshnessState === 'fresh' && row.validDataCreatedAt
-    && now.getTime() >= row.validDataCreatedAt.getTime() + row.staleAfterSeconds * 1000 ? 'stale' : row.freshnessState;
+  const state = sourceFreshness(row, now);
   const result = {
     protocolVersion: row.protocolVersion, snapshotId: row.snapshotId,
     sourceDefinitionId: row.sourceDefinitionId, schemaVersion: row.schemaVersion,

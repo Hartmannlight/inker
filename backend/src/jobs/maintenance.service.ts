@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PublicationCleanupService } from '../publications/publication-cleanup.service';
 import { LogCleanupService } from './services/log-cleanup.service';
 import { JOB_VERSION, jobId } from './queue-policy';
+import { intentCorrelationId } from '../events/outbox-correlation';
 
 export const MAINTENANCE_DUE = 'maintenance.cleanup.due';
 const HOUR_MS = 3_600_000;
@@ -65,6 +66,7 @@ export class MaintenanceService {
     const scheduledAt = hour * HOUR_MS;
     try {
       return await this.prisma.outboxEvent.create({ data: {
+        correlationId: intentCorrelationId(),
         eventId, eventType: MAINTENANCE_DUE, aggregateType: 'Maintenance',
         aggregateId: 'cleanup', aggregateRevision: String(hour), payloadVersion: JOB_VERSION,
         payload: { scheduledAt }, availableAt: new Date(scheduledAt), occurredAt: new Date(scheduledAt),

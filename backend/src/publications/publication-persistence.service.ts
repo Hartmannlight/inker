@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { intentCorrelationId } from '../events/outbox-correlation';
 import {
   AppendPublicationRevisionInput,
   CreatePublicationInput,
@@ -255,6 +256,7 @@ export class PublicationPersistenceService {
     return transaction.outboxEvent.create({
       data: {
         ...input,
+        correlationId: intentCorrelationId(),
         payloadVersion: OUTBOX_PAYLOAD_VERSION,
         availableAt: input.occurredAt,
       },

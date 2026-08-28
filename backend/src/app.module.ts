@@ -33,6 +33,7 @@ import { DeviceEnrollmentModule } from './device-enrollment/device-enrollment.mo
 import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { FederationModule } from './federation/federation.module';
+import { OperationsModule } from './observability/operations.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { FederationModule } from './federation/federation.module';
     PrismaModule,
     CommonModule,
     HealthModule,
+    OperationsModule,
 
     // Feature modules
     AuthModule,

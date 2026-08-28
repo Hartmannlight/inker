@@ -21,26 +21,70 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
-- WP-00 bis WP-27 abgenommen. WP-11/WP-14-Index und Handoffs abgeglichen;
-  keine erneute Implementierung. Hardwareprüfungen bleiben offen.
-- Basis: `711164f` (WP-26), auf ausdrücklichen Einzelauftrag an Hartmannlight/inker
-  gepusht. Kein weiterer Push, Merge oder Deployment autorisiert.
-- Dieser Paketstand enthält nur WP-27. WP-28 bleibt separate Arbeit und ist
-  nicht Teil dieser Abnahme; danach folgt WP-29 mit allen Architektur-12-Gates.
-- Reale neue SQLite-Prüfungen nach ausdrücklicher Nutzerfreigabe: 18/228,
-  vier konkurrierende Workerprozesse, SQL-Rollback, Versions-/Claimschutz,
-  persistierter Leaseablauf und Commit-vor-Ack-Replay. Keine DB-Mocks.
-- Isoliert: Backend 1028/4916, Contracts 70/1209, Frontend 107,
-  Migrationen 14/250; verwandte SQLite-Integrationen 81/2651; Fixturetests 3/3.
-  Typecheck/ESLint, Produktionsbuild, echter Drei-Server-Smoke und Browser-QA grün.
-- Isoliertes Image `3f2e3dd6d083d378143ec222328315e3fdd56d6dbed1d63187c400721ffc8f4f`.
-  Seit dem Image nur Tests und Dokumentation ergänzt; Produktionsquellen unverändert.
-- Nachweise und sechs geschlossene SQLite-Lücken: Abschluss WP-27 in WORK_PACKAGES.md.
-  Lokale Prüfprotokolle `.tmp/goal-wp27-*.log`; keine Testzugänge committen.
-- Nächster Schritt: getrennte WP-28-Abnahme und anschließend WP-29.
-  Keine zusätzlichen Widgets, produktiven Connectoren oder Firmware.
+- WP-00 bis WP-28 abgenommen. WP-11/WP-14 wurden mit ihren Handoffs abgeglichen;
+  keine erneute Implementierung. Hardwareprüfungen bleiben ausdrücklich offen.
+- Branch `codex/device-platform-spike`. WP-27 ist separat in `456a343` committed,
+  aus dem isoliert geprüften Snapshot mit exakt 46 Dateien. Index-/Blobvergleich
+  und Secret-Dateiprüfung grün; WP-28 blieb unberührt im Arbeitsbaum.
+- Nur der frühere WP-26-Commit `711164f` wurde auf ausdrücklichen Einzelauftrag
+  an Hartmannlight/inker gepusht. Kein weiterer Push, Merge oder Deployment.
+- Nutzerfreigabe für die Remote-SQLite-Testdatei umgesetzt. Alle sechs früheren
+  Nachweislücken geschlossen: Root WP-27-Linux 18/228 und WP-28-Linux 18/228,
+  Agent zusätzlich Linux/Windows. Typecheck, ESLint und Fixturetests 3/3 grün.
+  Isolierte abhängige Integrationen 81/2651; keine Produktionsfehler gefunden.
+- WP-28: Linux-Backend 1105/6806, Operations/Correlation 19/240, Gateway/Telemetrie
+  28/139, Frontend 121, Contracts 85/1559, Migrationen 14/250; jeweils Exit 0.
+  Produktionstypecheck, expliziter Testtypecheck, ESLint und Produktionsbuild grün.
+  Image `aa35f698f4d1c4f4f8e4431c7b1ab966ec92d7c19459c4127a4fd04c65ed9e6c`.
+- Reale Docker-/Browserausfälle, Authgrenzen, Slow-Source, Metriken/Logs,
+  persistierte Correlation bis WS-Send und Secret-Audit belegt. Root-Smoke:
+  `.tmp/goal-wp28-container-root-confirmation.log` (Exit 0). Eigene Testressourcen
+  vollständig entfernt. Unabhängiger Abschlussreview ohne neue belegte P0/P1.
+- Bekannter P2: einmalige Operations-HTTP-Antwort bei Worker-Recovery,
+  anschließend zweimal nicht reproduziert. Ursache unbekannt; nicht als behoben
+  behaupten. WP-29 muss wiederholte Recovery unter kombinierter Last prüfen.
+- Windows-Bun-TLS ist ein bekannter Host-Toolchain-P2; Linux-Produktion geprüft.
+  WP-29 dokumentiert Folgeschritte, Hardwaregrenzen und Abschnitt-9-Abgleich.
+- WP-28-Abschluss, Betriebsdokumentation und Architekturstatus sind aktualisiert.
+  Lokaler WP-28-Commit folgt. Testbelege unter `.tmp/goal-wp28-*.log`, die Datei
+  `goal-wp28-container-final.log` ist ein alter FEHLERlauf, kein Abnahmebeleg.
 
-## Bisheriger Paketverlauf
+## Nächste Schritte
+
+1. Verifizierten WP-28-Stand ohne Secrets/ignorierte Artefakte lokal committen.
+2. WP-29: vollständige Anforderungen, Architekturabschnitt 12 und Abschnitt 9
+   abgleichen; kombinierte Last-/Fault-/Security-/Migration-/Restore-Prüfung.
+3. Mindestens 20 dauerhafte WS-Displays gemeinsam mit Batterie-/Fast-Pull,
+   Touch, langsamen/fehlerhaften Sources und Renderlast tatsächlich betreiben.
+4. Nachweise, Grenzwerte, P0/P1/P2 und Betriebs-/Release-Checkliste versionieren.
+   Keine Foundation-Freigabe vor erfüllten Gates; physische Hardware offen lassen.
+
+### Historisches Nachweis-Audit WP-27 (jetzt durch 18/228 geschlossen)
+
+Unabhängiges Read-only-Audit am isolierten Stand und Root-Abgleich: Die grünen
+Tests belegen normale Persistenz, Migration, 304, Revisionwechsel, Offlinecache,
+Widerruf und Neustart mit zuvor wartendem Job. Folgende Fälle bleiben offen;
+dies sind Nachweislücken, keine behaupteten Implementierungsfehler:
+
+| Invariante | Grenze der bisherigen Evidenz |
+|---|---|
+| Atomare Erstellung/Planung ohne verwaiste Credentials, Publications, Jobs oder teilweise verschobenes `nextSyncAt` | `remote-job.test.ts` verwendet Mocktransaktionen; Containerfixture prüft frühe Inputablehnung, keinen späten Schreibfehler. |
+| Atomarer Import mit Revision/Artefakten, Cachepointer, Gerätezuordnung, Folgeevents und Completion | Worker-Testtransaktion ist nur `operation(tx)`, Importer gemockt; der als Rollback benannte Test führt keinen SQLite-Rollback aus. |
+| Keine doppelten aktiven Jobs; global zwei Claims, je Remote/Subscription einer zwischen Prozessen | Jobtests simulieren Deduplizierung; Workertest prüft nur die an einen Claim-Mock übergebenen Budgets. |
+| Persistierte Versions-/Truständerung sperrt altes Abrufresultat; neuere Zuweisung/aktive Playlist bleibt geschützt | Versions-/Trusttests ändern Mockobjekte; Gerätefilter wird nur als Queryargument geprüft. |
+| Leaseverlust/Abbruch nach ersten Domainwrites verhindert den gesamten Commit und alte Status-/Ack-Writes | Bestehender Fence-Test scheitert schon am ersten Write; Abbruchtests enden vor dem Import. |
+| Crash nach Commit vor Ack erzeugt bei Wiederholung keine zweite Revision, Folgeevents oder fachliche Completion | Docker prüft Wiederaufnahme eines zuvor wartenden Jobs, nicht die Commit/Ack-Lücke. |
+
+Quellen im Snapshot: `backend/src/federation/remote-job.test.ts`,
+`remote-worker.service.test.ts` (Mocktransaktion Zeile 68, Claim/Importer 71/73,
+Fälle 122/267/276/328/340/348), `remote-import.service.test.ts` (Gerätefilter),
+`backend/test/remote-container-fixture.cjs` (Restart ab Zeile 262).
+Root prüfte zusätzlich die existierenden WP-28-SQLite-Tests: Operations liest
+Remote-Metadaten; Correlation belegt Kontextpersistenz/Deduplizierung. Beide
+ersetzen keine dieser Remote-Fault-/Konkurrenzprüfungen. WP-29 nennt WP-27 und
+WP-28 ausdrücklich als Gates. Keine gesperrte Datei oder Ersatzsuite angelegt.
+
+## Verlauf bisheriger Pakete und Prüfungen
 
 1. WP-11-Korrektur und WP-11/WP-14-Index/Handoffs in `6b6139f` lokal committed.
    WP-14 nicht erneut implementiert.
@@ -312,4 +356,327 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
    Negativtestverwendet(keine400SchemaabweisungstattAuthnachweis).
    WP26Index/Handoff/Phase8/Betriebaktualisiert, Paketcommitfolgt; danachWP27.
 
-Kein Foundation-Abschluss behauptet. WP-27 bis WP-29 sind noch offen.
+10. WP27 begonnen. VollständigesPaket/Arch6.8/7/8/ADR001/003/004/007/009gelesen.
+    NeuePrismamodelleRemoteServer/RemoteCredential/RemoteSubscription/RemoteSyncJob,
+    Clientgeneriert; Migration20260905000000_remote_subscriptionsangelegt,
+    nochNICHTvalidiert. TransportagentarbeitetanHTTPSoriginAllowlist,
+    separaterexpliziterPrivateOriginAusnahme(keinMetadata/Linklocal),
+    abbrechbaremResolver+A/AAAAvollprüfen/IPpin+TLSverify,0Redirectsaußer304.
+    Importdesign: gesamtehashgeprüfteArtefaktbytes(max8MiB)inimmutablelokaler
+    PublicationSchemaVersion2alsatomischerSQLiteCache; keineActions. Root hat
+    publicationArtifactsParser+RemoteImportServicevalidateArtifacts/persist/
+    verifyCached implementiert. LokalePublicationbeiSubcreateleer,Importer
+    appendRevision+Outboxatomar,automatischeAktualisierungnurGerätemitaktuell
+    derselbenlokalenPublicationundohneaktivePlaylist;anderemanualAssignments
+    werdennichtüberschrieben. APIkeineRemoteRequests; WorkerOwnQueue remote-sync
+    20s/global2/perRemote1; Queue/Dispatcher/Module integriert.
+    Root API/Importer inklusive Pixelmetadatenprüfung und Rotation implementiert.
+    Produktionstypecheck und 50 Renderer/Feed/Queue-Tests grün. Contracts82/1433,
+    Frontend107 grün (Root). Migrationlauf aktiv, noch keine Gesamt-Abnahme.
+    Transportagent99Tests/195 grün; Headergrenze über eigenen begrenzten HTTP/1-
+    Parser, da Bun1.3.14 maxHeaderSize ignoriert. Socketabbau außerhalb nativer
+    TLS-dataCallbacks verhindert im Grenzwerttest beobachteten Windowsabsturz.
+    Root-Review/Linuxtest noch offen. Runtimeagent baut ausschließlich eigene
+    Home+2Remote-Dockerfixture mit 2Browsergeräten+1Pullgerät; noch nicht ausgeführt.
+    Neue SQLite-Testdatei remote-subscriptions.integration.ts wurde vom
+    Freigabesystem wegen Nutzungslimit explizit abgelehnt, nicht angelegt und
+    nicht über andere Werkzeuge umgangen. Erneute ausdrückliche Freigabe beim
+    Nutzer angefragt; unabhängige Tests/Reviews laufen weiter. WP27 offen.
+    Fortsetzung: Root14Migrationtests/250inklWP26→WP27Datenerhaltgrün;
+    39Worker/Jobtests197Assertionsinkl15sAbbruchgrün, 6ImporterTests36grün.
+    StartkonfigurationvalidiertbeideOriginListenfailclosed;Composeweitergereicht.
+    ReviewP2behoben:Tokenrotation/ReaktivierungerhältbekanntenFehlerbisSyncerfolg.
+    RootGesamtsuitehatBunWindowsnativeTLS-Absturz;Transport-Einzeltestalleingrün
+    genügtNICHT. AgentbearbeitetTLS-Testpeer/Cleanup,keineTestsübersprungen.
+    ErstesProduktionsimageinker:wp27-testgebaut(Digestbd9a137b);nachträgliches
+    WorkerETagLimit200mussimfinalenImageerneutgebautwerden. SeparatesLinux-
+    Unitimagebackend-builderläuft(Session80902). Docker/Browsernochnichtgestartet.
+    Browserneuverbunden,Bindungenagent/browser;keineTesttabsangelegt.
+    WP28parallel:SourceagentbesitztnurObservabilityContract+MetrikCore4Dateien,
+    danachzentralenRedactor+Tests;separatvomWP27Commitbewahren. RootIntegration
+    undAbnahmeWP28erstnachWP27. OperationsdokumentationWP27klaralsunabgenommen.
+    Runtime-Nachweis: .tmp/goal-wp27-container-bmp.log Exit0 einschließlich
+    Admin/CSRF/Trust/Origin,2Remotes/3Geräte,echtemTLS/304,Protokollmismatch,
+    neuerRevision,beideOffline,HomeRestart11662ms,Revoke,SecretAuditundCleanup.
+    Fixturefixes: eigeneBridgeohne--internal(sonstkeineHostportsaufDockerDesktop),
+    weiterhin127.0.0.1-Bindung;harte10sHTTPDeadline;explizitesBMPOverrideimTestgerät
+    stattbestehenderPNG-Kompatibilitätsvorgabe. KeineAssertionsabgeschwächt.
+    LinuxGesamtsuite1035pass/7fail:alle99TLSinklCleanupgrün;7bestehendeBrowser-
+    TestsfehltenBuildimage-Systemlibs. .tmp/Dockerfile.wp27-suitekombiniert
+    vollständigeProduktionsruntimeundTestdeps;BuildSession43395,danachgesamten
+    Laufwiederholen. WindowsBun1.3.14nativhängtauchmitNode-Testpeer;Ursacheoffen,
+    keineweiterenidentischenVersuche. ProduktionsclientbleibtBun/Linux.
+    Browser-SetupSession9905aktiv(.tmp/goal-wp27-browser-setup.log),nochkeine
+    Browser-Abnahme. RootmussdanachUI+2DisplaysprüfenundFixturewiederentfernen.
+    WP28Core+Redactorjetzteingefroren;RootReviewderRedaktionerfolgt,Integration
+    weiteroffen. SecretRedaction2Dateienzusätzlichzuden8Coredateienseparathalten.
+
+## Letzter verifizierter Zwischenstand WP-27
+
+- Vollständige Linux-Backend-Suite mit Produktions-Browserbibliotheken und
+  aktuellem, schreibgeschützt eingebundenem `backend/src`: **1057 Tests,
+  6328 Assertions, 0 Fehler**, Exit 0 nach 69,85 s; lokales Log
+  `.tmp/goal-wp27-linux-complete.log`. Eigenes `--rm`-Testimage
+  `inker:wp27-suite`, keine Netzverbindung. Der frühere Lauf im reinen
+  Builder-Image mit sieben fehlenden Browserbibliotheksfehlern ist hierdurch
+  ersetzt, nicht als Erfolg umgedeutet. Windows-Bun-TLS-Absturz/Hänger bleibt
+  als Hostproblem ungeklärter Ursache dokumentiert.
+- Migrationen einschließlich WP-26→WP-27-Datenerhalt: 14 Tests/250 Assertions.
+  Worker/Job: 39/197; Importer: 6/36; Renderer: 12/71.
+  Produktions- und expliziter Test-Typecheck sowie gezieltes ESLint: Exit 0.
+  Contracts: 82/1433 und Frontend: 107 bestanden vor den zusätzlichen
+  separat gehaltenen WP-28-Contracttests.
+- Echter Drei-Server-Smoke: Exit 0; `.tmp/goal-wp27-container-bmp.log`.
+  Zwei unabhängige TLS-Remotes, zwei Browsergeräte und ein schneller Pullclient;
+  Auth/CSRF/Trust/Origin, Conditional GET (A: 2, B: 3 echte 304), Revisionwechsel,
+  Protokollmismatch, beide Remotes offline, lokaler Cache, Home-Neustart
+  (Recovery 11662 ms), Widerruf, Secret-Audit und vollständiges Cleanup geprüft.
+- Tatsächliche Browserprüfung der Adminseite und zweier 1920×1080-Displays:
+  Pause/Reaktivierung, Zuweisung, verständliche Stale-/Widerrufsfehler und
+  Bildreload aus lokalem Cache bei beiden abgeschalteten Remotes erfolgreich.
+  Bei pausiertem eigenen Worker blieb nach Tokenrotation der bekannte Fehler
+  erhalten und das Passwortfeld wurde geleert; erst der erfolgreiche Sync
+  stellte Fresh wieder her. Admin-Konsole ohne Fehler; DOM und Screenshots
+  geprüft. Alle drei Tabs geschlossen. Browserfixture-Secret-Audit und Cleanup
+  mit Exit 0 abgeschlossen; labelgefilterte Container-/Volume-/Netzwerklisten
+  leer und ignorierte Fixture-State-Datei nicht mehr vorhanden.
+- Noch offen: gesperrte neue SQLite-Integrationssuite (Rollback/Atomarität,
+  konkurrierende Clients, veraltete Claims/Versionen), abschließende Regression
+  und Imageprüfung des exakten WP-27-Paketstands ohne WP-28-Änderungen.
+  Der aktuelle erneute Build mit Worker-ETag-Limit 200 ist ein Kandidat des
+  gesamten Arbeitsbaums, keine Paketabnahme. Build mit Exit 0 abgeschlossen
+  (`.tmp/goal-wp27-build-final.log`, Image-Manifest `07da779d76c0100a0c213859b69c71a872cee6f4274b52bc3686da8faf03820e`).
+  Erneuter vollständiger Smoke mit Exit 0 abgeschlossen: Recovery 11548 ms,
+  echte 304 A: 2/B: 3, einschließlich Secret-Audit und Cleanup;
+  Log `.tmp/goal-wp27-container-final.log`. Fixture-Selbsttests nach
+  Sandbox-EPERM mit Freigabe: 3 bestanden,
+  0 Fehler. Kein WP-27-Commit erstellt.
+- Read-only-Subagent-Review des WP-28-Core abgeschlossen, keine Edits. Konkrete
+  P2-Folgeschritte und Correlation-/Health-/Metrik-Integrationsgrenzen sind im
+  neuen WP-28-Zwischenstand in `WORK_PACKAGES.md` dokumentiert. Insbesondere
+  Redaction vor Logger-Konvertierungen, X-Device-Key/Einmalcodes, JSON-stdout,
+  Logrotation und unbekannte statt vorgetäuschter Nullwerte noch offen.
+
+## Aktive unabhängige WP-28-Integration
+
+WP-27-Testfreigabe bleibt offen. WP-28 darf laut Arbeitsliste nach WP-20 parallel
+bearbeitet werden; das wurde genutzt. Beide Pakete bleiben uncommitted.
+
+- Root: OperationsService/-Controller/-Module, gemeinsame Queue-Zuordnung,
+  Request-UUID/Messung, private Redis-Worker-Metriksamples (8 s, maximal 16 Worker),
+  API-/Worker-Liveness, Render-/WebSocket-Diagnose und begrenzte Compose-Logs.
+  Neue Correlation-Migration 20260906000000_observability; Prisma-Client generiert.
+  Source-/Remote-Freshness wird zwischen bestehenden Ansichten und Operations
+  geteilt. Keine Remote-Requests oder fachlichen Writes im Diagnosepfad.
+- isolation_review: persistierte Correlation an allen Outbox-Producern,
+  Worker-/Delivery-Kontext und Regressionen. Correlation ist eine eigene UUID,
+  nicht die Event-ID; alte Zeilen bleiben null und nutzen einen stabilen
+  ausschließlich gelesenen Fallback. Source-Aggregatmetadaten dürfen das
+  bestehende Jobfehlerhandling nicht umgehen.
+- source_contract: sichere Logger-Eingangsgrenze vor Winston, JSON-Ausgabe,
+  getrennte API-/Worker-Dateien mit 5 MiB × 3 je Stream, sichere HTTP-Fehler-
+  und Startupausgabe. Getter/Proxies/Zyklen, Codes/Headers/Source-Secrets geprüft.
+  Alte eigene Rotationstestdateien wurden nach geprüftem Pfad entfernt.
+- wp19_renderer: geschützte rein lesende Operations-UI (121 Frontendtests grün),
+  danach echte SQLite-/HTTP-Integration und unabhängiges Backend-Review.
+- Root verifiziert: Operations-/Correlation-Integration 17 Tests/215 Assertions,
+  Logger/Redaction/Filter 40/352, Core/Request/Worker-Metrik/Routing/Health 27/1380,
+  WebSocket-Gateway 21/104, Migrationen 14/250; jeweils Exit 0. Produktionstypecheck,
+  expliziter WP-28-Testtypecheck und gezieltes Lint grün. Kein übersprungener Test.
+- DEVICE_DELIVERED bedeutet bestätigter Server-Sendecallback, nicht Display-Ack.
+  Getrennte Geräte/Adapter-Noops erzeugen keine falsche Erfolgsdiagnose. Der
+  spätere Ack bleibt separat über acknowledgedAt erkennbar.
+- Erstes WP-28-Arbeitsbaumimage gebaut (Manifest bfd12ff9535bdb5dd62895df94d0cc384f60af548dc82d3311754ed1e1be842e).
+  Nachfolgende Gateway-/Samplingfixes erfordern erneut Build. Linux-Testlayer
+  gerade in Aufbau; Logs `.tmp/goal-wp28-*.log`. Noch keine WP-28-Docker-/Browser-
+  Abnahme. source_contract erstellt ausschließlich eigene Operations-Laufzeit-
+  fixture (Port 18731, Label inker.wp28.fixture); Start erst nach Root-Freigabe.
+- Aktuell offenes Review: Worker-Sample-TTL nach I/O/Cache und mögliche SQLite-
+  Writerlocks durch diagnostische Lesetransaktion. Root behält die Integration
+  und finale Verifikation. Kein Paketcheckbox/Abschlusscommit vor Behebung und
+  tatsächlichen Laufzeitnachweisen.
+
+## Wiederaufnahmehinweise nach Push und WP-28-Review
+
+- Erneuter ausdrücklicher Push-Auftrag ausgeführt: `git push origin
+  codex/device-platform-spike` meldete bereits aktuell; `ls-remote` bestätigte
+  `711164ff056eb6fdccdaf23e52db5a944dd47c87` auf Hartmannlight/inker. Keine
+  uncommittierten Änderungen übertragen; keine fortdauernde Push-Freigabe.
+- Finaler Root-Linuxlauf vor nachfolgendem Telemetrie-Fix: **1102/6784 grün**,
+  94 Dateien, 70,41 s. Neues `inker:wp28-suite` mit Produktions-Browserlibs,
+  schreibgeschütztem aktuellem Source und ohne Netzwerk. Container entfernt.
+- Root Operations-/Correlation-Integration jetzt **19/240 grün**, 35,57 s,
+  `.tmp/goal-wp28-integrations-final.log`; enthält Ablauf während SQLite-I/O,
+  Cache-TTL und echte Query-Audits ohne BEGIN IMMEDIATE/EXCLUSIVE.
+  Frontend **121 grün**, Contracts **85/1559 grün**. Expliziter Test-TS grün.
+- Neue `bounded-read.ts` samt 3 Regressionstests: 2-s-Timeout, Slot bleibt
+  bis tatsächlichem Settlement belegt, allSettled-Barriere für Batchfehler.
+  Unabhängiger Service-Repro: 20 parallele Requests nach 2022 ms beantwortet,
+  auch nach Folgescrapes nur 7 gestartete Batchqueries und eine Probe.
+- Worker-Metriksamples sind interne `{owner,sample}`-Readings. TTL nach Redis-
+  I/O und vor Ausgaben; Cache höchstens bis zur ältesten Sample-TTL. Interne
+  monotone Deltaaggregation mit 16 Baselines, festen Familien und ohne Owner-
+  Labels. Neue/reappearing Owner bilden zuerst nur eine Baseline. UI zeigt
+  Live-Lifetime-Summen, Prometheus beobachtete Inkremente seit API-Prozessstart.
+- Neue Betriebsdokumentation `OBSERVABILITY_OPERATIONS.md`, Abnahme offen.
+- Root-Produktionsimage `inker:wp28-test` Manifest
+  `6fa2c7ba871d808292457afb2a763136b2c21917543c88cd7b0bf5c425958a06` gebaut.
+  Erster Smoke Exit 1: Fixture erwartete falsche MIME-Parameterreihenfolge.
+  source_contract korrigierte auf MIMEType und secretfreie Assertion-Orte;
+  reale Auth- und Metrics-Reads danach grün. Kein vollständiger Smoke-Erfolg.
+- Root-Browserfixture per `setup` gestartet, Port 18731, State nur ignorierte
+  `.tmp/wp28-operations-fixture-state.json`; `cleanup` steht noch aus. Operations-
+  DOM/Layout, echte Anmeldung und gekoppeltes Referenzdisplay 1920×1080 geprüft,
+  lokale Bilddaten geladen, Admin-Konsole leer. Aktuelle Browserbindings:
+  `browser`, `opsTab`, `opsDisplay`, `wp28Viewport`; zwei eigene Tabs. Vor Ende
+  beide schließen und Viewport resetten. Browser-Skill 26.825.32147 gelesen.
+- Browserfund: `Device.lastConnectedAt` war im gesamten Backend ungeschrieben.
+  isolation_review ändert ausschließlich websocket-telemetry.service.ts/test:
+  `observe(..., connected=false)` puffert genaue Connectionzeit und schreibt sie
+  ausschließlich beim bereits gedrosselten Telemetrieflush, keine Zusatzwrites.
+  Root-Gatewayaufruf für authentifizierte Connection bereits auf `true` ergänzt.
+  Reconnect darf den nächsten erlaubten Flush nicht verlieren; die Schreib-
+  grenze und Shutdownregel bleiben unverändert. Weitere Tests/Build erforderlich.
+- wp19_renderer und source_contract frozen; ihre letzten Edits vollständig
+  integriert. Root prüft aktuell UI-Degraded durch ausschließlich eigenen
+  Worker-Stopp; danach Recovery, Cleanup, neuer Build und kompletter Smoke.
+
+## Neuester Stand nach Telemetrie-Fix
+
+- Connection-Zeitstempel im vorhandenen Telemetrieflush implementiert und
+  eingefroren. Root Gateway/Telemetrie **28 Tests/139 Assertions grün**,
+  Produktionstypecheck und gezieltes ESLint grün.
+- Abschließende Root-Linux-Gesamtsuite am aktuellen Source:
+  **1105 Tests/6806 Assertions, 94 Dateien, 68,63 s, Exit 0**;
+  `.tmp/goal-wp28-linux-final.log`. Testcontainer automatisch entfernt.
+- Neuer Produktionskandidat `inker:wp28-test` Manifest
+  `aa35f698f4d1c4f4f8e4431c7b1ab966ec92d7c19459c4127a4fd04c65ed9e6c`,
+  Build Exit 0, `.tmp/goal-wp28-build-telemetry.log`.
+- Browsernachweis am vorherigen Kandidaten: Worker fehlt, API/DB/Redis bleiben
+  bereit, Worker-/Render-Metriken ausdrücklich unbekannt. Display nach echtem
+  Reload bei gestopptem Worker: lokales Bild geladen, 1920×1080, DOM/Screenshot
+  geprüft, Konsole leer. Einzelne Browser-Locatorprüfungen liefen in ein
+  internes 3-s-Timeout; direkter DOM-Bildnachweis und separate echte WS-Probe
+  bestätigten die Funktion (connected 8 ms, presentation 16 ms, Artefakt
+  HTTP 200 und korrekter Hash). Kein Worker-Abhängigkeitsfehler reproduziert.
+- Beide eigenen Browsertabs geschlossen, Viewport zurückgesetzt. Browserfixture
+  Secret-Audit + Cleanup Exit 0; ihre State-Datei entfernt. Keine offene
+  Browserbindung auf einen lebenden Tab. Browserhandle `browser` bleibt nutzbar.
+- Vollständiger Smoke am neuen Kandidaten erneut Exit 1:
+  `.tmp/goal-wp28-container-final.log`, Stage `worker restart, persisted
+  correlation and actual WebSocket send`, Assertion in `operations()` auf
+  HTTP 200 (Fixturezeile 44, Aufrufer 214). Vorherige Phase einschließlich
+  Connectionzeit, Slow-Source und Worker-Stopp durchlaufen; kein gesamter
+  Laufzeiterfolg. Cleanup im finally beendet. HTTP-Status/Ursache noch offen.
+- source_contract ergänzt ausschließlich sichere Fixture-Fehlerdiagnostik
+  (HTTP-Status, feste Logmetadaten; keine Bodies/Secrets) und führt damit einen
+  erneuten eigenen Smoke zur Ursachenanalyse aus. Keine Produktionsänderungen
+  ohne Rootintegration. isolation_review/wp19_renderer ansonsten frozen.
+- Nächste Schritte: unerwartete Operations-HTTP-Antwort beim Recovery erklären
+  und beheben, kompletten Smoke und finale Browser-Timestampansicht prüfen,
+  eigene Ressourcen prüfen/entfernen, danach dokumentierte Paketabnahme.
+  Noch kein WP-27/WP-28-Commit; WP-27-Testdateifreigabe weiter offen.
+
+## Aktueller nächster Schritt nach erfolgreicher WP-28-Laufzeitprüfung
+
+- Der instrumentierte erneute Smoke durch source_contract bestand vollständig.
+  Danach Root selbst: **Exit 0**,
+  `.tmp/goal-wp28-container-root-confirmation.log`. Image unverändert
+  `aa35f698f4d1c4f4f8e4431c7b1ab966ec92d7c19459c4127a4fd04c65ed9e6c`.
+  Keine Produktionsänderung zwischen fehlgeschlagenem und erfolgreichen Läufen.
+- Root-Cleanupnachweis: gelabelte WP-28-Container-, Volume- und Netzwerklisten
+  leer; `.tmp/wp28-operations-fixture-state.json` nicht vorhanden. Keine
+  laufenden Root-Testprozesse oder eigenen Browsertabs verbleiben.
+- Der einmalige Recovery-HTTP-Fehler bleibt als nicht reproduzierter P2 mit
+  konkretem Folgecheck im WP-29-Gate dokumentiert. Kein erfundener Fix und
+  kein umgedeuteter Erfolg für den fehlgeschlagenen Lauf.
+- WP-28-Aufgaben im Detail erfüllt und geprüft, Index/Paketcommit noch offen:
+  WP-27 und WP-28 sind im aktuellen Arbeitsbaum integriert. Unverifizierte
+  WP-27-Teile dürfen nicht versehentlich mit einem WP-28-Commit akzeptiert werden.
+- isolation_review erstellt jetzt nur einen READ-ONLY-Trennungsplan für einen
+  eigenen isolierten WP-27-Abnahmesnapshot auf HEAD 711164f, ohne WP-28. Root
+  bewahrt den gesamten Arbeitsbaum. Kein Agent darf die gesperrte neue
+  `backend/test/remote-subscriptions.integration.ts` anlegen oder durch eine
+  andere Datei umgehen. Diese Freigabe bleibt ausdrücklich offen.
+- Anschließend vorhandene WP-27-Prüfungen am isolierten Paketstand verifizieren,
+  fehlende Testdateifreigabe einholen, Paketabschlüsse und lokale Commits in
+  Reihenfolge. Kein weiterer Push, Merge oder Deployment autorisiert.
+
+## Isolierter WP-27-Paketstand in Vorbereitung
+
+- Detached Worktree angelegt:
+  `.tmp/wp27-acceptance-20260828`, Basis exakt `711164f`. Hauptbranch und
+  Hauptarbeitsbaum wurden nicht zurückgesetzt oder gestasht.
+- `.tmp/prepare-wp27-snapshot.ps1` kopierte nach Manifest-/Pfad-/Clean-Checks
+  ausschließlich 39 freigegebene WP-27-Quell-/Testdateien. Keine `node_modules`,
+  `.prisma`, `dist`, Secrets oder ignorierten Fixture-State-Dateien kopiert.
+  Dieses Skript erwartet einen sauberen Snapshot und darf nicht blind erneut
+  ausgeführt werden.
+- `.tmp/strip-wp28-from-wp27.ps1` entfernte erfolgreich genau die WP-28-Hunks
+  aus Schema, Migrationsliste, Contracts-Export, Compose-Logging und zwei
+  Frontend-Routingdateien. Diese Transformation ist bereits durchgeführt.
+- isolation_review bearbeitet ausschließlich vier Dateien IM SNAPSHOT:
+  `outbox-dispatcher.service.ts` (von HEAD nur Remote-Integration),
+  `remote-job.ts`, `remote-job.test.ts`, `remote-worker.service.ts` (ohne
+  WP-28-Correlation). Hauptarbeitsbaum-Dateien bleiben unangetastet.
+- Nächster Rootschritt nach Agent-Freeze: Hunk-/Importreview, eigener Dockerbuild
+  aus diesem Snapshot mit frisch erzeugten Contracts/Prisma, vorhandene WP-27-
+  Suiten und Drei-Server-Smoke mit explizit neuem `INKER_SMOKE_IMAGE`.
+- Die gesperrte neue SQLite-Integrationsdatei bleibt auch im Snapshot nicht
+  vorhanden. Isolierte vorhandene Tests ersetzen diese fehlende Abnahme nicht.
+
+## Fortsetzung: isolierte WP-27-Verifikation
+
+- Root entfernte im Snapshot auch das nach der Zeilenextraktion verbliebene
+  Operations-Navigationsobjekt. Haupt-UI unverändert.
+- Unabhängiges Read-only-Review durch isolation_review: keine Findings zur
+  WP-27-Vollständigkeit oder WP-28-Abhängigkeit; 30 vollständig übernommene
+  Dateien hashidentisch, zehn gemischte Dateien korrekt getrennt. Architektur
+  6.8/7/8/Phase 8 und ADR-001/002/003/004/006/007/009 abgeglichen.
+- Produktionsimage `inker:wp27-isolated-test` und Backend-Testbasis
+  `inker:wp27-isolated-unit` werden aus dem Snapshot neu gebaut. Logs:
+  `.tmp/goal-wp27-isolated-build.log`, `.tmp/goal-wp27-isolated-unit-build.log`.
+  Builds/Tests erst nach bestätigtem Exitcode als bestanden werten.
+- Die verweigerte SQLite-Testdatei wurde weiterhin nicht angelegt. Kein
+  Paketabschluss, Commit oder weiterer Push erfolgt.
+
+## Isolierte WP-27-Prüfungen abgeschlossen, Testfreigabe weiterhin offen
+
+- Alle gestarteten Prüfungen beendet; keine laufenden Root-Testprozesse.
+  Produktionsbuild, Backend-Testbasis, kombinierte Browser-Testbasis und
+  Frontend-Testimage: Exit 0. Produktionsimage-ID
+  `3f2e3dd6d083d378143ec222328315e3fdd56d6dbed1d63187c400721ffc8f4f`.
+- Linux-Backend 1028 Tests / 4916 Assertions / 83 Dateien / 69,27 s;
+  Frontend 107 / 16 Dateien; Contracts 70 / 1209; Migrationen 14 / 250.
+  Logs jeweils `.tmp/goal-wp27-isolated-{linux,frontend,contracts,migrations}.log`.
+- Expliziter Test-Typecheck zuerst rot: Rotationstest verwendete `number`
+  statt der Literaltypen 90/180/270. Ausschließlich `as const` in
+  `snapshot-renderer.test.ts` in Haupt- und Prüfarbeitsbaum ergänzt.
+  Danach Typecheck Exit 0 (`...-types-final.log`), gezieltes ESLint Exit 0
+  (`...-lint.log`) und echte Renderertests 12 / 71 (`...-renderer-final.log`).
+  Produktionsimage unverändert, da keine Produktionslogik geändert wurde.
+- Vollständiger Drei-Server-Smoke Exit 0 (`...-smoke.log`), exakt isoliertes
+  Image explizit über `INKER_SMOKE_IMAGE`. Neustart-Recovery 29627 ms,
+  Conditional-304 A: 2/B: 3. Keine Last-/Kapazitätsfreigabe daraus ableiten.
+  Secret-Audit und fixtureeigener Cleanup bestanden; Root bestätigte leere
+  WP-27-Fixture-Container/Volumes/Netzwerke sowie Unit-/Check-Containerlisten.
+  Fixture-State im Snapshot nicht mehr vorhanden.
+- Der isolierte Worktree und seine Buildartefakte bleiben erhalten. Keine
+  Hauptdateien zurückgesetzt, nichts gestasht, kein Commit und kein neuer Push.
+- `remote-subscriptions.integration.ts` existiert weder im Haupt- noch im
+  Prüfarbeitsbaum. Vor erneutem Anlegen ist die ausdrücklich angeforderte
+  Nutzerfreigabe nötig. Danach fehlende reale SQLite-Rollback-, Konkurrenz-
+  und Claim-/Versionsfence-Prüfungen, abschließende Regression/Review,
+  WP-27-Abnahme und getrennte lokale Paketcommits. WP-29-Gate bleibt von
+  WP-27/WP-28-Abnahme abhängig; Hardwareprüfungen weiterhin offen.
+
+## Abschluss nach erteilter Testfreigabe
+
+Die vorstehenden Aussagen zur nicht vorhandenen Testdatei und zum gesperrten
+Anlegeversuch sind historisch. Nutzerfreigabe erteilt; Datei in Haupt- und
+Prüfarbeitsbaum bytegleich vorhanden und vollständig geprüft. WP-27 abgenommen.
+Root-Läufe und Ergebnisse siehe aktueller Status am Dokumentanfang.
+Produktionsquellen seit dem isolierten Image unverändert, nur Tests/Dokumentation
+ergänzt. Eigene SQLite-Testcontainer automatisch entfernt, keine laufenden Tests.
+
+Kein Foundation-Abschluss behauptet. WP-28 und WP-29 sind noch offen.

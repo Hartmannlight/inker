@@ -603,6 +603,7 @@ describe("Prisma migration baseline", () => {
         "20260903000000_timers",
         "20260904000000_federation_shares",
         "20260905000000_remote_subscriptions",
+        "20260906000000_observability",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

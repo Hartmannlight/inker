@@ -4,6 +4,7 @@ import type { OutboxEvent, RemoteSubscription } from '@prisma/client';
 import { FEDERATION_LIMITS, parseFederationCapabilities, parseFederationPublicationFeed, type FederationPublicationFeed } from '@inker/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxStore } from '../events/outbox.store';
+import { outboxCorrelation } from '../events/outbox-correlation';
 import { OUTBOX_POLICY, queueRetryDelay } from '../jobs/queue-policy';
 import { EncryptionService } from '../common/services/encryption.service';
 import { DEFAULT_INSTANCE_SECRET_PATH } from '../config/instance-secrets';
@@ -247,7 +248,7 @@ export class RemoteWorkerService {
           status: terminal ? 'dead-letter' : 'pending', claimOwner: null, claimToken: null, claimUntil: null,
           processedAt: terminal ? now : null,
           availableAt: new Date(Math.max(now.getTime() + queueRetryDelay('remote-sync', event.attempts), circuitUntil?.getTime() ?? 0)),
-          lastError: JSON.stringify({ code: errorCode ?? 'REMOTE_SYNC_FAILED', correlationId: event.eventId }),
+          lastError: JSON.stringify({ code: errorCode ?? 'REMOTE_SYNC_FAILED', ...outboxCorrelation(event) }),
         } })).count !== 1) throw new Error('REMOTE_STALE_CLAIM');
       } else {
         signal.throwIfAborted();

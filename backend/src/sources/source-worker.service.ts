@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, type OutboxEvent } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxStore } from '../events/outbox.store';
+import { outboxCorrelation } from '../events/outbox-correlation';
 import { OUTBOX_POLICY, queueRetryDelay } from '../jobs/queue-policy';
 import { EncryptionService } from '../common/services/encryption.service';
 import { DEFAULT_INSTANCE_SECRET_PATH } from '../config/instance-secrets';
@@ -140,7 +141,7 @@ export class SourceWorkerService {
         status: terminal ? 'dead-letter' : 'pending', claimOwner: null, claimToken: null, claimUntil: null,
         processedAt: terminal ? now : null,
         availableAt: new Date(Math.max(now.getTime() + queueRetryDelay('source-refresh', event.attempts), circuitUntil?.getTime() ?? 0)),
-        lastError: JSON.stringify({ code: errorCode ?? 'SOURCE_REFRESH_FAILED', correlationId: event.eventId }),
+        lastError: JSON.stringify({ code: errorCode ?? 'SOURCE_REFRESH_FAILED', ...outboxCorrelation(event) }),
         } });
         if (failed.count !== 1) throw new Error('SOURCE_STALE_CLAIM');
       }

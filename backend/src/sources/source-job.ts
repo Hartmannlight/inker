@@ -1,5 +1,6 @@
 import type { Prisma, SourceDefinition } from '@prisma/client';
 import { sha256 } from '../publications/publication-content';
+import { intentCorrelationId } from '../events/outbox-correlation';
 
 export const SOURCE_REFRESH = 'source.refresh.due';
 export const SOURCE_LIMITS = Object.freeze({ global: 4, provider: 2, connector: 2, source: 1, circuitFailures: 3, circuitCooldownMs: 30_000 });
@@ -15,6 +16,7 @@ export async function scheduleSource(tx: Prisma.TransactionClient, source: Sourc
   // Permanent receipt prevents reconstruction of a completed identity after retention.
   if (await tx.outboxEffect.findUnique({ where: { eventId } })) return null;
   await tx.outboxEvent.upsert({ where: { eventId }, update: {}, create: {
+    correlationId: intentCorrelationId(),
     eventId, eventType: SOURCE_REFRESH, aggregateType: 'SourceDefinition', aggregateId: source.sourceDefinitionId,
     aggregateRevision: String(source.definitionVersion), payloadVersion: 1,
     payload: { sourceDefinitionId: source.sourceDefinitionId, definitionVersion: source.definitionVersion, scheduledAt: due.getTime() },

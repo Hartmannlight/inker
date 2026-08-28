@@ -14,7 +14,12 @@ import { PLAYBACK_DUE } from '../playback/playback.events';
 import { RenderCacheService, RENDER_REQUESTED } from '../render-cache/render-cache.service';
 import { MaintenanceService, MAINTENANCE_DUE } from '../jobs/maintenance.service';
 import { QUEUE_POLICIES, type QueueName } from '../jobs/queue-policy';
-import type { Prisma } from '@prisma/client';
+import { queueEventFilter, queueForEvent } from '../jobs/queue-routing';
+import type { OutboxEvent, Prisma } from '@prisma/client';
+import { outboxCorrelation } from './outbox-correlation';
+import { createCorrelationContext, runWithCorrelation } from '../observability/correlation-context';
+import { emitStructuredEvent, runtimeMetrics } from '../observability/runtime-observability';
+import type { JobOutcome } from '../observability/structured-event';
 import { SourceWorkerService } from '../sources/source-worker.service';
 import { SOURCE_REFRESH } from '../sources/source-job';
 import { TimerWorkerService } from '../timers/timer-worker.service';
@@ -114,7 +119,7 @@ export class OutboxDispatcher
           }, name);
         } catch {
           await this.store.fail(event, 'OUTBOX_TRANSPORT_FAILED');
-          this.logFailure(event.eventId, 'OUTBOX_REDIS_UNAVAILABLE');
+          this.logFailure(outboxCorrelation(event).correlationId, 'OUTBOX_REDIS_UNAVAILABLE');
           break; // Do not hot-loop through the entire backlog during an outage.
         }
         }
@@ -127,16 +132,11 @@ export class OutboxDispatcher
   }
 
   private queueFilter(name: QueueName): Prisma.OutboxEventWhereInput {
-    const special = [RENDER_REQUESTED, PLAYBACK_DUE, TIMER_DUE, MAINTENANCE_DUE, SOURCE_REFRESH, REMOTE_SYNC];
-    if (name === 'remote-sync') return { eventType: REMOTE_SYNC };
-    if (name === 'source-refresh') return { eventType: SOURCE_REFRESH };
-    if (name === 'render') return { eventType: RENDER_REQUESTED };
-    if (name === 'timer') return { eventType: { in: [PLAYBACK_DUE, TIMER_DUE] } };
-    if (name === 'maintenance') return { eventType: MAINTENANCE_DUE };
-    return { eventType: { notIn: special } };
+    return queueEventFilter(name);
   }
 
   async dispatch(job: OutboxJob, signal = new AbortController().signal, queue?: QueueName) {
+    const started = performance.now();
     const event = await this.prisma.outboxEvent.findUnique({
       where: { eventId: job.eventId },
     });
@@ -146,91 +146,107 @@ export class OutboxDispatcher
       !(await this.store.current(event))
     ) {
       this.counts.stale++;
+      const routed = event ? queueForEvent(event.eventType) : queue ?? 'delivery';
+      const durationMs = Math.min(86_400_000, Math.max(0, performance.now() - started));
+      try { runtimeMetrics.recordJob(routed, 'stale', durationMs); } catch { /* Diagnostic limit. */ }
+      emitStructuredEvent('JOB_STALE', { ...(event ? outboxCorrelation(event) : createCorrelationContext()),
+        role: 'worker', queue: routed, outcome: 'stale', durationMs });
       return;
     }
-    const expectedQueue = event.eventType === REMOTE_SYNC ? 'remote-sync'
-      : event.eventType === SOURCE_REFRESH ? 'source-refresh' : event.eventType === RENDER_REQUESTED ? 'render'
-      : [PLAYBACK_DUE, TIMER_DUE].includes(event.eventType) ? 'timer' : event.eventType === MAINTENANCE_DUE ? 'maintenance' : 'delivery';
-    if (queue && queue !== expectedQueue) { this.counts.stale++; return; }
-    try {
-      signal.throwIfAborted();
-      if (event.eventType === REMOTE_SYNC) {
-        const outcome = await this.remotes.execute(event, signal);
-        if (outcome === 'failed') { this.counts.failed++; return; }
-        if (await this.store.ack(event)) this.counts.delivered++;
-        else this.counts.stale++;
-        return;
-      }
-      if (event.eventType === TIMER_DUE) {
-        await this.timers.completeDue(event, signal);
-        signal.throwIfAborted();
-        if (await this.store.ack(event)) this.counts.delivered++;
-        else this.counts.stale++;
-        return;
-      }
-      if (event.eventType === SOURCE_REFRESH) {
-        const outcome = await this.sources.execute(event, signal);
-        if (outcome === 'failed') { this.counts.failed++; return; }
-        if (await this.store.ack(event)) this.counts.delivered++;
-        else this.counts.stale++;
-        return;
-      }
-      if (event.eventType === RENDER_REQUESTED) {
-        await this.renderCache.render(event, undefined, signal);
-        signal.throwIfAborted();
-        if (await this.store.ack(event)) this.counts.delivered++;
-        else this.counts.stale++;
-        return;
-      }
-      if (event.eventType === MAINTENANCE_DUE) {
-        await this.maintenance.execute(event, signal);
-        signal.throwIfAborted();
-        if (await this.store.ack(event)) this.counts.delivered++;
-        else this.counts.stale++;
-        return;
-      }
-      if (event.eventType === PLAYBACK_DUE) {
-        await this.playback.advanceDue(event, signal);
-        signal.throwIfAborted();
-        if (await this.store.ack(event)) this.counts.delivered++;
-        else this.counts.stale++;
-        return;
-      }
-      const prepared = await this.store.prepare(event);
-      if (!prepared.duplicate) {
-        await this.redis.publish();
-        const deadline = Date.now() + POLICY.dispatchTimeoutMs;
-        while (!(await this.store.targetsComplete(prepared.key))) {
-          if (
-            signal.aborted ||
-            Date.now() >= deadline ||
-            (await this.store.targetFailed(prepared.key, event.claimToken!))
-          )
-            throw new Error('OUTBOX_DELIVERY_FAILED');
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-      }
-      if (await this.store.ack(event)) this.counts.delivered++;
-      else this.counts.stale++;
-    } catch (error) {
-      if (event.eventType === TIMER_DUE && error instanceof Error && error.message === 'TIMER_NOT_DUE') {
-        if (!await this.timers.deferEarly(event)) this.counts.stale++;
-        return;
-      }
-      const code =
-        error instanceof Error && error.message === 'OUTBOX_INVALID_PAYLOAD'
-          ? 'OUTBOX_INVALID_PAYLOAD'
-          : 'OUTBOX_TRANSPORT_FAILED';
-      await this.store.fail(event, code);
-      this.logFailure(event.eventId, code);
-    } finally {
-      // Refill freed slots promptly instead of imposing one polling interval
-      // on every batch. Periodic reconciliation remains independently bounded.
-      if (!this.stopped) void this.tick();
+    const expectedQueue = queueForEvent(event.eventType);
+    let context = outboxCorrelation(event);
+    if (event.eventType === SOURCE_REFRESH) {
+      try { context = createCorrelationContext({ ...context, sourceDefinitionId: event.aggregateId }); }
+      catch { /* The domain handler rejects malformed IDs; optional diagnostics must not bypass it. */ }
     }
+    return runWithCorrelation(context, async () => {
+      let outcome: JobOutcome = 'failure';
+      emitStructuredEvent('JOB_STARTED', { role: 'worker', queue: expectedQueue, attempt: event.attempts });
+      try {
+        if (queue && queue !== expectedQueue) { this.counts.stale++; outcome = 'stale'; return; }
+        signal.throwIfAborted();
+        if (event.eventType === REMOTE_SYNC) {
+          const remoteOutcome = await this.remotes.execute(event, signal);
+          if (remoteOutcome === 'failed') { this.counts.failed++; return; }
+          outcome = await this.acknowledge(event);
+          return;
+        }
+        if (event.eventType === TIMER_DUE) {
+          await this.timers.completeDue(event, signal);
+          signal.throwIfAborted();
+          outcome = await this.acknowledge(event);
+          return;
+        }
+        if (event.eventType === SOURCE_REFRESH) {
+          const sourceOutcome = await this.sources.execute(event, signal);
+          if (sourceOutcome === 'failed') { this.counts.failed++; return; }
+          outcome = await this.acknowledge(event);
+          return;
+        }
+        if (event.eventType === RENDER_REQUESTED) {
+          await this.renderCache.render(event, undefined, signal);
+          signal.throwIfAborted();
+          outcome = await this.acknowledge(event);
+          return;
+        }
+        if (event.eventType === MAINTENANCE_DUE) {
+          await this.maintenance.execute(event, signal);
+          signal.throwIfAborted();
+          outcome = await this.acknowledge(event);
+          return;
+        }
+        if (event.eventType === PLAYBACK_DUE) {
+          await this.playback.advanceDue(event, signal);
+          signal.throwIfAborted();
+          outcome = await this.acknowledge(event);
+          return;
+        }
+        const prepared = await this.store.prepare(event);
+        if (!prepared.duplicate) {
+          await this.redis.publish();
+          const deadline = Date.now() + POLICY.dispatchTimeoutMs;
+          while (!(await this.store.targetsComplete(prepared.key))) {
+            if (
+              signal.aborted ||
+              Date.now() >= deadline ||
+              (await this.store.targetFailed(prepared.key, event.claimToken!))
+            )
+              throw new Error('OUTBOX_DELIVERY_FAILED');
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        }
+        outcome = await this.acknowledge(event);
+      } catch (error) {
+        if (event.eventType === TIMER_DUE && error instanceof Error && error.message === 'TIMER_NOT_DUE') {
+          if (!await this.timers.deferEarly(event)) { this.counts.stale++; outcome = 'stale'; }
+          else outcome = 'success';
+          return;
+        }
+        const code =
+          error instanceof Error && error.message === 'OUTBOX_INVALID_PAYLOAD'
+            ? 'OUTBOX_INVALID_PAYLOAD'
+            : 'OUTBOX_TRANSPORT_FAILED';
+        if (!await this.store.fail(event, code)) outcome = 'stale';
+        this.counts.failed++;
+      } finally {
+        const durationMs = Math.min(86_400_000, Math.max(0, performance.now() - started));
+        if (outcome === 'failure' && signal.aborted) outcome = durationMs >= QUEUE_POLICIES[expectedQueue].timeoutMs ? 'timeout' : 'aborted';
+        try { runtimeMetrics.recordJob(expectedQueue, outcome, durationMs); } catch { /* Metrics never change acknowledgements. */ }
+        emitStructuredEvent(outcome === 'success' ? 'JOB_COMPLETED' : outcome === 'stale' ? 'JOB_STALE' : 'JOB_FAILED',
+          { role: 'worker', queue: expectedQueue, outcome, durationMs, attempt: event.attempts });
+        // Refill freed slots promptly instead of imposing one polling interval
+        // on every batch. Periodic reconciliation remains independently bounded.
+        if (!this.stopped) runWithCorrelation(createCorrelationContext(), () => { void this.tick(); });
+      }
+    });
+  }
+  private async acknowledge(event: OutboxEvent): Promise<JobOutcome> {
+    if (await this.store.ack(event)) { this.counts.delivered++; return 'success'; }
+    this.counts.stale++;
+    return 'stale';
   }
   private logFailure(correlationId: string, code: string) {
     this.counts.failed++;
-    this.logger.warn({ code, correlationId });
+    try { this.logger.warn({ code, correlationId }); } catch { /* Diagnostic output is optional. */ }
   }
 }

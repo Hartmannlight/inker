@@ -1,5 +1,6 @@
 import type { Prisma, RemoteSubscription } from '@prisma/client';
 import { sha256 } from '../publications/publication-content';
+import { intentCorrelationId } from '../events/outbox-correlation';
 
 export const REMOTE_SYNC = 'remote.sync.due';
 export const REMOTE_LIMITS = Object.freeze({
@@ -20,6 +21,7 @@ export async function scheduleRemote(tx: Prisma.TransactionClient, subscription:
   const eventId = 'remote-' + sha256(identity);
   if (await tx.outboxEffect.findUnique({ where: { eventId } })) return null;
   await tx.outboxEvent.upsert({ where: { eventId }, update: {}, create: {
+    correlationId: intentCorrelationId(),
     eventId, eventType: REMOTE_SYNC, aggregateType: 'RemoteSubscription', aggregateId: subscription.subscriptionId,
     aggregateRevision: String(subscription.version), payloadVersion: 1,
     payload: { subscriptionId: subscription.subscriptionId, subscriptionVersion: subscription.version, scheduledAt: due.getTime() },

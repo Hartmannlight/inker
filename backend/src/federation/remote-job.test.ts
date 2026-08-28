@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import type { Prisma, RemoteSubscription } from '@prisma/client';
 import { REMOTE_SYNC, scheduleRemote } from './remote-job';
+import { createCorrelationContext, runWithCorrelation } from '../observability/correlation-context';
 
 function setup() {
   const subscription = {
@@ -24,11 +25,12 @@ function setup() {
 describe('scheduleRemote', () => {
   test('durable event, job and next period share one deterministic identity', async () => {
     const h = setup(), now = new Date('2026-08-28T12:00:00Z');
-    const eventId = await scheduleRemote(h.tx, h.subscription, now);
+    const context = createCorrelationContext();
+    const eventId = await runWithCorrelation(context, () => scheduleRemote(h.tx, h.subscription, now));
     expect(eventId).toMatch(/^remote-[a-f0-9]{64}$/);
     expect(h.eventUpsert).toHaveBeenCalledWith({
       where: { eventId }, update: {}, create: {
-        eventId, eventType: REMOTE_SYNC, aggregateType: 'RemoteSubscription', aggregateId: 'subscription-one',
+        eventId, correlationId: context.correlationId, eventType: REMOTE_SYNC, aggregateType: 'RemoteSubscription', aggregateId: 'subscription-one',
         aggregateRevision: '1', payloadVersion: 1,
         payload: { subscriptionId: 'subscription-one', subscriptionVersion: 1, scheduledAt: now.getTime() },
         availableAt: now, occurredAt: now,

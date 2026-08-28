@@ -161,6 +161,8 @@ export function parseOutboxEvent(event: EventInput): {
 }
 
 export interface DeliveryContext {
+  correlationId?: string;
+  eventId?: string;
   deliveryId: string;
   signal: AbortSignal;
   stateTopic?: 'timers';

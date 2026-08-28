@@ -1,11 +1,14 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Queue, Worker, type RedisClient } from 'bullmq';
 import Redis from 'ioredis';
+import { runtimeMetrics } from '../observability/runtime-observability';
+import { parseWorkerMetricSample, workerMetricSample, WORKER_METRIC_LIMITS, type WorkerMetricReading } from '../observability/worker-metrics';
 import { JOB_VERSION, QUEUE_NAMES, QUEUE_POLICIES, QUEUE_PREFIX, jobId, redisConnection, type QueueName } from '../jobs/queue-policy';
 
 export interface OutboxJob { version: 1; eventId: string; claimToken: string; }
 const CHANNEL = 'inker:delivery-hints:v1';
 const PRESENCE = 'inker:workers:v1';
+const METRICS_PREFIX = 'inker:worker-metrics:v1:';
 export const WORKER_PRESENCE_MS = 8_000;
 
 /** Only reconstructed references/presence live in Redis; SQLite owns job intent. */
@@ -91,8 +94,10 @@ export class OutboxRedisService implements OnModuleDestroy {
   async heartbeat(owner: string) {
     if (!this.connectionsReady()) { this.lastHeartbeat = 0; await this.leave(owner); return; }
     const client = this.connect(), now = Date.now();
-    const result = await client.multi().zremrangebyscore(PRESENCE, '-inf', now - WORKER_PRESENCE_MS)
-      .zadd(PRESENCE, now, owner).expire(PRESENCE, 30).exec();
+    const transaction = client.multi().zremrangebyscore(PRESENCE, '-inf', now - WORKER_PRESENCE_MS);
+    try { transaction.set(METRICS_PREFIX + owner, workerMetricSample(runtimeMetrics.snapshot(), now), 'PX', WORKER_METRIC_LIMITS.ttlMs); }
+    catch { /* A metric limit must not suppress healthy worker presence. Old samples expire. */ }
+    const result = await transaction.zadd(PRESENCE, now, owner).expire(PRESENCE, 30).exec();
     if (!result || result.some(([error]) => error)) throw new Error('QUEUE_UNAVAILABLE');
     this.lastHeartbeat = now;
   }
@@ -112,7 +117,22 @@ export class OutboxRedisService implements OnModuleDestroy {
     try {
       const workers = await this.connect().zcount(PRESENCE, Date.now() - WORKER_PRESENCE_MS, '+inf');
       return { status: workers ? 'ready' : 'degraded', redis: 'ready', workers, code: workers ? undefined : 'WORKER_UNAVAILABLE' };
-    } catch { return { status: 'degraded', redis: 'unavailable', workers: 0, code: 'QUEUE_UNAVAILABLE' }; }
+    } catch { return { status: 'degraded', redis: 'unavailable', workers: null, code: 'QUEUE_UNAVAILABLE' }; }
+  }
+  async workerMetricSamples(): Promise<WorkerMetricReading[] | null> {
+    try {
+      const now = Date.now(), client = this.connect();
+      const owners = await client.zrangebyscore(PRESENCE, now - WORKER_PRESENCE_MS, '+inf', 'LIMIT', 0, WORKER_METRIC_LIMITS.workers + 1);
+      if (owners.length > WORKER_METRIC_LIMITS.workers || owners.some(owner => !/^[a-zA-Z0-9-]{1,100}$/.test(owner))) return null;
+      if (!owners.length) return [];
+      const texts = await client.mget(...owners.map(owner => METRICS_PREFIX + owner));
+      const receivedAt = Date.now();
+      const readings = texts.map((text, index) => {
+        const sample = text === null ? null : parseWorkerMetricSample(text, receivedAt);
+        return sample ? { owner: owners[index], sample } : null;
+      });
+      return readings.every((reading): reading is WorkerMetricReading => reading !== null) ? readings : null;
+    } catch { return null; }
   }
   async pauseWorkers() { await Promise.all([...this.workers.values()].map(worker => worker.pause(true))); }
   async drain(timeoutMs = 22_000) {

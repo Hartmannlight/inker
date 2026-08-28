@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { Prisma, type OutboxEvent, type PlaybackState } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { intentCorrelationId } from '../events/outbox-correlation';
 import { PublicationPersistenceService } from "../publications/publication-persistence.service";
 import {
   canonicalJson,
@@ -480,6 +481,7 @@ export class PlaybackService {
       data: { status: "delivered", processedAt: occurredAt },
     });
     const common = {
+      correlationId: intentCorrelationId(),
       aggregateType: "PlaybackState",
       aggregateId: state.id,
       aggregateRevision: String(state.version),

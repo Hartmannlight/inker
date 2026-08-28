@@ -83,7 +83,7 @@ müssen.
 | [x] | WP-25 | Timer-Scheduling, Neustart-Recovery und Multi-Display-Updates | WP-20, WP-24 |
 | [x] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
 | [x] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
-| [ ] | WP-28 | Strukturierte Logs, Metriken und Betriebszustände | WP-20 |
+| [x] | WP-28 | Strukturierte Logs, Metriken und Betriebszustände | WP-20 |
 | [ ] | WP-29 | Last-, Fault-, Backup- und Security-Freigabegate | WP-19, WP-21, WP-25, WP-27, WP-28 |
 
 ### Grobe Etappen
@@ -3282,7 +3282,7 @@ direkte Displayverbindungen notieren.
 - Keine offenen WP-27-Paketblocker. Windows-Bun-TLS-Probleme bleiben ein bekannter
   Host-Toolchain-P2 mit Linux als geprüftem Produktionspfad; Hardware offen.
   WP-29 muss die kombinierte Last-/Fault-/Security-/Restore-Freigabe nachweisen.
-- Git: getrennt geprüfter Paketstand, lokaler Paketcommit folgt; kein weiterer Push.
+- Git: getrennt geprüfter Paketstand lokal in `456a343` committed; kein weiterer Push.
 
 ## WP-28 – Observability und Betriebszustände
 
@@ -3299,13 +3299,13 @@ und minimale Diagnoseoberfläche.
 
 **Aufgaben:**
 
-- [ ] Definiere ein strukturiertes Logschema für Request, Job, Device und Event.
-- [ ] Propagiere Correlation-ID über API, Outbox, Queue und Delivery.
-- [ ] Redigiere Token, Codes, Cookies, Header und Source-Secrets zentral.
-- [ ] Erfasse Queue-Alter, Jobdauer/-fehler, Rendercache, WebSockets und Device-Age.
-- [ ] Trenne Liveness, Readiness und Degraded-Status.
-- [ ] Zeige letzte erfolgreiche Source-/Device-/Remote-Aktivität im Admin-UI.
-- [ ] Lege Retention und Cardinality-Grenzen fest.
+- [x] Definiere ein strukturiertes Logschema für Request, Job, Device und Event.
+- [x] Propagiere Correlation-ID über API, Outbox, Queue und Delivery.
+- [x] Redigiere Token, Codes, Cookies, Header und Source-Secrets zentral.
+- [x] Erfasse Queue-Alter, Jobdauer/-fehler, Rendercache, WebSockets und Device-Age.
+- [x] Trenne Liveness, Readiness und Degraded-Status.
+- [x] Zeige letzte erfolgreiche Source-/Device-/Remote-Aktivität im Admin-UI.
+- [x] Lege Retention und Cardinality-Grenzen fest.
 
 **Abnahme:** Ein absichtlich langsamer Job und ein getrenntes Display sind anhand
 von Metrik/Log/Status auffindbar; kein Testsecret erscheint in Ausgaben.
@@ -3314,6 +3314,145 @@ von Metrik/Log/Status auffindbar; kein Testsecret erscheint in Ausgaben.
 
 **Handoff:** Metriknamen, Schwellenkandidaten und externe Monitoringoptionen
 notieren.
+
+### Zwischenstand WP-28 (2026-08-28, nicht abgenommen)
+
+- Parallel nach WP-20 vorbereitet: begrenzter Diagnosevertrag, UUID-basierter
+  Correlation-Kontext, festes Ereignisschema und Metrikregister mit 1281
+  Zeitreihen als Budget. Acht neue Core-/Testdateien sowie Änderungen am
+  zentralen Redactor und dessen Tests bleiben vom WP-27-Commit getrennt.
+  Keine API-/Worker-/UI-Integration und keine Abnahme behauptet.
+- Read-only-Review, P2 mit Folgeschritt: Loggerredaktion erfolgt derzeit erst
+  im Winston-Transport. Nest/Winston, HTTP-Exceptionfilter und Startup können
+  davor Getter, Stack-Formatierung oder JSON-Konvertierungen ausführen;
+  zyklische Fehler können die Fehlerantwort verhindern. Sichere strukturierte
+  Eingangsgrenze vor diesen Aufrufern integrieren und realen Logger-/HTTP-Pfad
+  mit Getter-, Proxy- und Zyklenfällen testen.
+- P2: `X-Device-Key` und rohe Pairing-`code`-Werte werden vom bisherigen
+  Schlüsselmuster nicht maskiert. Request-Header und Bodies nicht als Logdaten
+  übernehmen; vertrauliche Einmalcodes von festen Ereigniscodes unterscheiden
+  und die vollständigen Ausgabepfade auf Testsecret-Leaks prüfen.
+- P2: stdout verwendet weiterhin Nest-Text statt strukturiertem JSON; Datei-
+  und Compose-Logs haben keine Rotationsgrenzen. JSON-Ausgabe und begrenzte
+  Retention konfigurieren und tatsächliche Transportausgaben prüfen.
+- Integrationsplan: eigene UUID beim Outbox-Intent persistieren und über
+  Queue/Worker/Delivery wiederherstellen, nicht aus nicht-UUID-Event-IDs
+  ableiten. Prozessbezogene Liveness ergänzen; SQLite bestimmt API-Readiness,
+  ausgefallene Hintergrunddienste den Degraded-Status. Fehlende Worker- oder
+  Redis-Samples als unbekannt statt als gemessene Null darstellen.
+- API- und Worker-Metriken mit Sample-Zeit/TTL begrenzt aggregieren; reine
+  API-Prozesszähler erfassen keine Worker-Renderjobs. Neue Labels nur mit neu
+  nachgewiesenem Cardinality-Budget. Diagnoseoberfläche ausschließlich für
+  Admins; keine Erweiterung des öffentlichen Health-Endpunkts um private Daten.
+
+### Fortgesetzte Integration WP-28 (2026-08-28, nicht abgenommen)
+
+Der obige Zwischenstand beschreibt den früheren Core, nicht den aktuellen
+Arbeitsbaum. API, Worker und Admin-UI sind inzwischen integriert. Die sichere
+Logger-Eingangsgrenze, JSON-Ausgaben, zentrale Redaction, Rotation und persistierte
+Correlation wurden umgesetzt und mit echten Logger-/HTTP-/SQLite-Pfaden geprüft.
+Das aktuelle Cardinality-Budget beträgt 1357 API-Zeitreihen einschließlich
+Worker-Verfügbarkeitsgauge; Details in `OBSERVABILITY_OPERATIONS.md`.
+
+- Root verifiziert: gesamte Linux-Backend-Suite 1102 Tests/6784 Assertions,
+  Operations-/Correlation-SQLite 19/240, Frontend 121 Tests, Contracts 85/1559;
+  jeweils Exit 0. Produktionstypecheck, expliziter Testtypecheck und gezieltes
+  ESLint ebenfalls grün. Logs unter `.tmp/goal-wp28-*.log`.
+- Reviewkorrekturen: Diagnose ohne SQLite-Writerlock, Deadline 2 s mit je einem
+  tatsächlich laufenden Scan/Probe, auch bei frühem Batchfehler und hängenden
+  Geschwisterabfragen. Worker-TTL wird nach I/O und vor Cache-/Metrikausgabe
+  geprüft. Prozesslokale Deltaaggregation hält Prometheus-Zähler bei Worker-
+  Teilneustarts monoton; erste Samples bilden nur die neue Baseline.
+- Produktionskandidat gebaut, Manifest
+  `6fa2c7ba871d808292457afb2a763136b2c21917543c88cd7b0bf5c425958a06`.
+  Erster Smoke scheiterte an einer zu strikten Fixture-Content-Type-Prüfung:
+  gültiges `charset` vor `version`. Semantische MIME-Prüfung korrigiert und
+  echte Auth-/Metrics-Reads geprüft; vollständiger erneuter Smoke noch offen.
+- Browser: echte Adminanmeldung, Operations-Ansicht, sechs Queues, Source-/
+  Device-Aktivität, gekoppeltes 1920×1080-Display und geladene lokale Bilddaten
+  gesehen; Admin-Konsole ohne Fehler. Letzte Verbindung war stets unbekannt,
+  weil der bestehende Zeitstempel nie geschrieben wurde. Korrektur im
+  gedrosselten Telemetriepfad läuft; keine zusätzlichen DB-Writes vorgesehen.
+- Weiter offen: finale Telemetrie-Regression, erneuter Produktionsbuild,
+  vollständige Docker-/Browser-Ausfallprüfung, Cleanup und Paketabnahme.
+  Eigene aktive Browserfixture: Port 18731, Ownership-Label `inker.wp28.fixture`,
+  ignorierter State `.tmp/wp28-operations-fixture-state.json`. Keine fremden
+  Dienste oder Daten werden für Ausfalltests verwendet.
+- Kein WP-28-Commit, kein Paketabschluss. WP-27-Testdateifreigabe bleibt separat
+  offen; WP-29 beginnt erst nach erfüllten Abhängigkeiten.
+
+### Laufzeitnachweis WP-28 (2026-08-28)
+
+- Arbeitsbaum-Funktionalität verifiziert: finale Linux-Suite **1105 Tests/6806
+  Assertions**, Operations-/Correlation-SQLite **19/240**, Gateway/Telemetrie
+  **28/139**, Frontend **121**, Contracts **85/1559**; jeweils Exit 0.
+- Docker-Smoke mit Image
+  `aa35f698f4d1c4f4f8e4431c7b1ab966ec92d7c19459c4127a4fd04c65ed9e6c`
+  durch Subagent und danach durch Root vollständig bestanden. Rootlog:
+  `.tmp/goal-wp28-container-root-confirmation.log`. Reale Authgrenzen,
+  4-s-Source-Timeout mit Histogramm/Log/Status, Worker-/Redis-Ausfall,
+  unveränderte Cacheverfügbarkeit, persistierte Correlation bis zum echten
+  WebSocket-Send, Trennung, letzte Aktivität und Secret-Audit geprüft.
+- Browserprüfung derselben Frontend-Buildversion: echte Adminanmeldung,
+  Operations-DOM/Layout, Referenzdisplay mit geladenem 1920×1080-Bild,
+  Worker-Ausfall mit unbekannten Messwerten und weiterhin ladbarem lokalem Bild.
+  Letzter Backend-Zeitstempelfix anschließend im neuen Docker-Smoke bestätigt.
+  Eigene Tabs geschlossen, Viewport zurückgesetzt; alle eigenen gelabelten
+  Container/Volumes/Netze und die State-Datei nach Root-Smoke als entfernt geprüft.
+- Offener P2-Nachverfolgungsbefund: Ein vorangegangener Root-Smoke sah beim
+  Worker-Recovery einmal eine unerwartete Operations-HTTP-Antwort. Ihr Status
+  wurde damals noch nicht gespeichert. Zwei vollständige Wiederholungen mit
+  erweiterter sicherer Fehlerdiagnostik bestanden ohne Produktionsänderung.
+  Ursache nicht behauptet. Im WP-29-Recovery-/Lastlauf dieselbe Phase wiederholt
+  mit HTTP-Status, festen Logcodes und Queue-/DB-Messwerten prüfen; bei erneutem
+  Auftreten vor Freigabe beheben. Keine Assertions oder Grenzwerte abgeschwächt.
+- Aufgaben funktional erfüllt, Paketindex noch offen: Der Arbeitsbaum enthält
+  das noch nicht abgenommene WP-27. Exakte Pakettrennung, WP-27-Testfreigabe und
+  lokale Paketcommits stehen aus. Keine fremden Änderungen eingeschlossen und
+  keine ungetestete Kombination als eigenständiger Paketcommit abgelegt.
+
+### Abschluss WP-28
+
+- Status: abgeschlossen am 2026-08-28. Die früheren Zwischenstände und die
+  damalige WP-27-Dateiblockade sind historisch; WP-27 ist jetzt abgenommen und
+  separat in `456a343` committed. Keine offene Berechtigungsblockade bleibt.
+- Ergebnis: begrenzte, ausschließlich lesende Admin-Diagnose mit sechs Queues,
+  Source-/Device-/Remote-Aktivität, Prometheus-Metriken und klar getrenntem
+  Live-/Ready-/Degraded-Zustand. Fehlende Messungen werden nicht zu Nullwerten.
+  Correlation wird im Outbox-Intent persistiert und über Worker bis zum tatsächlichen
+  WebSocket-Send weitergeführt; ein Sendecallback ist kein Display-Acknowledgement.
+- Sichere Logger-Eingangsgrenze vor Formatierung, zentrale Redaction, JSON-Logs,
+  bounded Metadaten, maximal 1357 API-Zeitreihen und Logrotation. Details, Metriknamen,
+  30-s-Queuewarnung, 8-s-Worker-TTL sowie externe Collector-Bedingungen stehen in
+  `OBSERVABILITY_OPERATIONS.md` und der aktualisierten Worker-Betriebsanleitung.
+- Kernpfade: `backend/src/observability`, `config`, `events`, `device-platform`,
+  API-/Worker-Bootstrap, Observability-Migration, `contracts/src/observability.ts`,
+  `frontend/src/pages/operations`, Compose/Nginx und die zugehörigen Tests.
+- Root-Nachweise: Linux-Backend **1105/6806**, echte Operations-/Correlation-SQLite
+  **19/240**, Gateway/Telemetrie **28/139**, Frontend **121**, Contracts **85/1559**.
+  Zusätzliche neue Remote-SQLite-Suite am integrierten Stand **18/228**; sämtliche
+  genannten Prüfungen beendet mit Exit 0, keine übersprungenen Fälle.
+  Produktionstypecheck, expliziter Testtypecheck, ESLint und Migrationen grün.
+- Produktionsimage `aa35f698f4d1c4f4f8e4431c7b1ab966ec92d7c19459c4127a4fd04c65ed9e6c`:
+  zwei vollständig erfolgreiche Docker-Smokes (Subagent, anschließend Root).
+  Echte 4-s-Slow-Source, Authgrenzen, Logs/Metriken, Worker-/Redis-Ausfälle,
+  Cacheverfügbarkeit, Correlation über Neustart, Trennung und Secret-Audit belegt.
+  Rootlog `.tmp/goal-wp28-container-root-confirmation.log`; übrige Nachweise
+  `.tmp/goal-wp28-linux-final.log`, `goal-wp28-integrations-final.log`,
+  `goal-wp28-frontend.log`, `goal-wp28-contracts.log`, `goal-wp28-remote-sqlite-root.log`.
+- Echter Browser: Admin-Operations und sechs Queues, lokales 1920×1080-Display,
+  Worker-Ausfall mit unbekannten Messwerten und weiterhin geladenem Bild geprüft.
+  Keine Konsolenfehler. Eigene Tabs und alle Fixture-Container/Volumes/Netze/State
+  entfernt; keine fremden Dienste verändert und keine Testzugänge versioniert.
+- Bewusste Abweichungen: keine. Hardware nicht verfügbar, daher keine physische
+  ESP32-/Pi-/TRMNL-Verifikation behauptet. Keine Kapazitätsfreigabe aus Einzeltests.
+- Offener P2: einmalige, anschließend zweimal nicht reproduzierte Operations-HTTP-
+  Antwort bei Worker-Recovery. Damaliger Status unbekannt, Ursache nicht geklärt.
+  Sichere Diagnostik ergänzt; WP-29 muss wiederholte Recovery unter kombinierter
+  Last prüfen und einen erneut auftretenden Fehler vor Freigabe beheben.
+- Nächster Schritt: WP-29 einschließlich Architekturabschnitt 12, Abschnitt-9-Audit,
+  kombinierter Last, Faults, Security, Migration und vollständigem Backup/Restore.
+- Git: lokaler WP-28-Paketcommit folgt; kein weiterer Push, Merge oder Deployment.
 
 ## WP-29 – Foundation-Freigabegate
 

@@ -112,6 +112,17 @@ For backups stop the entire container, not only the worker: API commands and
 telemetry can still write SQLite. Follow `DATABASE_BACKUP.md` and
 `RENDER_CACHE.md` for the complete matching volume set.
 
+## Operations diagnostics (WP-28)
+
+The authenticated `/operations` page and `/api/operations/metrics` expose bounded,
+read-only diagnostics. Missing worker/Redis samples remain unknown rather than
+zero. `/live` checks the API process; `/ready` distinguishes SQLite readiness
+from degraded background work. Worker probes stay on container loopback port 3001.
+See [observability operations](../architecture/OBSERVABILITY_OPERATIONS.md) for
+metric names, sample freshness, correlation, log rotation and test reproduction.
+The 30-second queue-age warning is a diagnostic threshold, not a capacity promise;
+combined load and recovery limits must be established by WP-29.
+
 ## Repeat the process checks
 
 After building a local `inker:wp25-test` image, run from `backend/`:

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, OnModuleDestroy } from '@nestjs/common
 import { Subject, Observable, filter } from 'rxjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { intentCorrelationId } from './outbox-correlation';
 
 export type DeviceEventType =
   | 'screen:updated'
@@ -246,7 +247,7 @@ export class EventsService implements OnModuleDestroy {
       create: { aggregateType, aggregateId, revision: 1 }, update: { revision: { increment: 1 } },
     });
     const occurredAt = new Date(event.payload.timestamp);
-    await tx.outboxEvent.create({ data: { eventType: event.type, aggregateType, aggregateId,
+    await tx.outboxEvent.create({ data: { correlationId: intentCorrelationId(), eventType: event.type, aggregateType, aggregateId,
       aggregateRevision: String(aggregate.revision), payloadVersion: 1,
       payload: event.payload as Prisma.InputJsonValue, occurredAt, availableAt: occurredAt } });
   }

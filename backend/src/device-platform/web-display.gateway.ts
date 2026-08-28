@@ -3,6 +3,8 @@ import { BeforeApplicationShutdown, Injectable, Logger, OnApplicationBootstrap, 
 import { IncomingMessage, Server as HttpServer } from 'http';
 import { Socket } from 'net';
 import { randomBytes } from 'node:crypto';
+import { emitStructuredEvent } from '../observability/runtime-observability';
+import { currentCorrelation, type CorrelationContext } from '../observability/correlation-context';
 import { RawData, WebSocket, WebSocketServer } from 'ws';
 import { DEVICE_WEBSOCKET_LIMITS as LIMITS, comparePresentationRevisions, parseDeviceClientMessage, parseDeviceServerMessage, type DeviceClientMessage, type DeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import { PresentationService } from './presentation.service';
@@ -233,9 +235,10 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
       state.session = session;
       clients.add(state); this.connections.set(session.device.id, clients);
       this.counters.authenticated++;
+      emitStructuredEvent('DEVICE_CONNECTED', { role: 'api', deviceId: session.device.id });
       state.nextPing = Date.now() + LIMITS.heartbeatIntervalMs;
       state.nextCheck = Date.now() + LIMITS.credentialCheckIntervalMs;
-      this.telemetry.observe(session.device, session.telemetryIntervalSeconds, message.viewport);
+      this.telemetry.observe(session.device, session.telemetryIntervalSeconds, message.viewport, true);
       this.send(state, { protocolVersion: '1.0', type: 'connected', deviceId: session.device.id,
         heartbeatInterval: LIMITS.heartbeatIntervalMs, pongTimeout: LIMITS.pongTimeoutMs, telemetryInterval: session.telemetryIntervalSeconds * 1000 });
       await this.pushPresentation(session.device.id);
@@ -318,7 +321,11 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
       if (!parsed.success) throw new Error();
       const payload = JSON.stringify(parsed.data);
       if (Buffer.byteLength(payload) > LIMITS.maxMessageBytes || state.client.bufferedAmount > LIMITS.maxBufferedBytes) throw new Error();
-      state.client.send(payload, error => { if (error) this.fail(state); });
+      const correlation = currentCorrelation();
+      state.client.send(payload, error => {
+        if (error) this.fail(state);
+        else this.sent(state, message, correlation);
+      });
     } catch { this.fail(state); }
   }
 
@@ -331,9 +338,20 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
         if (!parsed.success) throw new Error();
         const payload = JSON.stringify(parsed.data);
         if (Buffer.byteLength(payload) > LIMITS.maxMessageBytes || state.client.bufferedAmount > LIMITS.maxBufferedBytes) throw new Error();
-        state.client.send(payload, error => error ? fail() : resolve());
+        const correlation = currentCorrelation();
+        state.client.send(payload, error => {
+          if (error) fail();
+          else { this.sent(state, message, correlation); resolve(); }
+        });
       } catch { fail(); }
     });
+  }
+
+  /** A confirmed server send is not a display acknowledgement. */
+  private sent(state: Connection, message: DeviceServerMessage, correlation?: CorrelationContext) {
+    if (state.session && (message.type === 'presentation.changed' || message.type === 'timers.changed')) {
+      emitStructuredEvent('DEVICE_DELIVERED', { ...correlation, role: 'api', deviceId: state.session.device.id });
+    }
   }
 
   private fail(state: Connection) {
@@ -355,6 +373,7 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
     state.operations.clear();
     const deviceId = state.session?.device.id;
     if (deviceId !== undefined) {
+      emitStructuredEvent('DEVICE_DISCONNECTED', { role: 'api', deviceId });
       const clients = this.connections.get(deviceId); clients?.delete(state);
       if (!clients?.size) {
         this.connections.delete(deviceId);

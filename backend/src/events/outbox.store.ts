@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { OutboxEvent, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { outboxCorrelation } from './outbox-correlation';
 import {
   OUTBOX_POLICY as POLICY,
   parseOutboxEvent,
@@ -91,7 +92,7 @@ export class OutboxStore {
           claimUntil: null,
           lastError: JSON.stringify({
             code: 'OUTBOX_ATTEMPTS_EXHAUSTED',
-            correlationId: row.eventId,
+            ...outboxCorrelation(row),
           }),
         },
       });
@@ -167,7 +168,7 @@ export class OutboxStore {
         claimToken: null,
         claimOwner: null,
         claimUntil: null,
-        lastError: JSON.stringify({ code, correlationId: event.eventId }),
+        lastError: JSON.stringify({ code, ...outboxCorrelation(event) }),
       },
     });
     return result.count === 1;

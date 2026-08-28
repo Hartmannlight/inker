@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { transitionTimer, type TimerAnchor, type TimerAction } from './timer-domain';
 import { TIMER_CHANGED, type TIMER_REASONS } from './timer.events';
 import { scheduleTimer } from './timer-scheduling';
+import { intentCorrelationId } from '../events/outbox-correlation';
 
 type Tx = Prisma.TransactionClient;
 type DevicePrincipal = Pick<CommandPrincipal, 'deviceId' | 'externalId'>;
@@ -58,8 +59,9 @@ export class TimerService {
     }
   }
   private async changed(tx: Tx, row: Timer, reason: typeof TIMER_REASONS[number]) {
-    await scheduleTimer(tx, row);
-    await tx.outboxEvent.create({ data: { eventType: TIMER_CHANGED, aggregateType: 'Timer', aggregateId: row.timerId,
+    const correlationId = intentCorrelationId();
+    await scheduleTimer(tx, row, false, correlationId);
+    await tx.outboxEvent.create({ data: { correlationId, eventType: TIMER_CHANGED, aggregateType: 'Timer', aggregateId: row.timerId,
       aggregateRevision: String(row.version), payloadVersion: 1, payload: { timerId: row.timerId, version: row.version, reason },
       occurredAt: row.evaluatedAt, availableAt: row.evaluatedAt } });
   }

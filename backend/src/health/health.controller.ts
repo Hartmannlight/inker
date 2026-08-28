@@ -22,6 +22,9 @@ export class HealthController {
     private redis: OutboxRedisService,
   ) {}
 
+  @Get('live')
+  live() { return { status: 'alive', role: 'api' }; }
+
   @Get('health')
   @HealthCheck()
   @ApiOperation({ summary: 'Get application health status' })

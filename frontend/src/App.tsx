@@ -29,6 +29,7 @@ import { PluginLibrary, InstalledPlugins, PluginCreator, PluginInstanceForm, OAu
 import { GrafanaGeneratorPage } from './components/plugins/GrafanaGeneratorModal';
 import { WebDisplay } from './pages/display/WebDisplay';
 import { Remotes } from './pages/remotes/Remotes';
+import { Operations } from './pages/operations/Operations';
 
 /**
  * Main App component with routing
@@ -177,6 +178,7 @@ function App() {
 
             {/* Settings */}
             <Route path="/remotes" element={<ProtectedRoute><Remotes /></ProtectedRoute>} />
+            <Route path="/operations" element={<ProtectedRoute><Operations /></ProtectedRoute>} />
             <Route
               path="/settings"
               element={

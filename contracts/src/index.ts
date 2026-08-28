@@ -110,3 +110,4 @@ export {
   type RemoteSubscriptionStatus,
   type RemoteSubscriptionView,
 } from './remote-subscription';
+export * from './observability';

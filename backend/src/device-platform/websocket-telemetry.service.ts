@@ -7,6 +7,7 @@ interface BufferedTelemetry {
   interval: number;
   nextWrite: number;
   seenAt: number;
+  connectedAt?: number;
   sample?: DeviceTelemetry;
   persisted?: string;
   pending?: Promise<void>;
@@ -27,7 +28,7 @@ export class WebSocketTelemetryService implements OnModuleInit, OnModuleDestroy 
 
   onModuleInit() { this.timer = setInterval(() => this.flush(), 1000); this.timer.unref?.(); }
 
-  observe(device: ObservedDevice, intervalSeconds: number, sample?: DeviceTelemetry): void {
+  observe(device: ObservedDevice, intervalSeconds: number, sample?: DeviceTelemetry, connected = false): void {
     if (this.closing) return;
     const now = Date.now();
     const interval = Math.max(LIMITS.minTelemetryIntervalSeconds, intervalSeconds) * 1000;
@@ -47,6 +48,12 @@ export class WebSocketTelemetryService implements OnModuleInit, OnModuleDestroy 
     entry.interval = interval;
     entry.seenAt = now;
     entry.released = false;
+    if (connected) {
+      entry.connectedAt = now;
+      // A new connection gets one attempt at the existing write boundary even
+      // if it closes first. It never resets the cooldown or an in-flight write.
+      entry.attempted = false;
+    }
     if (sample) entry.sample = { ...entry.sample, ...sample };
   }
 
@@ -66,6 +73,8 @@ export class WebSocketTelemetryService implements OnModuleInit, OnModuleDestroy 
       const cutoff = new Date(now - entry.interval);
       const serialized = entry.sample ? JSON.stringify(entry.sample) : undefined;
       const sample = serialized !== entry.persisted ? entry.sample : undefined;
+      const connectedAt = entry.connectedAt;
+      const seenAt = entry.seenAt;
       entry.nextWrite = now + entry.interval; // Failed attempts are throttled too.
       entry.attempted = true;
       entry.pending = Promise.resolve().then(async () => {
@@ -74,9 +83,15 @@ export class WebSocketTelemetryService implements OnModuleInit, OnModuleDestroy 
           // lastSeenAt is a sampled presence timestamp, not an exact disconnect
           // time. Persist the flush boundary so reconnect/restart cannot shorten
           // the write interval; precise liveness belongs to the gateway.
-          data: { lastSeenAt: new Date(now), ...(sample ? { telemetry: { websocket: { ...sample }, updatedAt: new Date(entry.seenAt).toISOString() } } : {}) },
+          data: { lastSeenAt: new Date(now), ...(connectedAt !== undefined ? { lastConnectedAt: new Date(connectedAt) } : {}),
+            ...(sample ? { telemetry: { websocket: { ...sample }, updatedAt: new Date(seenAt).toISOString() } } : {}) },
         });
-        if (result.count) { this.writes += result.count; if (sample) entry.persisted = serialized; }
+        if (result.count) {
+          this.writes += result.count;
+          if (sample) entry.persisted = serialized;
+          // Reconnect may have buffered a newer time while this write awaited I/O.
+          if (entry.connectedAt === connectedAt) entry.connectedAt = undefined;
+        }
       }).catch(() => {
         this.failures++;
         this.logger.warn('Device telemetry write failed');

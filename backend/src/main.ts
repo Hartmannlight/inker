@@ -6,17 +6,16 @@ import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const compression = require('compression');
-import { WinstonModule } from 'nest-winston';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
-import { createLoggerConfig } from './config/logger.config';
+import { createSafeLogger, logStartupFailure } from './config/logger.config';
+import { observeRequest } from './observability/runtime-observability';
 import {
   DEFAULT_INSTANCE_SECRET_PATH,
   loadInstanceSecrets,
   validateAdminPin,
 } from './config/instance-secrets';
-import { redactSecretText } from './config/secret-redaction';
 import { resolve } from 'node:path';
 import { ApiDeliveryLifecycle } from './device-platform/api-delivery.module';
 import { OutboxRedisService } from './events/outbox-redis.service';
@@ -28,11 +27,12 @@ async function bootstrap() {
   ));
 
   // Create logger instance
-  const logger = WinstonModule.createLogger(createLoggerConfig());
+  const logger = createSafeLogger('api');
 
   const app = await NestFactory.create(AppModule, {
     logger,
   });
+  app.use(observeRequest);
 
   // Get config service
   const configService = app.get(ConfigService);
@@ -80,7 +80,7 @@ async function bootstrap() {
 
   // Global prefix - exclude /api routes since they're for device communication
   app.setGlobalPrefix('api', {
-    exclude: ['health', 'ready', 'api/display', 'api/setup', 'api/setup/', 'api/log', 'api/device-images/design/:id', 'api/device-images/device/:id', 'api/device-images/screen/:id'],
+    exclude: ['live', 'health', 'ready', 'api/display', 'api/setup', 'api/setup/', 'api/log', 'api/device-images/design/:id', 'api/device-images/device/:id', 'api/device-images/screen/:id'],
   });
 
   // Global pipes
@@ -146,7 +146,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Failed to start application: ${redactSecretText(message)}`);
+  logStartupFailure('api', error);
   process.exit(1);
 });
