@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useCallback } from 'react';
+import { type ReactNode, useEffect, useCallback, useId } from 'react';
 
 interface ModalProps {
   isOpen: boolean;
@@ -25,6 +25,7 @@ export function Modal({
   closeOnBackdrop = true,
   showCloseButton = true,
 }: ModalProps) {
+  const titleId = useId();
   // Close modal on Escape key
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
@@ -80,6 +81,9 @@ export function Modal({
       {/* Modal container */}
       <div className="flex min-h-full items-center justify-center p-4">
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
           className={`
             relative bg-bg-card rounded-2xl shadow-theme-xl
             ${sizeClasses[size]} w-full
@@ -90,9 +94,10 @@ export function Modal({
         >
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-5 border-b border-border-light">
-            <h3 className="text-xl font-bold text-text-primary">{title}</h3>
+            <h3 id={titleId} className="text-xl font-bold text-text-primary">{title}</h3>
             {showCloseButton && (
               <button
+                aria-label={`Close ${title}`}
                 onClick={onClose}
                 className="
                   p-2 rounded-xl text-text-muted

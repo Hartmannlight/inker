@@ -68,13 +68,13 @@ export class DevicesService {
         capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
         configuration: {},
         telemetry: {},
+        battery: null,
+        wifi: null,
         profileId: resolved.profile.profileId,
         capabilitiesOverride: resolved.capabilitiesOverride as unknown as Prisma.InputJsonValue ?? undefined,
         deliveryPolicyId: resolved.deliveryPolicy.policyId,
         macAddress: createDeviceDto.macAddress ?? null,
         apiKey: registration.apiKey,
-        pairingTokenHash: registration.pairingTokenHash,
-        pairingExpiresAt: registration.pairingExpiresAt,
         playlistId: createDeviceDto.playlistId,
         width,
         height,
@@ -99,15 +99,7 @@ export class DevicesService {
 
     this.logger.log(`Device created: ${device.name} (${adapter.adapterId})`);
 
-    return serializeDevice({
-      ...device,
-      ...(registration.bootstrap?.pairingToken && registration.externalId
-        ? {
-            pairingToken: registration.bootstrap.pairingToken,
-            displayUrl: `/display/${registration.externalId}?pair=${encodeURIComponent(registration.bootstrap.pairingToken)}`,
-          }
-        : {}),
-    });
+    return serializeDevice(device);
   }
 
   /**
@@ -161,6 +153,19 @@ export class DevicesService {
                 order: 'asc',
               },
             },
+          },
+        },
+        publicationState: {
+          select: {
+            desiredPublicationRevisionId: true,
+            desiredSequence: true,
+          },
+        },
+        playbackState: {
+          select: {
+            version: true,
+            status: true,
+            playlistRevisionId: true,
           },
         },
       },
@@ -446,36 +451,6 @@ export class DevicesService {
     return {
       deviceId: updatedDevice.id,
       apiKey: updatedDevice.apiKey,
-    };
-  }
-
-  /** Issue a new short-lived one-time pairing link for a web display. */
-  async regeneratePairingToken(id: number) {
-    const device = await this.prisma.device.findUnique({ where: { id } });
-    if (!device) throw new NotFoundException('Device not found');
-    const configuration = await this.profileResolver.resolveForCreate({
-      profileId: device.profileId,
-      deliveryPolicyId: device.deliveryPolicyId,
-      capabilitiesOverride: device.capabilitiesOverride,
-    });
-    const adapter = this.adapterFor(configuration);
-    if (!adapter.rotateBootstrap || !device.externalId) {
-      throw new BadRequestException('Pairing links are only available for web displays');
-    }
-
-    const registration = adapter.rotateBootstrap(device);
-    await this.prisma.device.update({
-      where: { id },
-      data: {
-        pairingTokenHash: registration.pairingTokenHash,
-        pairingExpiresAt: registration.pairingExpiresAt,
-      },
-    });
-
-    return {
-      deviceId: id,
-      pairingExpiresAt: registration.pairingExpiresAt,
-      displayUrl: `/display/${device.externalId}?pair=${encodeURIComponent(registration.bootstrap!.pairingToken)}`,
     };
   }
 

@@ -10,13 +10,14 @@ module.exports = [
     languageOptions: {
       parser: tsParser,
       parserOptions: {
-        project: './tsconfig.json',
+        project: './tsconfig.eslint.json',
         tsconfigRootDir: __dirname,
         sourceType: 'module',
       },
       globals: {
         ...globals.node,
         ...globals.jest,
+        Bun: 'readonly',
       },
     },
     plugins: {
@@ -36,6 +37,9 @@ module.exports = [
         },
       ],
       'no-unused-vars': 'off',
+      // TypeScript resolves namespaces such as NodeJS; ESLint has no runtime
+      // binding for them and must not treat type-only names as globals.
+      'no-undef': 'off',
     },
   },
   {
@@ -44,6 +48,12 @@ module.exports = [
       globals: { Bun: 'readonly' },
       parserOptions: { project: './test/tsconfig.playback.json' },
     },
+  },
+  {
+    // This legacy, explicitly unsupported self-update helper still uses dynamic
+    // CommonJS loading. Keep the rule enabled elsewhere while it is retired.
+    files: ['src/dashboard/dashboard.service.ts'],
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.js'],

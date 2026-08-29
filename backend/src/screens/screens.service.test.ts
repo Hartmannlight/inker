@@ -44,7 +44,7 @@ describe('ScreensService', () => {
 
   describe('create()', () => {
     it('should create a screen and return it', async () => {
-      const dto = { name: 'Test Screen', description: 'desc', width: 800, height: 480 };
+      const dto = { name: 'Test Screen', description: 'desc', imageUrl: 'https://example.com/screen.png', width: 800, height: 480 };
       const created = { ...screenFixture(), ...dto };
       mockPrisma.screen.create.mockResolvedValue(created);
 

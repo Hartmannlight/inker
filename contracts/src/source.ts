@@ -96,8 +96,6 @@ function validateSourceDefinition(
       addIssue(context, 'error', 'invalid_json_object', `${path}.secretReferences`, 'Secret references must be a JSON object.');
     } else {
       for (const [name, reference] of Object.entries(references)) {
-        // Do not include a submitted key/value in diagnostics: a caller may
-        // accidentally submit a credential where an opaque ID is required.
         validateIdentifier(name, context, `${path}.secretReferences`);
         validateIdentifier(reference, context, `${path}.secretReferences`);
       }

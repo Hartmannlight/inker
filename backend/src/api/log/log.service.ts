@@ -85,6 +85,15 @@ export class LogService {
         updates.wifi = createLogDto.metadata.wifi;
       }
 
+      if (createLogDto.metadata.battery !== undefined || createLogDto.metadata.wifi !== undefined) {
+        const existing = device.telemetry && typeof device.telemetry === 'object' ? device.telemetry as Record<string, unknown> : {};
+        const previous = existing.legacyPull && typeof existing.legacyPull === 'object' ? existing.legacyPull as Record<string, unknown> : {};
+        updates.telemetry = { ...existing, legacyPull: { ...previous,
+          ...(createLogDto.metadata.battery !== undefined ? { batteryPercent: createLogDto.metadata.battery } : {}),
+          ...(createLogDto.metadata.wifi !== undefined ? { rssi: createLogDto.metadata.wifi } : {}),
+        }, updatedAt: new Date().toISOString() };
+      }
+
       if (Object.keys(updates).length > 0) {
         await this.prisma.device.update({
           where: { id: device.id },

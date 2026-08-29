@@ -7,12 +7,15 @@ Abnahmeprotokoll: ausgeführte Prüfungen und Messergebnisse stehen beim Paket i
 
 ## Geltungsbereich und Prozessgrenze
 
-Es gibt ausschließlich die eingebauten Testconnectoren `fixture`, `slow` und
-`failure`. Sie führen keine Netzwerk-, Dateisystem- oder Providerzugriffe aus.
-Mail, Home Assistant, Grafana und andere produktive Connectoren sind nicht
-implementiert. Ein URL-Feld oder ein Legacy-Plugin aktiviert keinen Provider.
-Unbekannter beziehungsweise nicht abbrechbarer Erweiterungscode benötigt die
-separate Isolationsgrenze aus WP-22 und ADR-010.
+Die eingebauten Testconnectoren `fixture`, `slow` und `failure` führen keine
+Netzwerk-, Dateisystem- oder Providerzugriffe aus. Zusätzlich ist der
+registrierte `grafana`-Connector als Beta verfügbar: ausschließlich der
+Source-Worker verwendet sein write-only verschlüsseltes Viewer-Token für
+begrenzte Grafana-API- und Render-Anfragen. Mail, Home Assistant und andere
+produktive Connectoren sind nicht implementiert. Ein URL-Feld oder ein
+Legacy-Plugin aktiviert keinen Provider. Unbekannter beziehungsweise nicht
+abbrechbarer Erweiterungscode benötigt die separate Isolationsgrenze aus WP-22
+und ADR-010.
 
 Die API nimmt Konfiguration und Secrets entgegen, liest persistierte Daten und
 schreibt Refresh-Absichten gemeinsam mit Outbox-Metadaten in SQLite. Nur der
@@ -126,6 +129,7 @@ unzulässig; eine öffentliche Definition nicht unverändert als Command senden.
 | `fixture` | `{ "data": <JSON> }` | Validierte Kopie der Daten, `connectorVersion: "builtin-fixture-v1"`. |
 | `slow` | `{ "data": <JSON>, "delayMs": 2000 }` | Abbrechbare Wartezeit, dann Daten; `delayMs` ganzzahlig 0–60.000, ohne Angabe 60.000. |
 | `failure` | `{ "data": <JSON>, "failuresBeforeSuccess": 2 }` | Versuche 1–2 schlagen fehl, danach Erfolg; ohne Feld dauerhafter Testfehler. |
+| `grafana` (Beta) | `{ "baseUrl", "operation", "dashboardUid?", "panelId?", "width?", "height?", "allowLocalNetwork" }` | Worker-only Dashboard-/Panel-Metadaten oder ein validiertes PNG/JPEG-Panel. Der Viewer-Token wird ausschließlich über das write-only Commandfeld `secret` verschlüsselt gespeichert. |
 
 `failuresBeforeSuccess` erlaubt ganze Zahlen 0–100, aber ein einzelner
 Refresh-Auftrag hat höchstens fünf dauerhafte Versuche. Der Zähler bezieht sich

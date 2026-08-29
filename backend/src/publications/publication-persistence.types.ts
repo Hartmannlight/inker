@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 export const PUBLICATION_EVENT_TYPES = {
   revisionCreated: "publication.revision.created",
   desiredRevisionChanged: "device.publication.desired-revision.changed",
+  desiredRevisionCleared: "device.publication.desired-revision.cleared",
   revisionAcknowledged: "device.publication.revision.acknowledged",
 } as const;
 

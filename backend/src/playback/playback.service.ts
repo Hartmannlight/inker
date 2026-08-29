@@ -9,6 +9,7 @@ import { Prisma, type OutboxEvent, type PlaybackState } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { intentCorrelationId } from '../events/outbox-correlation';
 import { PublicationPersistenceService } from "../publications/publication-persistence.service";
+import { PublishService } from "../publications/publish.service";
 import {
   canonicalJson,
   publicationArtifacts,
@@ -72,6 +73,7 @@ export class PlaybackService {
     private readonly prisma: PrismaService,
     private readonly publications: PublicationPersistenceService,
     private readonly clock: PlaybackClock,
+    private readonly publisher: PublishService,
   ) {}
 
   /** Read-only, explicit projection; no draft names, URLs, settings or secrets. */
@@ -123,58 +125,86 @@ export class PlaybackService {
       .sort((a, b) => a.itemId - b.itemId);
     if (new Set(bindings.map((b) => b.itemId)).size !== bindings.length)
       throw new BadRequestException("Duplicate publication binding");
+    const expectedDraftHash = input.expectedDraftHash as string;
     return this.command(
       { kind: "publish", playlistId, ...input, bindings },
-      async (tx) => {
-        const draft = await this.draft(playlistId, tx);
-        if (draft.draftHash !== input.expectedDraftHash)
-          throw new ConflictException("Playlist draft changed");
-        const latest = await tx.publishedPlaylist.findFirst({
-          where: { playlistId },
-          orderBy: { revision: "desc" },
-        });
-        if ((latest?.revision ?? 0) !== input.expectedRevision)
-          throw new ConflictException("Playlist publication revision conflict");
-        if (
-          bindings.length !== draft.items.length ||
-          draft.items.some((i) => !bindings.some((b) => b.itemId === i.itemId))
-        )
-          throw new BadRequestException(
-            "Every playlist item requires an explicit publication revision",
-          );
-        const entries = draft.items.map((i) => ({
-          itemId: i.itemId,
-          durationMs: i.duration === null ? null : i.duration * 1000,
-          publicationRevisionId: bindings.find((b) => b.itemId === i.itemId)!
-            .publicationRevisionId,
-        }));
-        try {
-          validateEntries(entries);
-        } catch {
-          throw new BadRequestException(
-            "Playlist duration must be null or 1..86400 seconds",
-          );
-        }
-        await this.requirePublications(tx, entries);
-        const contentHash = sha256(canonicalJson(entries));
-        const published = await tx.publishedPlaylist.create({
-          data: {
-            playlistId,
-            revision: Number(input.expectedRevision) + 1,
-            contentHash,
-            publishedAt: new Date(this.clock.now()),
-            entries: {
-              create: entries.map((e, ordinal) => ({ ...e, ordinal })),
-            },
-          },
-        });
-        return {
-          playlistRevisionId: published.id,
-          revision: published.revision,
-          contentHash,
-        };
-      },
+      (tx) => this.publishPlaylistInTransaction(tx, playlistId, Number(input.expectedRevision), expectedDraftHash, bindings),
     );
+  }
+
+  /** Publish every uploaded screen draft to an explicit immutable revision,
+   * then publish the playlist binding. Failed publication never starts or
+   * changes playback, so the last desired image remains in place. */
+  async publishFromDraft(playlistId: number, body: unknown) {
+    const input = object(body, ["version", "idempotencyKey", "expectedDraftHash"]);
+    this.validateCommandIdentity(input);
+    if (!positive(playlistId) || typeof input.expectedDraftHash !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedDraftHash))
+      throw new BadRequestException("Invalid playlist draft publication command");
+    const expectedDraftHash = input.expectedDraftHash;
+    const keyHash = sha256(input.idempotencyKey.toLowerCase());
+    const requestHash = sha256(canonicalJson({ playlistId, expectedDraftHash }));
+    const replay = (receipt: { requestHash: string; result: Prisma.JsonValue | null }) => {
+      if (receipt.requestHash !== requestHash) throw new ConflictException("Playlist draft publication idempotency key conflict");
+      if (!receipt.result) throw new ServiceUnavailableException("Playlist draft publication incomplete; retry the same command");
+      return receipt.result;
+    };
+    // Replay precedes any draft lookup: a successful operation stays replayable
+    // even when the administrator subsequently edits or deletes the draft.
+    const previous = await this.prisma.playlistDraftPublishCommand.findUnique({ where: { keyHash } });
+    if (previous) return replay(previous);
+    const draft = await this.draft(playlistId);
+    if (draft.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
+    if (!draft.items.length || draft.items.some(item => !item.screenId || item.screenDesignId || item.pluginInstanceId))
+      throw new BadRequestException('Only uploaded-screen playlist items can be published from this picker');
+    const prepared = await Promise.all(draft.items.map(async item => {
+      const screen = await this.prisma.screen.findUnique({ where: { id: item.screenId! }, select: { updatedAt: true } });
+      if (!screen) throw new NotFoundException('Playlist screen not found');
+      return { item, expectedUpdatedAt: screen.updatedAt.toISOString(), prepared: await this.publisher.snapshotDraft({ screenId: item.screenId!, expectedUpdatedAt: screen.updatedAt.toISOString() }) };
+    }));
+    try {
+      return await sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
+        await tx.$executeRaw`INSERT INTO playlist_draft_publish_commands (key_hash, request_hash) VALUES (${keyHash}, ${requestHash}) ON CONFLICT (key_hash) DO NOTHING`;
+        const receipt = await tx.playlistDraftPublishCommand.findUniqueOrThrow({ where: { keyHash } });
+        if (receipt.result || receipt.requestHash !== requestHash) return replay(receipt);
+        const current = await this.draft(playlistId, tx);
+        if (current.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
+        const bindings = await Promise.all(prepared.map(async ({ item, expectedUpdatedAt, prepared }) => ({
+          itemId: item.itemId,
+          publicationRevisionId: (await this.publisher.publishUploadedScreenInTransaction(tx, item.screenId!, expectedUpdatedAt, prepared)).publicationRevisionId,
+        })));
+        const latest = await tx.publishedPlaylist.findFirst({ where: { playlistId }, orderBy: { revision: 'desc' } });
+        const result = await this.publishPlaylistInTransaction(tx, playlistId, latest?.revision ?? 0, current.draftHash, bindings);
+        await tx.playlistDraftPublishCommand.update({ where: { keyHash }, data: { result } });
+        return result;
+      }, { timeout: 10_000 }), 'Playlist publication busy; retry the same command');
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && ["P1008", "P2028", "P2034"].includes(error.code))
+        throw new ServiceUnavailableException("Playlist publication busy; retry the same command");
+      throw error;
+    }
+  }
+
+  private async publishPlaylistInTransaction(
+    tx: Tx,
+    playlistId: number,
+    expectedRevision: number,
+    expectedDraftHash: string,
+    bindings: { itemId: number; publicationRevisionId: string }[],
+  ) {
+    const draft = await this.draft(playlistId, tx);
+    if (draft.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
+    const latest = await tx.publishedPlaylist.findFirst({ where: { playlistId }, orderBy: { revision: "desc" } });
+    if ((latest?.revision ?? 0) !== expectedRevision) throw new ConflictException("Playlist publication revision conflict");
+    if (bindings.length !== draft.items.length || draft.items.some((i) => !bindings.some((b) => b.itemId === i.itemId)))
+      throw new BadRequestException("Every playlist item requires an explicit publication revision");
+    const entries = draft.items.map((i) => ({ itemId: i.itemId, durationMs: i.duration === null ? null : i.duration * 1000,
+      publicationRevisionId: bindings.find((b) => b.itemId === i.itemId)!.publicationRevisionId }));
+    try { validateEntries(entries); } catch { throw new BadRequestException("Playlist duration must be null or 1..86400 seconds"); }
+    await this.requirePublications(tx, entries);
+    const contentHash = sha256(canonicalJson(entries));
+    const published = await tx.publishedPlaylist.create({ data: { playlistId, revision: expectedRevision + 1, contentHash,
+      publishedAt: new Date(this.clock.now()), entries: { create: entries.map((e, ordinal) => ({ ...e, ordinal })) } } });
+    return { playlistRevisionId: published.id, revision: published.revision, contentHash };
   }
 
   async execute(deviceId: number, body: unknown) {

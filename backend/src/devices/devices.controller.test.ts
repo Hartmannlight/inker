@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll, mock } from 'bun:test';
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { DevicesController } from './devices.controller';
 import { DevicesService } from './devices.service';
+import { PresentationService } from '../device-platform/presentation.service';
+import { ContentAssignmentService } from './content-assignment.service';
 import { PinAuthGuard } from '../auth/guards/pin-auth.guard';
 import { TransformInterceptor } from '../common/interceptors/transform.interceptor';
 
@@ -38,12 +41,22 @@ describe('DevicesController (e2e)', () => {
     unassignPlaylist: async () => ({ message: 'Playlist unassigned successfully' }),
     getDisplayContent: async () => ({ deviceId: 1, screen: null }),
   };
+  const preview = mock(async () => ({ sha256: 'a'.repeat(64), mimeType: 'image/png', bytes: Buffer.from('preview') }));
+  const mockPresentations = { preview };
+  const assignContent = mock(async () => ({ kind: 'none', publicationRevisionId: null, playlistRevisionId: null }));
+  const readContent = mock(async () => ({
+    current: { desiredPublicationRevisionId: null, playbackVersion: 0, playlistRevisionId: null },
+    screens: [], playlists: [],
+  }));
+  const mockAssignments = { assign: assignContent, read: readContent };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [DevicesController],
       providers: [
         { provide: DevicesService, useValue: mockDevicesService },
+        { provide: PresentationService, useValue: mockPresentations },
+        { provide: ContentAssignmentService, useValue: mockAssignments },
       ],
     })
       .overrideGuard(PinAuthGuard)
@@ -82,6 +95,29 @@ describe('DevicesController (e2e)', () => {
     });
   });
 
+  describe('GET /devices/:id/preview', () => {
+    it('returns the authenticated immutable artifact with an ETag', async () => {
+      const response = await request(app.getHttpServer()).get('/devices/1/preview').expect(200);
+      expect(response.headers.etag).toBe(`"${'a'.repeat(64)}"`);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.body.toString()).toBe('preview');
+    });
+
+    it('honours a matching ETag without invoking a render path', async () => {
+      await request(app.getHttpServer())
+        .get('/devices/1/preview')
+        .set('If-None-Match', `W/"${'a'.repeat(64)}"`)
+        .expect(304);
+    });
+
+    it('reports no assigned preview without returning a device credential', async () => {
+      preview.mockRejectedValueOnce(new NotFoundException('No published device content'));
+      const response = await request(app.getHttpServer()).get('/devices/1/preview').expect(404);
+      expect(JSON.stringify(response.body)).not.toContain('apiKey');
+      expect(JSON.stringify(response.body)).not.toContain('credential');
+    });
+  });
+
   describe('POST /devices', () => {
     it('should create a new device', async () => {
       const response = await request(app.getHttpServer())
@@ -102,6 +138,24 @@ describe('DevicesController (e2e)', () => {
         .expect(200);
 
       expect(response.body.data).toHaveProperty('name', 'Updated Device');
+    });
+  });
+
+  describe('PUT /devices/:id/content-assignment', () => {
+    it('passes the complete optimistic command to the orchestrator', async () => {
+      const command = { version: 1, expectedDesiredRevisionId: null, expectedPlaybackVersion: 0, assignment: { kind: 'none' } };
+      await request(app.getHttpServer()).put('/devices/1/content-assignment')
+        .send(command)
+        .expect(200);
+      expect(assignContent).toHaveBeenCalledWith(1, command);
+    });
+  });
+
+  describe('GET /devices/:id/content-assignment', () => {
+    it('returns the current optimistic revision and content choices', async () => {
+      const response = await request(app.getHttpServer()).get('/devices/1/content-assignment').expect(200);
+      expect(response.body.data.current).toEqual({ desiredPublicationRevisionId: null, playbackVersion: 0, playlistRevisionId: null });
+      expect(readContent).toHaveBeenCalledWith(1);
     });
   });
 

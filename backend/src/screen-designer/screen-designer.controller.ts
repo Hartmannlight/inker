@@ -5,14 +5,17 @@ import {
   Put,
   Delete,
   Body,
+  Headers,
   Param,
   Query,
+  Res,
   ParseIntPipe,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Multer } from 'multer';
 import * as path from 'path';
@@ -53,6 +56,7 @@ import {
 import { ScreenDesignerService } from './screen-designer.service';
 import { WidgetTemplatesService } from './services/widget-templates.service';
 import { ScreenRendererService } from './services/screen-renderer.service';
+import { matchesIfNoneMatch } from '../device-platform/pull-content.controller';
 import {
   CreateScreenDesignDto,
   UpdateScreenDesignDto,
@@ -256,17 +260,25 @@ export class ScreenDesignerController {
   @ApiParam({ name: 'id', description: 'Screen design ID' })
   @ApiResponse({ status: 200, description: 'Preview thumbnail' })
   @ApiResponse({ status: 404, description: 'Screen design not found' })
-  async getPreview(@Param('id', ParseIntPipe) id: number) {
+  async getPreview(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('if-none-match') validator: string | undefined,
+    @Res() response: Response,
+  ) {
     // Verify design exists
     await this.screenDesignerService.getScreenDesign(id);
 
     // Then render preview
     const imageBuffer = await this.screenRendererService.renderPreview(id);
 
-    return {
-      contentType: 'image/png',
-      data: imageBuffer.toString('base64'),
-    };
+    const etag = `"${crypto.createHash('sha256').update(imageBuffer).digest('hex')}"`;
+    response.set({ ETag: etag, 'Cache-Control': 'private, no-cache' });
+    response.vary('Cookie');
+    if (matchesIfNoneMatch(validator, etag)) {
+      response.status(304).end();
+      return;
+    }
+    response.type('image/png').status(200).send(imageBuffer);
   }
 
   @Post(':id/refresh-devices')

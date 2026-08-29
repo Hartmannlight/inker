@@ -1,8 +1,7 @@
-import { Body, Controller, Get, Headers, Param, Post, Res, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Headers, Param, Res, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 import { matchesIfNoneMatch } from './pull-content.controller';
 import { Public } from '../common/decorators/public.decorator';
-import { PairWebDisplayDto } from './dto';
 import { PresentationService } from './presentation.service';
 import { WebDisplayAuthService } from './web-display-auth.service';
 
@@ -12,12 +11,6 @@ export class WebDisplaysController {
     private readonly auth: WebDisplayAuthService,
     private readonly presentations: PresentationService,
   ) {}
-
-  @Public()
-  @Post('pair')
-  pair(@Body() dto: PairWebDisplayDto) {
-    return this.auth.pair(dto.externalId, dto.pairingToken);
-  }
 
   @Public()
   @Get(':externalId/artifacts/:sha256')

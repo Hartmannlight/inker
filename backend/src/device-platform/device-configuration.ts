@@ -45,7 +45,7 @@ export interface ResolvedDeviceConfiguration {
 const OVERRIDE_KEYS = {
   display: new Set([
     'width', 'height', 'colorSpace', 'bitDepth', 'pixelDensityDpi', 'rotation',
-    'safeArea', 'scaling', 'renderFormats', 'mimeTypes', 'eInk',
+    'safeArea', 'scaling', 'backgroundColor', 'renderFormats', 'mimeTypes', 'eInk',
   ]),
   transport: new Set(['modes', 'conditionalGet', 'pushManifests', 'reconnect', 'heartbeat']),
   energy: new Set(['source', 'canSleep', 'telemetry', 'recommendedMinRefreshSeconds']),

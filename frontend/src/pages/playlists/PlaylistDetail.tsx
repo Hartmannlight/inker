@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { MainLayout } from '../../components/layout';
 import { Button, Card, Modal, Select } from '../../components/common';
 import { useApi, useMutation } from '../../hooks/useApi';
-import { playlistService, deviceService } from '../../services/api';
+import { playlistService, deviceService, screenService } from '../../services/api';
 import { config } from '../../config';
-import type { Playlist, Device } from '../../types';
+import type { Playlist, Device, Screen } from '../../types';
 
 /**
  * PlaylistDetail page component
@@ -18,6 +18,8 @@ export function PlaylistDetail() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showForceDeleteOption, setShowForceDeleteOption] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const publishKey = useRef<string | null>(null);
 
   const { data: playlist, isLoading, refetch } = useApi<Playlist>(
     () => playlistService.getById(id!)
@@ -50,6 +52,16 @@ export function PlaylistDetail() {
       onSuccess: () => refetch(),
     }
   );
+  const { data: screensData } = useApi<{ items: Screen[]; total: number }>(() => screenService.getAll(1, 100));
+
+  const { mutate: publishPlaylist, isLoading: isPublishing } = useMutation(
+    async () => {
+      if (!publishKey.current) publishKey.current = crypto.randomUUID();
+      const draft = await playlistService.getPlaybackDraft(id!);
+      return playlistService.publishFromDraft(id!, publishKey.current, draft.draftHash);
+    },
+    { successMessage: 'Playlist revision published for playback', onSuccess: () => { publishKey.current = null; refetch(); } },
+  );
 
   const hasDevices = playlist?.devices && playlist.devices.length > 0;
   const canDeactivate = !hasDevices;
@@ -75,6 +87,30 @@ export function PlaylistDetail() {
       },
     }
   );
+  const { mutate: addItem, isLoading: isAddingItem } = useMutation(
+    (screenId: string) => playlistService.addItem(id!, screenId),
+    { successMessage: 'Screen added to playlist', onSuccess: () => refetch() },
+  );
+  const { mutate: updateItem } = useMutation(
+    ({ itemId, data }: { itemId: number; data: { order?: number; duration?: number } }) => playlistService.updateItem(id!, itemId, data),
+    { successMessage: 'Playlist item saved', onSuccess: () => refetch() },
+  );
+  const { mutate: removeItem } = useMutation(
+    (itemId: number) => playlistService.removeItem(id!, itemId),
+    { successMessage: 'Screen removed from playlist', onSuccess: () => refetch() },
+  );
+  const { mutate: reorderItems } = useMutation(
+    (items: Array<{ id: number; order: number }>) => playlistService.reorderItems(id!, items),
+    { successMessage: 'Playlist order saved', onSuccess: () => refetch() },
+  );
+  const moveItem = (index: number, direction: -1 | 1) => {
+    if (!playlist) return;
+    const next = index + direction;
+    if (next < 0 || next >= playlist.screens.length) return;
+    const items = playlist.screens.map((screen, order) => ({ id: screen.itemId!, order }));
+    [items[index], items[next]] = [items[next], items[index]];
+    reorderItems(items.map((item, order) => ({ ...item, order })));
+  };
 
   if (isLoading) {
     return (
@@ -174,6 +210,9 @@ export function PlaylistDetail() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <Button onClick={() => publishPlaylist()} isLoading={isPublishing} disabled={!playlist.screens?.length}>
+              Publish for playback
+            </Button>
             <button
               onClick={() => navigate(`/playlists/${id}/edit`)}
               className="inline-flex items-center px-4 py-2 rounded-lg font-medium transition-all"
@@ -239,7 +278,7 @@ export function PlaylistDetail() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => navigate(`/playlists/${id}/edit`)}
+                  onClick={() => setShowAddModal(true)}
                   className="border-accent text-accent hover:bg-accent-light"
                 >
                   <span className="flex items-center gap-2">
@@ -263,7 +302,7 @@ export function PlaylistDetail() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => navigate(`/playlists/${id}/edit`)}
+                    onClick={() => setShowAddModal(true)}
                     className="border-accent text-accent hover:bg-accent-light"
                   >
                     Add Screens
@@ -317,6 +356,13 @@ export function PlaylistDetail() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
                       </div>
+                      {screen.itemId && <div className="flex gap-1" onClick={event => event.stopPropagation()}>
+                        <Button size="sm" variant="outline" aria-label={`Move ${screen.name} up`} disabled={index === 0} onClick={() => moveItem(index, -1)}>↑</Button>
+                        <Button size="sm" variant="outline" aria-label={`Move ${screen.name} down`} disabled={index === (playlist.screens.length - 1)} onClick={() => moveItem(index, 1)}>↓</Button>
+                        <label className="sr-only" htmlFor={`duration-${screen.itemId}`}>Duration for {screen.name}</label>
+                        <input id={`duration-${screen.itemId}`} className="w-16 rounded border px-1" type="number" min="1" defaultValue={screen.duration} onBlur={event => updateItem({ itemId: screen.itemId!, data: { duration: Math.max(1, Number(event.currentTarget.value) || 60) } })} />
+                        <Button size="sm" variant="outline" aria-label={`Remove ${screen.name}`} onClick={() => removeItem(screen.itemId!)}>Remove</Button>
+                      </div>}
                     </div>
                   ))}
                 </div>
@@ -464,6 +510,19 @@ export function PlaylistDetail() {
           </div>
         </div>
       </div>
+
+      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add screens">
+        <p className="mb-3 text-sm text-text-muted">Choose a screen to add it immediately. Existing entries stay visible and cannot be added twice.</p>
+        <div className="max-h-96 space-y-2 overflow-auto">
+          {(screensData?.items ?? []).map(screen => {
+            const alreadyAdded = playlist.screens.some(item => item.screenId === String(screen.id));
+            return <div key={screen.id} className="flex items-center justify-between gap-3 rounded border p-3">
+              <span><span className="block font-medium">{screen.name}</span><span className="block text-xs text-text-muted">{screen.width && screen.height ? `${screen.width}×${screen.height}` : 'Raster dimensions unavailable'}</span></span>
+              <Button size="sm" disabled={alreadyAdded || isAddingItem} aria-label={alreadyAdded ? `${screen.name} already added` : `Add ${screen.name}`} onClick={() => addItem(String(screen.id))}>{alreadyAdded ? 'Added' : 'Add'}</Button>
+            </div>;
+          })}
+        </div>
+      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal

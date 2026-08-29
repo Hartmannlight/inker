@@ -6,6 +6,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
+import * as sharpModule from 'sharp';
+import type sharpFactory from 'sharp';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { EncryptionService } from '../src/common/services/encryption.service';
 import { initializeInstanceSecrets } from '../src/config/instance-secrets';
@@ -15,9 +18,11 @@ import { SourceReadService, publicSnapshot } from '../src/sources/source-read.se
 import { SourceWorkerService } from '../src/sources/source-worker.service';
 import { SOURCE_LIMITS, SOURCE_REFRESH } from '../src/sources/source-job';
 import { canonicalJson, sha256 } from '../src/publications/publication-content';
+import { PublicationPersistenceService } from '../src/publications/publication-persistence.service';
 import { isolationDiagnostics } from '../src/isolation/isolated-executor';
 
 const root = resolve(import.meta.dir, '..');
+const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 const signal = () => new AbortController().signal;
 const command = (overrides: Record<string, unknown> = {}) => ({
   protocolVersion: '1.0', name: 'Isolated source fixture', connectorType: 'fixture', schemaVersion: '1',
@@ -37,6 +42,8 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
   let second: SourceWorkerService;
   let store: OutboxStore;
   let secondStore: OutboxStore;
+  let publications: PublicationPersistenceService;
+  let grafana: Server | undefined;
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), 'inker-sources-'));
@@ -64,11 +71,13 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     reads = new SourceReadService(prisma as PrismaService);
     store = new OutboxStore(prisma as PrismaService);
     secondStore = new OutboxStore(other as PrismaService);
-    worker = new SourceWorkerService(prisma as PrismaService, store);
-    second = new SourceWorkerService(other as PrismaService, secondStore);
+    publications = new PublicationPersistenceService(prisma as PrismaService);
+    worker = new SourceWorkerService(prisma as PrismaService, store, publications);
+    second = new SourceWorkerService(other as PrismaService, secondStore, new PublicationPersistenceService(other as PrismaService));
   }, 30_000);
 
   afterEach(async () => {
+    if (grafana) await new Promise<void>(resolve => grafana!.close(() => resolve()));
     if (previousSecretPath === undefined) delete process.env.INKER_INSTANCE_SECRET_PATH;
     else process.env.INKER_INSTANCE_SECRET_PATH = previousSecretPath;
     await Promise.all([prisma?.$disconnect(), other?.$disconnect()]);
@@ -106,9 +115,11 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     expect(encryption.decrypt(storedSecret.ciphertext) === secret).toBe(true);
     expect(storedSecret.ciphertext.includes(secret)).toBe(false);
     expect(storedSecret.ciphertext.startsWith('v1:')).toBe(true);
-    expect(created.definition.secretReferences).toEqual({ provider: storedSecret.id });
+    expect(created.definition.secretConfigured).toBe(true);
+    expect(created.definition.secretReferences).toEqual({});
     const publicValues = JSON.stringify([created, await reads.read(id), await reads.list()]);
     expect(publicValues.includes(secret)).toBe(false);
+    expect(publicValues).not.toContain(storedSecret.id);
     expect(publicValues.includes(storedSecret.ciphertext)).toBe(false);
     expect(publicValues).not.toContain('ciphertext');
     expect(await prisma.sourceRefreshJob.count()).toBe(1);
@@ -290,10 +301,69 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     expect(await prisma.sourceSnapshot.count()).toBe(2);
   }, 30_000);
 
+  test('unchanged Grafana pixels retain the pinned snapshot revision and do not create a second artifact', async () => {
+    const png = await sharp({ create: { width: 4, height: 2, channels: 3, background: 'black' } }).png().toBuffer();
+    grafana = createServer((request, response) => {
+      if (request.url?.startsWith('/api/dashboards/uid/test')) response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ panels: [{ id: 1, title: 'Panel', type: 'stat' }] }));
+      else if (request.url?.startsWith('/render/d-solo/test')) response.writeHead(200, { 'content-type': 'image/png' }).end(png);
+      else response.writeHead(404).end();
+    });
+    await new Promise<void>(resolve => grafana!.listen(0, '127.0.0.1', resolve));
+    const address = grafana.address(); if (!address || typeof address === 'string') throw new Error('Grafana test server unavailable');
+    const created = await sources.create(command({ connectorType: 'grafana', name: 'Grafana panel', secret: 'local-viewer-token',
+      configuration: { baseUrl: `http://127.0.0.1:${address.port}`, dashboardUid: 'test', panelId: 1, width: 4, height: 2, allowLocalNetwork: true }, refreshIntervalSeconds: 1 }));
+    const first = await claim(created.eventId);
+    expect(await worker.execute(first, signal())).toBe('completed'); expect(await store.ack(first)).toBe(true);
+    const source = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: created.definition.sourceDefinitionId } });
+    await worker.schedule(new Date(source.nextRefreshAt.getTime() + 1));
+    const secondEvent = await claim((await prisma.outboxEvent.findFirstOrThrow({ where: { status: 'pending' } })).eventId, new Date(source.nextRefreshAt.getTime() + 1));
+    expect(await worker.execute(secondEvent, signal())).toBe('completed'); expect(await store.ack(secondEvent)).toBe(true);
+    expect(await prisma.sourceSnapshot.count()).toBe(1);
+    expect((await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: created.definition.sourceDefinitionId } })).snapshotRevision).toBe(1);
+  }, 30_000);
+
+  test('changed Grafana pixels advance only assigned source-pinned publications and desired device output', async () => {
+    let png = await sharp({ create: { width: 4, height: 2, channels: 3, background: 'black' } }).png().toBuffer();
+    grafana = createServer((request, response) => {
+      if (request.url?.startsWith('/api/dashboards/uid/test')) response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ panels: [{ id: 1, title: 'Panel', type: 'stat' }] }));
+      else if (request.url?.startsWith('/render/d-solo/test')) response.writeHead(200, { 'content-type': 'image/png' }).end(png);
+      else response.writeHead(404).end();
+    });
+    await new Promise<void>(resolve => grafana!.listen(0, '127.0.0.1', resolve));
+    const address = grafana.address(); if (!address || typeof address === 'string') throw new Error('Grafana test server unavailable');
+    await prisma.deviceProfile.create({ data: { profileId: 'test-profile', protocolVersion: '1.0', label: 'Test', definition: {}, defaultCapabilities: {} } });
+    await prisma.deliveryPolicy.create({ data: { policyId: 'test-policy', protocolVersion: '1.0', mode: 'responsive-pull', definition: {} } });
+    const device = await prisma.device.create({ data: { name: 'Test device', externalId: 'source-publication-device', profileId: 'test-profile', deliveryPolicyId: 'test-policy' } });
+    const created = await sources.create(command({ connectorType: 'grafana', secret: 'local-viewer-token',
+      configuration: { baseUrl: `http://127.0.0.1:${address.port}`, dashboardUid: 'test', panelId: 1, width: 4, height: 2, allowLocalNetwork: true }, refreshIntervalSeconds: 1 }));
+    const first = await claim(created.eventId);
+    expect(await worker.execute(first, signal())).toBe('completed'); expect(await store.ack(first)).toBe(true);
+    const firstSnapshot = await prisma.sourceSnapshot.findFirstOrThrow({ where: { refreshEventId: first.eventId } });
+    const panel = (firstSnapshot.data as { grafanaPanel: { png: string; width: number; height: number } }).grafanaPanel;
+    const firstContent = { schemaVersion: 1 as const, image: { ...panel, sha256: sha256(Buffer.from(panel.png, 'base64')) },
+      sourceSnapshot: { sourceId: created.definition.sourceDefinitionId, snapshotId: firstSnapshot.snapshotId, revision: firstSnapshot.revision,
+        contentHash: firstSnapshot.contentHash, connectorVersion: firstSnapshot.connectorVersion } };
+    const initial = await publications.createPublication({ publicationKey: 'grafana-source-test', protocolVersion: '1.0',
+      content: firstContent, contentHash: sha256(canonicalJson(firstContent)) });
+    await publications.setDesiredRevision(device.id, initial.revision.publicationRevisionId);
+    png = await sharp({ create: { width: 4, height: 2, channels: 3, background: 'white' } }).png().toBuffer();
+    const source = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: created.definition.sourceDefinitionId } });
+    await worker.schedule(new Date(source.nextRefreshAt.getTime() + 1));
+    const secondEvent = await claim((await prisma.outboxEvent.findFirstOrThrow({ where: { status: 'pending', eventType: SOURCE_REFRESH } })).eventId,
+      new Date(source.nextRefreshAt.getTime() + 1));
+    expect(await worker.execute(secondEvent, signal())).toBe('completed'); expect(await store.ack(secondEvent)).toBe(true);
+    const revisions = await prisma.publicationRevision.findMany({ where: { publicationId: initial.publication.publicationId }, orderBy: { revision: 'asc' } });
+    expect(revisions).toHaveLength(2);
+    expect(revisions[1].contentHash).not.toBe(revisions[0].contentHash);
+    expect((await prisma.devicePublicationState.findUniqueOrThrow({ where: { deviceId: device.id } })).desiredPublicationRevisionId)
+      .toBe(revisions[1].publicationRevisionId);
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: device.id } })).presentationRevision).toBe(2);
+  }, 30_000);
+
   test('unavailable encrypted credentials fail closed without exposing the value or retrying the same job', async () => {
     const secret = `unavailable-${randomUUID()}`;
     const created = await sources.create(command({ secret }));
-    await prisma.sourceSecret.update({ where: { id: created.definition.secretReferences.provider }, data: { ciphertext: 'invalid-encrypted-format' } });
+    await prisma.sourceSecret.update({ where: { id: (await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: created.definition.sourceDefinitionId } })).secretId! }, data: { ciphertext: 'invalid-encrypted-format' } });
     const event = await claim(created.eventId);
     expect(await worker.execute(event, signal())).toBe('failed');
     const snapshot = await prisma.sourceSnapshot.findFirstOrThrow({ where: { refreshEventId: event.eventId } });
@@ -314,7 +384,7 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
   test.each(['disable', 'clear', 'rotate'])('WP-22 corrupt-secret recovery permits %s with unchanged public fields', async action => {
     const transformationCode = 'return $.value;';
     const created = await sources.create(command({ secret: 'original-' + randomUUID(), transformationCode, timeoutMs: 2500 }));
-    const id = created.definition.sourceDefinitionId, oldReference = created.definition.secretReferences.provider;
+    const id = created.definition.sourceDefinitionId, oldReference = (await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: created.definition.sourceDefinitionId } })).secretId!;
     await prisma.sourceSecret.update({ where: { id: oldReference }, data: { ciphertext: 'invalid-encrypted-format' } });
     const replacement = 'replacement-' + randomUUID();
     const recovery = action === 'disable' ? { enabled: false } : { secret: action === 'clear' ? null : replacement };
@@ -329,16 +399,18 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     if (action === 'disable') {
       expect(updated.enabled).toBe(false);
       expect(updated.eventId).toBeNull();
-      expect(updated.definition.secretReferences.provider).toBe(oldReference);
+      expect(updated.definition.secretConfigured).toBe(true);
       expect(await prisma.outboxEvent.count({ where: { aggregateId: id, status: 'pending' } })).toBe(0);
       expect(await prisma.sourceSecret.count()).toBe(1);
     } else {
       if (action === 'clear') {
-        expect(updated.definition.secretReferences).toEqual({});
+        expect(updated.definition.secretConfigured).toBe(false);
         expect(await prisma.sourceSecret.count()).toBe(1);
       } else {
-        expect(updated.definition.secretReferences.provider).not.toBe(oldReference);
-        const rotated = await prisma.sourceSecret.findUniqueOrThrow({ where: { id: updated.definition.secretReferences.provider! } });
+        expect(updated.definition.secretConfigured).toBe(true);
+        const rotatedId = (await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).secretId!;
+        expect(rotatedId).not.toBe(oldReference);
+        const rotated = await prisma.sourceSecret.findUniqueOrThrow({ where: { id: rotatedId } });
         expect(encryption.decrypt(rotated.ciphertext) === replacement).toBe(true);
         expect(await prisma.sourceSecret.count()).toBe(2);
       }
@@ -355,7 +427,7 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
   test('WP-22 corrupt-secret recovery rejects public changes and ordinary updates without writes', async () => {
     const created = await sources.create(command({ secret: 'original-' + randomUUID(), transformationCode: 'return $.value;' }));
     const id = created.definition.sourceDefinitionId;
-    await prisma.sourceSecret.update({ where: { id: created.definition.secretReferences.provider }, data: { ciphertext: 'invalid-encrypted-format' } });
+    await prisma.sourceSecret.update({ where: { id: (await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).secretId! }, data: { ciphertext: 'invalid-encrypted-format' } });
     const original = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } });
     const secrets = await prisma.sourceSecret.findMany(), events = await prisma.outboxEvent.findMany();
     const jobs = await prisma.sourceRefreshJob.findMany();
@@ -384,7 +456,7 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     const created = await sources.create(command({ secret: 'original-' + randomUUID(),
       transformationCode: 'return ' + JSON.stringify(replacement) + ';' }));
     const id = created.definition.sourceDefinitionId;
-    await prisma.sourceSecret.update({ where: { id: created.definition.secretReferences.provider }, data: { ciphertext: 'invalid-encrypted-format' } });
+    await prisma.sourceSecret.update({ where: { id: (await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).secretId! }, data: { ciphertext: 'invalid-encrypted-format' } });
     const original = await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } });
     const events = await prisma.outboxEvent.findMany();
     await expect(sources.update(id, command({ expectedDefinitionVersion: 1, secret: replacement })))
@@ -586,17 +658,18 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
   test('optimistic updates preserve or rotate secrets and failed updates leave no orphan secret', async () => {
     const created = await sources.create(command({ secret: `initial-${randomUUID()}` }));
     const id = created.definition.sourceDefinitionId;
-    const initialRef = created.definition.secretReferences.provider;
+    const initialRef = (await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).secretId!;
     const updated = await sources.update(id, command({ expectedDefinitionVersion: 1 }));
     expect(updated.definition.definitionVersion).toBe(2);
-    expect(updated.definition.secretReferences.provider).toBe(initialRef);
+    expect(updated.definition.secretConfigured).toBe(true);
     await expect(sources.update(id, command({ expectedDefinitionVersion: 1, secret: `conflict-${randomUUID()}` }))).rejects.toThrow('SOURCE_VERSION_CONFLICT');
     expect(await prisma.sourceSecret.count()).toBe(1);
     const rotated = await sources.update(id, command({ expectedDefinitionVersion: 2, secret: `rotated-${randomUUID()}` }));
-    expect(rotated.definition.secretReferences.provider).not.toBe(initialRef);
+    expect(rotated.definition.secretConfigured).toBe(true);
+    expect((await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).secretId).not.toBe(initialRef);
     expect(await prisma.sourceSecret.count()).toBe(2);
     const cleared = await sources.update(id, command({ expectedDefinitionVersion: 3, secret: null, enabled: false }));
-    expect(cleared.definition.secretReferences).toEqual({});
+    expect(cleared.definition.secretConfigured).toBe(false);
     expect(cleared.eventId).toBeNull();
     expect(await prisma.sourceSecret.count()).toBe(2);
     await expect(sources.refresh(id)).rejects.toThrow('SOURCE_DISABLED');

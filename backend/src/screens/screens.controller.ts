@@ -7,7 +7,12 @@ import {
   Param,
   Delete,
   ParseIntPipe,
+  BadRequestException,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Multer } from 'multer';
 import {
   ApiTags,
   ApiOperation,
@@ -28,7 +33,25 @@ export class ScreensController {
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Create a new screen' })
   @ApiResponse({ status: 201, description: 'Screen successfully created' })
-  create(@Body() createScreenDto: CreateScreenDto) {
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_request, file, callback) => callback(
+      file.mimetype.startsWith('image/') ? null : new BadRequestException('Only image files are allowed'),
+      file.mimetype.startsWith('image/'),
+    ),
+  }))
+  create(@Body() createScreenDto: CreateScreenDto, @UploadedFile() file?: Multer.File) {
+    if (file) {
+      return this.screensService.createFromImage(
+        file.buffer,
+        file.originalname,
+        createScreenDto.name,
+        800,
+        480,
+        createScreenDto.description,
+      );
+    }
+    if (!createScreenDto.imageUrl) throw new BadRequestException('imageUrl is required when no image file is uploaded');
     return this.screensService.create(createScreenDto);
   }
 

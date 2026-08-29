@@ -1,0 +1,6 @@
+services:
+  inker:
+    # The production compose file intentionally uses a stable name.  The local
+    # browser test must coexist with a developer's running Inker instance.
+    container_name: inker-e2e
+    restart: "no"

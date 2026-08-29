@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -94,6 +95,11 @@ function inspect(databasePath: string) {
   return new Database(databasePath, { readonly: true, strict: true });
 }
 
+function migrationNames(migrations: string, predicate: (name: string) => boolean): string[] {
+  return readdirSync(migrations).filter(name => predicate(name) && name.startsWith('20')
+    && existsSync(join(migrations, name, 'migration.sql'))).sort();
+}
+
 afterEach(() => {
   for (const directory of createdDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -107,7 +113,7 @@ describe("Prisma migration baseline", () => {
   ] as const)('%s adds empty storage without changing any existing rows or table definitions', async (_label, latest, previous, addedTables) => {
     const databasePath = join(createTemporaryDirectory(), 'federation-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
-    const names = readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort();
+    const names = migrationNames(migrations, name => name < latest);
     expect(names[names.length - 1]).toBe(previous);
     applySql(databasePath, [join(migrations, names[0], 'migration.sql'),
       join(import.meta.dir, 'fixtures', 'inker-0.6.0-data.sql'),
@@ -175,7 +181,7 @@ describe("Prisma migration baseline", () => {
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
     // Finish any later migrations before comparing with the current datamodel.
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort()
+    applySql(databasePath, migrationNames(migrations, name => name > latest)
       .map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
@@ -184,7 +190,7 @@ describe("Prisma migration baseline", () => {
   test('WP-24 preserves prior records and enforces timer states, integer limits and nullable device references', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp24-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260903000000_timers';
-    const names = readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort();
+    const names = migrationNames(migrations, name => name < latest);
     applySql(databasePath, [join(migrations, names[0], 'migration.sql'),
       join(import.meta.dir, 'fixtures', 'inker-0.6.0-data.sql'),
       ...names.slice(1).map(name => join(migrations, name, 'migration.sql'))]);
@@ -295,7 +301,7 @@ describe("Prisma migration baseline", () => {
       expect(previousRows()).toEqual(before);
       expect(database.query('SELECT * FROM timers').all()).toEqual([]);
     } finally { database.close(); }
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   }, 30_000);
@@ -303,7 +309,7 @@ describe("Prisma migration baseline", () => {
   test('WP-23 preserves existing data and enforces interaction identity and lifecycle constraints', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp23-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260902000000_interactions';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest).map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath, { strict: true });
     try {
       database.exec(`PRAGMA foreign_keys=ON;
@@ -382,7 +388,7 @@ describe("Prisma migration baseline", () => {
       expect(rows()).toEqual(before);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -390,7 +396,7 @@ describe("Prisma migration baseline", () => {
   test('WP-22 adds nullable bounded transformation code without rewriting sources or snapshots', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp22-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260901000000_source_transformations';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest).map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath);
     try {
       database.exec("INSERT INTO source_secrets(id,ciphertext) VALUES('opaque-secret','synthetic-ciphertext');");
@@ -412,7 +418,7 @@ describe("Prisma migration baseline", () => {
       expect(() => database.exec("UPDATE source_snapshots SET data='{}' WHERE snapshot_id='snapshot';")).toThrow('source_snapshot_immutable');
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -420,7 +426,7 @@ describe("Prisma migration baseline", () => {
   test('WP-21 adds empty source storage without changing publications, renders or outbox', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp21-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations'), latest = '20260831000000_sources';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest).map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath);
     try {
       database.exec(`INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,updated_at)
@@ -440,7 +446,7 @@ describe("Prisma migration baseline", () => {
       for (const table of ['source_definitions', 'source_secrets', 'source_snapshots', 'source_refresh_jobs']) expect(database.query(`SELECT * FROM ${table}`).all()).toEqual([]);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -474,7 +480,7 @@ describe("Prisma migration baseline", () => {
     const databasePath = join(createTemporaryDirectory(), 'wp19-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
     const latest = '20260830000000_render_cache';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest).map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath);
     try {
       database.exec(`INSERT INTO devices(id,label,external_id,profile_id,delivery_policy_id,presentation_revision,updated_at)
@@ -498,7 +504,7 @@ describe("Prisma migration baseline", () => {
     } finally { database.close(); }
     // Preserve the historical assertions, then complete later DDL before the
     // comparison against today's datamodel rather than the WP-19 datamodel.
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -506,7 +512,7 @@ describe("Prisma migration baseline", () => {
     const databasePath = join(createTemporaryDirectory(), 'wp18-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
     const latest = '20260829000000_playlist_playback';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest).map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath);
     try {
       database.exec(`
@@ -530,7 +536,7 @@ describe("Prisma migration baseline", () => {
     } finally { database.close(); }
     // Historical WP-18 assertions above remain against its exact migration.
     // Compare the current schema only after subsequent forward migrations.
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -538,7 +544,7 @@ describe("Prisma migration baseline", () => {
     const databasePath = join(createTemporaryDirectory(), 'wp17-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
     const latest = '20260828000000_explicit_publications';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest).map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath);
     try {
       database.exec(`
@@ -563,16 +569,60 @@ describe("Prisma migration baseline", () => {
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
     // Compare the latest datamodel only after applying later forward migrations.
-    applySql(databasePath, readdirSync(migrations).filter(name => name > latest && name.startsWith('20')).sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
+  test('UX-02 migrates valid legacy Grafana panel children to worker-owned sources without decrypting credentials', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'ux02-grafana-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
+    const latest = '20260908000000_migrate_legacy_grafana_plugin_instances';
+    applySql(databasePath, migrationNames(migrations, name => name < latest)
+      .map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath, { strict: true });
+    try {
+      const ciphertext = 'v1:fixture-key:0123456789abcdef:0123456789abcdef0123456789abcdef:deadbeef';
+      database.exec(`INSERT INTO plugins(name,slug,updated_at) VALUES('Grafana panel','grafana_panel',CURRENT_TIMESTAMP);
+        INSERT INTO plugin_instances(plugin_id,name,settings,settings_encrypted,updated_at)
+          VALUES(1,'Grafana connection','{"grafana_url":"https://grafana.example.test"}',
+            '{"api_key":"${ciphertext}"}',CURRENT_TIMESTAMP);
+        INSERT INTO plugin_instances(plugin_id,name,settings,settings_encrypted,updated_at)
+          VALUES(1,'Operations panel','{"parentInstanceId":1,"dashboard_uid":"ops","panel_id":7,"screen_width":1200,"screen_height":800}',
+            '{}',CURRENT_TIMESTAMP);`);
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(database.query(`SELECT legacy_plugin_instance_id AS legacyId, name, connector_type AS connectorType,
+        schema_version AS schemaVersion, configuration, secret_id AS secretId, refresh_interval_seconds AS refreshInterval,
+        timeout_ms AS timeoutMs, concurrency_group AS concurrencyGroup, enabled FROM source_definitions`).get()).toEqual({
+        legacyId: 2,
+        name: 'Operations panel',
+        connectorType: 'grafana',
+        schemaVersion: '1',
+        configuration: JSON.stringify({
+          baseUrl: 'https://grafana.example.test', operation: 'render', dashboardUid: 'ops', panelId: 7,
+          width: 1200, height: 800, allowLocalNetwork: 0,
+        }),
+        secretId: 'legacy-grafana-2',
+        refreshInterval: 300,
+        timeoutMs: 7500,
+        concurrencyGroup: 'grafana',
+        enabled: 1,
+      });
+      expect(database.query(`SELECT id, ciphertext FROM source_secrets WHERE id='legacy-grafana-2'`).get())
+        .toEqual({ id: 'legacy-grafana-2', ciphertext });
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    applySql(databasePath, migrationNames(migrations, name => name > latest)
+      .map(name => join(migrations, name, 'migration.sql')));
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
+
   test('WP-29 upgrades existing effects to frozen snapshots and adds empty checkpoints', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp29-checkpoints-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
     const latest = '20260907000000_foundation_batch_checkpoints';
-    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20'))
-      .sort().map(name => join(migrations, name, 'migration.sql')));
+    applySql(databasePath, migrationNames(migrations, name => name < latest)
+      .map(name => join(migrations, name, 'migration.sql')));
     const database = new Database(databasePath, { strict: true });
     try {
       database.exec(`INSERT INTO outbox_effects(key,event_id) VALUES('legacy-prepared','legacy-event');
@@ -586,6 +636,8 @@ describe("Prisma migration baseline", () => {
       ]);
       expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally { database.close(); }
+    applySql(databasePath, migrationNames(migrations, name => name > latest)
+      .map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
@@ -618,6 +670,11 @@ describe("Prisma migration baseline", () => {
         "20260827000000_outbox_dispatch",
         "20260828000000_explicit_publications",
         "20260829000000_playlist_playback",
+        "20260829010000_remove_legacy_pairing_bootstrap",
+        "20260829020000_playlist_draft_publish_commands",
+        "20260829030000_screen_raster_metadata",
+        "20260829040000_nullable_device_telemetry",
+        "20260829050000_migrate_legacy_grafana_plugin_instances",
         "20260830000000_render_cache",
         "20260831000000_sources",
         "20260901000000_source_transformations",
@@ -627,6 +684,7 @@ describe("Prisma migration baseline", () => {
         "20260905000000_remote_subscriptions",
         "20260906000000_observability",
         "20260907000000_foundation_batch_checkpoints",
+        "20260908000000_migrate_legacy_grafana_plugin_instances",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

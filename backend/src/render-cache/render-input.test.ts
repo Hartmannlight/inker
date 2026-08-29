@@ -15,7 +15,8 @@ describe('snapshot render inputs', () => {
     config.capabilities.display.renderFormats = ['html', 'jpeg', 'png'];
     const target = targetFor(config);
     expect(target.format).toBe('jpeg');
-    expect(Object.keys(target).sort()).toEqual(['bitDepth', 'colorSpace', 'format', 'height', 'profileId', 'rotation', 'safeArea', 'scaling', 'width']);
+    expect(Object.keys(target).sort()).toEqual(['backgroundColor', 'bitDepth', 'colorSpace', 'format', 'height', 'profileId', 'rotation', 'safeArea', 'scaling', 'width']);
+    expect(target.backgroundColor).toBe('#ffffff');
     config.capabilities.display.safeArea.left = 10;
     expect(target.safeArea.left).toBe(0);
   });
@@ -81,7 +82,7 @@ describe('snapshot render inputs', () => {
       expect(renderKey({ ...revision, ...change }, target)).not.toBe(key);
     }
     const changes: Partial<RenderTarget>[] = [{ width: 1919 }, { height: 1079 }, { profileId: 'other' }, { colorSpace: 'grayscale', bitDepth: 8 },
-      { bitDepth: 16 }, { rotation: 90 }, { format: 'jpeg' }, { scaling: 'cover' }, { safeArea: { top: 1, bottom: 0, left: 0, right: 0 } }];
+      { bitDepth: 16 }, { rotation: 90 }, { format: 'jpeg' }, { scaling: 'cover' }, { backgroundColor: '#000000' }, { safeArea: { top: 1, bottom: 0, left: 0, right: 0 } }];
     for (const change of changes) expect(renderKey(revision, { ...target, ...change })).not.toBe(key);
     const snapshot = { sourceId: 'a', revision: 1, contentHash: 'a'.repeat(64), connectorVersion: '1' };
     const snapshotKey = renderKey(revision, target, [snapshot]);

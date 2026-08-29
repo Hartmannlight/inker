@@ -95,8 +95,6 @@ describe('legacy plugin snapshot boundary', () => {
     h.plugin.dataTransform = '';
     await expect(h.service.fetchDataForPlugin(1)).rejects.toThrow('SOURCE_REFRESH_REQUIRES_CONNECTOR');
     for (const operation of [
-      () => h.controller.grafanaDashboards({ instanceId: 2 }),
-      () => h.controller.grafanaPanels({ instanceId: 2, dashboard_uid: 'd1' }),
       () => h.controller.githubPlugin('chatgpt'),
       () => h.controller.recipes(), () => h.controller.recipe('1'),
       () => h.controller.recipeCategories(),

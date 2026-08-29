@@ -16,14 +16,14 @@ describe('SettingsService', () => {
   describe('get()', () => {
     it('should return value when setting is found', async () => {
       mockPrisma.setting.findUnique.mockResolvedValue({
-        key: 'github_token',
-        value: 'ghp_test123',
+        key: 'allow_local_network',
+        value: 'true',
       });
 
-      const result = await service.get('github_token');
+      const result = await service.get('allow_local_network');
 
-      expect(result).toBe('ghp_test123');
-      expect(mockPrisma.setting.findUnique.calls[0][0].where.key).toBe('github_token');
+      expect(result).toBe('true');
+      expect(mockPrisma.setting.findUnique.calls[0][0].where.key).toBe('allow_local_network');
     });
 
     it('should return null when setting is not found', async () => {
@@ -41,14 +41,14 @@ describe('SettingsService', () => {
     it('should call prisma.setting.upsert with correct params', async () => {
       mockPrisma.setting.upsert.mockResolvedValue({});
 
-      await service.set('github_token', 'ghp_new_token');
+      await service.set('allow_local_network', 'true');
 
       expect(mockPrisma.setting.upsert.calls).toHaveLength(1);
       const call = mockPrisma.setting.upsert.calls[0][0];
-      expect(call.where.key).toBe('github_token');
-      expect(call.update.value).toBe('ghp_new_token');
-      expect(call.create.key).toBe('github_token');
-      expect(call.create.value).toBe('ghp_new_token');
+      expect(call.where.key).toBe('allow_local_network');
+      expect(call.update.value).toBe('true');
+      expect(call.create.key).toBe('allow_local_network');
+      expect(call.create.value).toBe('true');
     });
   });
 
@@ -58,10 +58,10 @@ describe('SettingsService', () => {
     it('should call prisma.setting.deleteMany with correct key', async () => {
       mockPrisma.setting.deleteMany.mockResolvedValue({ count: 1 });
 
-      await service.delete('github_token');
+      await service.delete('allow_local_network');
 
       expect(mockPrisma.setting.deleteMany.calls).toHaveLength(1);
-      expect(mockPrisma.setting.deleteMany.calls[0][0].where.key).toBe('github_token');
+      expect(mockPrisma.setting.deleteMany.calls[0][0].where.key).toBe('allow_local_network');
     });
   });
 
@@ -79,24 +79,24 @@ describe('SettingsService', () => {
       }
     });
 
-    it('should mask sensitive values (github_token)', async () => {
+    it('should mask sensitive values', async () => {
       mockPrisma.setting.findMany.mockResolvedValue([
-        { key: 'github_token', value: 'ghp_supersecrettoken123' },
+        { key: 'connector_token', value: 'secret' },
       ]);
 
       const result = await service.getAll();
 
-      expect(result.github_token).toBe('••••••••');
+      expect(result.connector_token).toBe('••••••••');
     });
 
     it('should return null for sensitive key with no value', async () => {
       mockPrisma.setting.findMany.mockResolvedValue([
-        { key: 'github_token', value: '' },
+        { key: 'connector_token', value: '' },
       ]);
 
       const result = await service.getAll();
 
-      expect(result.github_token).toBeNull();
+      expect(result.connector_token).toBeNull();
     });
 
     it('should show non-sensitive values as-is', async () => {
@@ -116,7 +116,7 @@ describe('SettingsService', () => {
     const isSensitive = (key: string) => (service as any).isSensitive(key);
 
     it('should detect "token" in key name', () => {
-      expect(isSensitive('github_token')).toBe(true);
+      expect(isSensitive('connector_token')).toBe(true);
     });
 
     it('should detect "key" in key name', () => {
@@ -132,7 +132,7 @@ describe('SettingsService', () => {
     });
 
     it('should be case-insensitive', () => {
-      expect(isSensitive('GitHub_TOKEN')).toBe(true);
+      expect(isSensitive('CONNECTOR_TOKEN')).toBe(true);
       expect(isSensitive('API_KEY')).toBe(true);
     });
 
@@ -143,19 +143,4 @@ describe('SettingsService', () => {
     });
   });
 
-  // ─── getGitHubToken ────────────────────────────────────────────────
-
-  describe('getGitHubToken()', () => {
-    it('should delegate to get() with github_token key', async () => {
-      mockPrisma.setting.findUnique.mockResolvedValue({
-        key: 'github_token',
-        value: 'ghp_abc',
-      });
-
-      const result = await service.getGitHubToken();
-
-      expect(result).toBe('ghp_abc');
-      expect(mockPrisma.setting.findUnique.calls[0][0].where.key).toBe('github_token');
-    });
-  });
 });

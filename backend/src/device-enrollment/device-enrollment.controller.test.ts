@@ -19,6 +19,8 @@ import { PairingTransportGuard } from './pairing-transport.guard';
 describe('DeviceEnrollmentController (API)', () => {
   let app: INestApplication | undefined;
   let rejectExchange = false;
+  let allowInsecureHttp = false;
+  let trustProxy = true;
 
   async function createApp() {
     const module = await Test.createTestingModule({
@@ -32,7 +34,9 @@ describe('DeviceEnrollmentController (API)', () => {
           provide: ConfigService,
           useValue: {
             get: (key: string, fallback: unknown) =>
-              key === 'pairing.trustProxy' ? true : fallback,
+              key === 'pairing.trustProxy' ? trustProxy
+                : key === 'pairing.allowInsecureHttp' ? allowInsecureHttp
+                  : fallback,
           },
         },
         {
@@ -88,6 +92,8 @@ describe('DeviceEnrollmentController (API)', () => {
 
   afterEach(async () => {
     rejectExchange = false;
+    allowInsecureHttp = false;
+    trustProxy = true;
     await app?.close();
     app = undefined;
   });
@@ -131,6 +137,27 @@ describe('DeviceEnrollmentController (API)', () => {
       .post('/device-enrollments/exchange')
       .send({ code: '7K4M-9Q2D-XP' })
       .expect(403);
+  });
+
+  it('only trusts forwarded HTTPS when proxy trust is enabled, and permits local HTTP only by explicit opt-in', async () => {
+    trustProxy = false;
+    await createApp();
+
+    await request(app!.getHttpServer())
+      .post('/device-enrollments/exchange')
+      .set('X-Forwarded-Proto', 'https')
+      .send({ code: '7K4M-9Q2D-XP' })
+      .expect(403);
+
+    await app!.close();
+    app = undefined;
+    allowInsecureHttp = true;
+    await createApp();
+
+    await request(app!.getHttpServer())
+      .post('/device-enrollments/exchange')
+      .send({ code: '7K4M-9Q2D-XP' })
+      .expect(200);
   });
 
   it('strictly limits exchange attempts to five per minute and client address', async () => {

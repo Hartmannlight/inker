@@ -78,7 +78,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
 }
 
 // AuthProvider component
-export function AuthProvider({ children }: { children: ReactNode }) {
+/** Admin-only session boundary. Device pairing never consumes this provider. */
+export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, initialState);
 
   // Restore session on mount
@@ -102,6 +103,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     </AuthStateContext.Provider>
   );
 }
+
+/** @deprecated Use AdminAuthProvider to make the authentication boundary explicit. */
+export const AuthProvider = AdminAuthProvider;
 
 // Custom hooks to use the contexts
 export function useAuthState() {

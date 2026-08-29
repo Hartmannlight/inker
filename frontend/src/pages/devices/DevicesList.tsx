@@ -11,6 +11,7 @@ import {
 import { useInfiniteScroll } from '../../hooks';
 import { deviceService } from '../../services/api';
 import type { Device } from '../../types';
+import { presentDeviceTelemetry } from '../../utils/deviceTelemetry';
 
 // Auto-refresh interval in milliseconds (30 seconds)
 const AUTO_REFRESH_INTERVAL = 30 * 1000;
@@ -307,6 +308,7 @@ interface DeviceCardProps {
 
 function DeviceCard({ device, onClick }: DeviceCardProps) {
   const isOnline = device.status === 'online';
+  const telemetry = presentDeviceTelemetry(device);
 
   return (
     <div
@@ -334,10 +336,10 @@ function DeviceCard({ device, onClick }: DeviceCardProps) {
 
       {/* Card Body */}
       <div className="px-5 py-4 space-y-3">
-        {device.deviceType === 'trmnl' ? (
+        {telemetry.showBattery || telemetry.showWirelessSignal ? (
           <div className="flex items-center gap-3">
-            <BatteryIndicator level={device.battery} size="sm" showPercentage={true} />
-            <WifiIndicator signal={device.wifi} size="sm" showValue={false} />
+            {telemetry.showBattery && <BatteryIndicator level={telemetry.battery} size="sm" showPercentage={true} />}
+            {telemetry.showWirelessSignal && <WifiIndicator signal={telemetry.rssi} size="sm" showValue={false} />}
           </div>
         ) : (
           <div className="text-sm font-medium text-accent">Web Display · WebSocket</div>
@@ -382,6 +384,7 @@ function DeviceCard({ device, onClick }: DeviceCardProps) {
  * Device list item component for list view
  */
 function DeviceListItem({ device, onClick }: DeviceCardProps) {
+  const telemetry = presentDeviceTelemetry(device);
   return (
     <div
       onClick={onClick}
@@ -400,10 +403,10 @@ function DeviceListItem({ device, onClick }: DeviceCardProps) {
         </div>
       </div>
 
-      {device.deviceType === 'trmnl' ? (
+      {telemetry.showBattery || telemetry.showWirelessSignal ? (
         <div className="flex items-center gap-3">
-          <BatteryIndicator level={device.battery} size="sm" showPercentage={true} />
-          <WifiIndicator signal={device.wifi} size="sm" showValue={false} />
+          {telemetry.showBattery && <BatteryIndicator level={telemetry.battery} size="sm" showPercentage={true} />}
+          {telemetry.showWirelessSignal && <WifiIndicator signal={telemetry.rssi} size="sm" showValue={false} />}
         </div>
       ) : <span className="text-xs font-medium text-accent">WEB</span>}
 

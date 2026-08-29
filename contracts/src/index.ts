@@ -45,6 +45,13 @@ export {
   type TransportMode,
 } from './device';
 export {
+  assessScreenCompatibility,
+  type ScreenCompatibility,
+  type ScreenCompatibilityKind,
+  type ScreenCompatibilityTarget,
+  type ScreenRasterMetadata,
+} from './screen-compatibility';
+export {
   parsePresentationManifest,
   type AllowedAction,
   type PresentationArtifact,

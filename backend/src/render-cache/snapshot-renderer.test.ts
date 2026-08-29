@@ -125,6 +125,12 @@ describe('snapshot-only renderer', () => {
     await expect(renderSnapshot(input, target({ width: 2, height: 1, scaling: 'none' }))).rejects.toThrow('Snapshot rendering unavailable');
   });
 
+  it('uses the target background for contain and makes it observable in the output bytes', async () => {
+    const input = await snapshot();
+    const output = await rgb(await renderSnapshot(input, target({ width: 4, height: 4, backgroundColor: '#000000' })));
+    expect([...output.subarray(0, 3)]).toEqual([0, 0, 0]);
+  });
+
   it('converts a stored black BMP fixture to another target without URLs or draft reads', async () => {
     const output = await renderSnapshot(revision({ schemaVersion: 1, fixtureArtifacts: ['mono-800x480-black-bmp'] }), target({ width: 8, height: 4, scaling: 'cover' }));
     expect([...(await rgb(output))].every(pixel => pixel === 0)).toBe(true);

@@ -190,6 +190,22 @@ export class PublicationPersistenceService {
     });
   }
 
+  /** Clear the canonical desired pointer without touching acknowledged history. */
+  async clearDesiredRevision(deviceId: number, tx?: TransactionClient) {
+    const occurredAt = new Date();
+    return this.run(tx, async transaction => {
+      await transaction.$executeRaw`UPDATE devices SET id = id WHERE id = ${deviceId}`;
+      const current = await transaction.devicePublicationState.findUnique({ where: { deviceId } });
+      if (!current?.desiredPublicationRevisionId) return current;
+      const device = await transaction.device.update({ where: { id: deviceId }, data: { presentationRevision: { increment: 1 } }, select: { presentationRevision: true } });
+      const state = await transaction.devicePublicationState.update({ where: { deviceId }, data: { desiredPublicationRevisionId: null, desiredSequence: device.presentationRevision, desiredAt: occurredAt } });
+      await this.createOutboxEvent(transaction, { eventType: PUBLICATION_EVENT_TYPES.desiredRevisionCleared,
+        aggregateType: 'DevicePublicationState', aggregateId: String(deviceId), aggregateRevision: String(device.presentationRevision),
+        payload: { deviceId }, occurredAt });
+      return state;
+    });
+  }
+
   async getPublication(publicationKey: string) {
     return this.prisma.publication.findUnique({
       where: { publicationKey },

@@ -16,6 +16,9 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
+    "test:e2e:ux03": "playwright test --grep UX-03",
+    "test:e2e:ux05": "playwright test --grep UX-05 --workers=1",
+    "test:e2e:ux06": "playwright test --grep UX-06 --workers=1",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -37,6 +40,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.1.17",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

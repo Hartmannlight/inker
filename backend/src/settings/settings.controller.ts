@@ -1,20 +1,11 @@
 import { Controller, Get, Put, Post, Delete, Param, Body, BadRequestException } from '@nestjs/common';
 import { SettingsService, SETTING_KEYS } from './settings.service';
 import { UpdateSettingDto } from './dto/update-setting.dto';
-import { TestGitHubTokenDto } from './dto/test-github-token.dto';
 import { WelcomeScreenConfigDto } from './dto/welcome-screen-config.dto';
 
 @Controller('settings')
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
-
-  /**
-   * Test a GitHub token before saving
-   */
-  @Post('test-github-token')
-  async testGitHubToken(@Body() body: TestGitHubTokenDto) {
-    return this.settingsService.testGitHubToken(body.token);
-  }
 
   /**
    * Get welcome screen configuration

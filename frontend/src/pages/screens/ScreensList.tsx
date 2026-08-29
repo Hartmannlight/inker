@@ -22,6 +22,8 @@ interface CombinedScreen {
   isPlugin?: boolean;
   pluginInstanceId?: number;
   createdAt?: string;
+  width?: number | null;
+  height?: number | null;
   // Full design data for preview (only for designed screens)
   design?: ScreenDesign;
 }
@@ -165,6 +167,8 @@ export function ScreensList() {
       thumbnailUrl: screen.thumbnailUrl,
       isDefault: screen.isDefault,
       isDesigned: false,
+      width: screen.width,
+      height: screen.height,
       createdAt: screen.createdAt,
     })),
     // Map designed screens - include full design data for preview
@@ -175,6 +179,8 @@ export function ScreensList() {
       thumbnailUrl: undefined,
       isDefault: false,
       isDesigned: true,
+      width: design.width,
+      height: design.height,
       createdAt: design.createdAt,
       design: design,
     })),
@@ -544,6 +550,15 @@ export function ScreensList() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
+                      {!screen.isPlugin && !screen.isDesigned && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); navigate(`/screens/${screen.id}?assign=1`); }}
+                          className="rounded-lg border border-border-light px-2 py-1 text-xs font-medium text-accent opacity-0 transition-opacity group-hover:opacity-100 hover:border-accent"
+                        >
+                          Assign to device
+                        </button>
+                      )}
+                      {screen.width && screen.height && <p className="mt-1 text-xs text-text-muted">{screen.width}×{screen.height}px</p>}
                       <button
                         onClick={(e) => handleDeleteClick(e, screen)}
                         className="flex-shrink-0 p-1.5 rounded-lg bg-status-error-bg text-status-error-text opacity-0 group-hover:opacity-100 transition-opacity hover:bg-status-error-border"

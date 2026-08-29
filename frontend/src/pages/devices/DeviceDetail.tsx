@@ -10,11 +10,44 @@ import {
   OnlineStatus,
 } from '../../components/common';
 import { OnlineStatusBadge } from '../../components/common/OnlineStatus';
+import { presentDeviceTelemetry } from '../../utils/deviceTelemetry';
 import { useApi, useMutation } from '../../hooks/useApi';
-import { deviceService, modelService } from '../../services/api';
-import { config } from '../../config';
+import { deviceService, modelService, type ContentAssignment } from '../../services/api';
 import type { Device, DeviceModel } from '../../types';
 import { DevicePairingPanel } from '../../components/devices/DevicePairingPanel';
+import { DevicePublishedPreview } from './DevicePublishedPreview';
+
+type CompatibleScreen = NonNullable<Awaited<ReturnType<typeof deviceService.getContentAssignmentChoices>>>['screens'][number];
+
+const compatibilityStyle = {
+  exact: 'border-status-success-border bg-status-success-bg text-status-success-text',
+  adaptable: 'border-status-warning-border bg-status-warning-bg text-status-warning-text',
+  risky: 'border-status-warning-border bg-status-warning-bg text-status-warning-text',
+  unknown: 'border-border-light bg-bg-muted text-text-muted',
+} as const;
+
+function CompatibilityBadge({ screen }: { screen: CompatibleScreen }) {
+  const label = screen.compatibility.kind[0].toUpperCase() + screen.compatibility.kind.slice(1);
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${compatibilityStyle[screen.compatibility.kind]}`} aria-label={`${label}: ${screen.compatibility.reason}`}>
+    {label}
+  </span>;
+}
+
+function TargetPreview({ screen, target }: { screen: CompatibleScreen; target: { width: number; height: number; backgroundColor: string } }) {
+  const sourceRatio = screen.width && screen.height ? `${screen.width} / ${screen.height}` : '1 / 1';
+  const safeInset = '4%';
+  return <div className="rounded-lg border border-border-light bg-bg-muted p-4">
+    <p className="mb-2 text-sm font-medium text-text-primary">Target preview · {target.width}×{target.height}</p>
+    <div className="mx-auto max-w-sm border-2 border-text-primary p-[4%]" style={{ aspectRatio: `${target.width} / ${target.height}`, backgroundColor: target.backgroundColor }} role="img" aria-label="Target device preview with safe area">
+      <div className="flex h-full w-full items-center justify-center bg-text-primary/10" style={{ padding: safeInset }}>
+        <div className="max-h-full max-w-full border border-accent bg-white" style={{ aspectRatio: sourceRatio, width: '85%' }}>
+          <span className="sr-only">Screen is shown with {screen.compatibility.kind === 'risky' ? 'a potentially cropped or letterboxed' : 'a contained'} fit.</span>
+        </div>
+      </div>
+    </div>
+    <p className="mt-2 text-xs text-text-muted">Safe area, proportions, and the target palette are shown. Raster output uses centered contain by default; crop is never implicit.</p>
+  </div>;
+}
 
 // Auto-refresh interval in milliseconds (30 seconds)
 const AUTO_REFRESH_INTERVAL = 30 * 1000;
@@ -37,8 +70,12 @@ export function DeviceDetail() {
   const navigate = useNavigate();
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showLogsModal, setShowLogsModal] = useState(false);
-  const [screenPreviewKey, setScreenPreviewKey] = useState(() => Date.now());
-  const [pairingUrl, setPairingUrl] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [showContentModal, setShowContentModal] = useState(false);
+  const [riskyScreen, setRiskyScreen] = useState<CompatibleScreen | null>(null);
 
   // Logs state
   const [logs, setLogs] = useState<DeviceLog[]>([]);
@@ -47,6 +84,10 @@ export function DeviceDetail() {
 
   const { data: device, isLoading, error, refetch } = useApi<Device>(
     () => deviceService.getById(id!)
+  );
+  const { data: contentChoices, isLoading: contentChoicesLoading, refetch: refetchContentChoices } = useApi(
+    () => deviceService.getContentAssignmentChoices(id!),
+    { showErrorNotification: false },
   );
 
   // Auto-refresh device data to keep online status current
@@ -78,6 +119,33 @@ export function DeviceDetail() {
   }, [showLogsModal, id]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Blob URL lifecycle belongs to the authenticated preview request. */
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewUrl(null);
+    deviceService.getPublishedPreview(id)
+      .then((blob) => {
+        if (cancelled || !blob) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPreviewUrl(objectUrl);
+      })
+      .catch((err) => {
+        if (!cancelled) setPreviewError(err instanceof Error ? err.message : 'Failed to load the published preview');
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id, previewRevision]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const { mutate: deleteDevice, isLoading: isDeleting } = useMutation(
     () => deviceService.delete(id!),
     {
@@ -94,20 +162,26 @@ export function DeviceDetail() {
     }
   );
 
-  const { mutate: unassignPlaylist, isLoading: isUnassigning } = useMutation(
-    () => deviceService.unassignPlaylist(id!),
-    {
-      successMessage: 'Playlist unassigned - device will display "Hello World" default screen',
-      onSuccess: () => window.location.reload(),
-    }
-  );
-
-  const { mutate: createPairingLink, isLoading: isCreatingPairing } = useMutation(
-    () => deviceService.regeneratePairing(id!),
-    {
-      successMessage: 'New pairing link created',
-      onSuccess: (result) => setPairingUrl(new URL(result.displayUrl, window.location.origin).toString()),
+  const { mutate: assignContent, isLoading: isAssigningContent } = useMutation<unknown, ContentAssignment>(
+    (assignment) => {
+      if (!contentChoices) throw new Error('Content choices are still loading');
+      return deviceService.assignContent(
+        id!,
+        contentChoices.current.desiredPublicationRevisionId,
+        contentChoices.current.playbackVersion,
+        assignment,
+      );
     },
+    {
+      successMessage: 'Content assignment saved',
+      onSuccess: () => {
+        setRiskyScreen(null);
+        setShowContentModal(false);
+        setPreviewRevision(revision => revision + 1);
+        refetch();
+        refetchContentChoices();
+      },
+    }
   );
 
   // Available display models (dimensions + PNG/BMP format) for the format selector
@@ -163,6 +237,7 @@ export function DeviceDetail() {
 
 
   const isOnline = device.status === 'online';
+  const telemetry = presentDeviceTelemetry(device);
 
   return (
     <MainLayout>
@@ -221,15 +296,6 @@ export function DeviceDetail() {
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-3">
-              {device.deviceType === 'web-display' && (
-                <button
-                  onClick={() => createPairingLink()}
-                  disabled={isCreatingPairing}
-                  className="inline-flex items-center px-4 py-2 rounded-lg font-medium bg-white/20 text-white border border-white/30 disabled:opacity-50"
-                >
-                  {isCreatingPairing ? 'Creating…' : 'Legacy pairing link'}
-                </button>
-              )}
               <button
                 onClick={() => navigate(`/devices/${id}/edit`)}
                 className="inline-flex items-center px-4 py-2 rounded-lg font-medium transition-all"
@@ -282,18 +348,6 @@ export function DeviceDetail() {
           </div>
         </div>
 
-        {pairingUrl && (
-          <div className="bg-status-info-bg border border-status-info-border rounded-xl p-5">
-            <h2 className="font-semibold text-status-info-text">One-time web-display pairing link</h2>
-            <p className="text-sm text-status-info-text mt-1">Open this URL on the target PC within 15 minutes.</p>
-            <code className="block mt-3 p-3 rounded-lg bg-bg-card border border-border-light break-all text-sm">{pairingUrl}</code>
-            <div className="flex gap-3 mt-3">
-              <Button onClick={() => window.open(pairingUrl, '_blank', 'noopener,noreferrer')}>Open</Button>
-              <Button variant="outline" onClick={() => navigator.clipboard.writeText(pairingUrl)}>Copy</Button>
-            </div>
-          </div>
-        )}
-
         <DevicePairingPanel
           deviceId={id!}
           deviceName={device.name}
@@ -322,11 +376,11 @@ export function DeviceDetail() {
                 }
                 color={isOnline ? 'success' : 'muted'}
               />
-              {device.deviceType === 'trmnl' && <StatusCard
+              {telemetry.showBattery && <StatusCard
                 label="Battery"
                 value={
                   <BatteryIndicator
-                    level={device.battery}
+                    level={telemetry.battery}
                     size="md"
                     showPercentage={true}
                   />
@@ -338,11 +392,11 @@ export function DeviceDetail() {
                 }
                 color="warning"
               />}
-              {device.deviceType === 'trmnl' && <StatusCard
-                label="WiFi Signal"
+              {telemetry.showWirelessSignal && <StatusCard
+                label="Wireless signal"
                 value={
                   <WifiIndicator
-                    signal={device.wifi}
+                    signal={telemetry.rssi}
                     size="md"
                     showValue={true}
                   />
@@ -355,6 +409,11 @@ export function DeviceDetail() {
                 color="accent"
               />}
             </div>
+            {telemetry.source && telemetry.updatedAt && (
+              <p className="text-xs text-text-muted" aria-label={`Telemetry source ${telemetry.source}, updated ${new Date(telemetry.updatedAt).toLocaleString()}`}>
+                Telemetry: {telemetry.source === 'websocket' ? 'WebSocket' : 'Pull'} · updated {new Date(telemetry.updatedAt).toLocaleString()}
+              </p>
+            )}
 
             {/* Device Information Card */}
             <div className="bg-bg-card rounded-xl shadow-theme-sm border border-border-light overflow-hidden">
@@ -456,118 +515,89 @@ export function DeviceDetail() {
                   </svg>
                   Current Screen
                 </h2>
-                <button
-                  onClick={() => setScreenPreviewKey(Date.now())}
-                  className="p-1.5 text-text-muted hover:text-accent hover:bg-accent-light rounded-lg transition-colors"
-                  title="Refresh preview"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                </button>
               </div>
               <div className="p-4">
-                <div className="bg-bg-muted rounded-lg overflow-hidden">
-                  <img
-                    key={screenPreviewKey}
-                    src={`${config.backendUrl}/api/device-images/device/${id}?t=${screenPreviewKey}`}
-                    alt="Current device screen"
-                    className="w-full h-auto"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
-                </div>
-                <p className="text-xs text-text-muted mt-2 text-center">
-                  Preview of what this device is currently displaying
-                </p>
+                <DevicePublishedPreview loading={previewLoading} previewUrl={previewUrl} error={previewError} />
               </div>
             </div>
 
-            {/* Current Playlist Card */}
+            {/* Current content assignment */}
             <div className="bg-bg-card rounded-xl shadow-theme-sm border border-border-light overflow-hidden">
-              <div className="px-6 py-4 border-b border-border-light bg-bg-muted">
+              <div className="px-6 py-4 border-b border-border-light bg-bg-muted flex items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold text-text-primary flex items-center gap-2">
                   <svg className="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
                   </svg>
-                  Current Playlist
+                  Content
                 </h2>
+                <Button size="sm" variant="outline" onClick={() => setShowContentModal(true)} disabled={contentChoicesLoading}>Change content</Button>
               </div>
               <div className="p-6">
-                {device.playlist ? (
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center">
-                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="font-medium text-text-primary">{device.playlist.name}</p>
-                        <p className="text-sm text-text-muted">Active playlist</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => navigate(`/playlists/${device.playlistId}`)}
-                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg transition-all"
-                        style={{
-                          backgroundColor: 'transparent',
-                          color: '#16A34A',
-                          border: '1px solid rgba(22, 163, 74, 0.3)',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#DCFCE7'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                      >
-                        View Playlist
-                      </button>
-                      <button
-                        onClick={() => unassignPlaylist()}
-                        disabled={isUnassigning}
-                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg transition-all disabled:opacity-50"
-                        style={{
-                          backgroundColor: 'transparent',
-                          color: '#DC2626',
-                          border: '1px solid #FCA5A5',
-                        }}
-                        onMouseEnter={(e) => { if (!isUnassigning) e.currentTarget.style.backgroundColor = '#FEE2E2'; }}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                      >
-                        {isUnassigning ? 'Unassigning...' : 'Unassign'}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-4">
-                    <div className="w-12 h-12 mx-auto rounded-full bg-bg-muted flex items-center justify-center mb-3">
-                      <svg className="w-6 h-6 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                      </svg>
-                    </div>
-                    <p className="text-sm text-text-muted mb-3">No playlist assigned</p>
-                    <button
-                      onClick={() => navigate('/playlists')}
-                      className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg transition-all"
-                      style={{
-                        backgroundColor: 'transparent',
-                        color: '#16A34A',
-                        border: '1px solid rgba(22, 163, 74, 0.3)',
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#DCFCE7'}
-                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                    >
-                      Assign Playlist
-                    </button>
-                  </div>
-                )}
+                {contentChoices?.current.playlistRevisionId ? <>
+                  <p className="font-medium text-text-primary">Rotating playlist</p>
+                  <p className="mt-1 text-sm text-text-muted">A published playlist revision controls playback.</p>
+                </> : contentChoices?.current.desiredPublicationRevisionId ? <>
+                  <p className="font-medium text-text-primary">Single screen</p>
+                  <p className="mt-1 text-sm text-text-muted">One immutable published screen is assigned.</p>
+                </> : <>
+                  <p className="font-medium text-text-primary">No content selected</p>
+                  <p className="mt-1 text-sm text-text-muted">Choose later does not affect pairing or device enrollment.</p>
+                </>}
               </div>
             </div>
 
           </div>
         </div>
       </div>
+
+      <Modal
+        isOpen={showContentModal}
+        onClose={() => setShowContentModal(false)}
+        title="Change content"
+        size="lg"
+      >
+        {contentChoicesLoading || !contentChoices ? (
+          <div className="py-8 text-center"><LoadingSpinner size="md" /></div>
+        ) : (
+          <div className="space-y-6">
+            <section>
+              <h3 className="font-semibold text-text-primary">Single screen</h3>
+              <p className="mt-1 text-sm text-text-muted">Select one screen. Inker publishes the current immutable revision and assigns it in one operation.</p>
+              <div className="mt-3 space-y-2">
+                {contentChoices.screens.map(screen => <button key={screen.id} type="button" disabled={isAssigningContent} onClick={() => screen.compatibility.kind === 'risky' ? setRiskyScreen(screen) : assignContent({ kind: 'screen', screenId: screen.id, expectedUpdatedAt: screen.updatedAt })} className="block w-full rounded-lg border border-border-light p-3 text-left hover:border-accent disabled:opacity-50">
+                  <span className="flex items-center justify-between gap-3"><span className="font-medium text-text-primary">{screen.name}</span><CompatibilityBadge screen={screen} /></span>
+                  <span className="mt-1 block text-xs text-text-muted">{screen.width && screen.height ? `${screen.width}×${screen.height} · ` : ''}{screen.compatibility.reason}</span>
+                  <span className="sr-only">Single screen</span>
+                </button>)}
+                {contentChoices.screens.length === 0 && <p className="text-sm text-text-muted">No uploaded screens are available.</p>}
+              </div>
+            </section>
+            <section>
+              <h3 className="font-semibold text-text-primary">Rotating playlist</h3>
+              <p className="mt-1 text-sm text-text-muted">Only published playlist revisions are available for playback.</p>
+              <div className="mt-3 space-y-2">
+                {contentChoices.playlists.map(playlist => <button key={playlist.playlistRevisionId} type="button" disabled={isAssigningContent} onClick={() => assignContent({ kind: 'playlist', playlistRevisionId: playlist.playlistRevisionId })} className="block w-full rounded-lg border border-border-light p-3 text-left hover:border-accent disabled:opacity-50">
+                  <span className="block font-medium text-text-primary">{playlist.name}</span>
+                  <span className="block text-xs text-text-muted">Rotating playlist · published revision {playlist.revision}</span>
+                </button>)}
+                {contentChoices.playlists.length === 0 && <p className="text-sm text-text-muted">No published playlists are available yet.</p>}
+              </div>
+            </section>
+            <Button variant="outline" disabled={isAssigningContent} onClick={() => assignContent({ kind: 'none' })}>Choose later</Button>
+          </div>
+        )}
+      </Modal>
+
+      <Modal isOpen={Boolean(riskyScreen)} onClose={() => setRiskyScreen(null)} title="Review screen fit">
+        {riskyScreen && contentChoices?.target && <div className="space-y-4">
+          <p className="text-sm text-text-secondary">{riskyScreen.compatibility.reason} Review the target preview before assigning this screen.</p>
+          <TargetPreview screen={riskyScreen} target={contentChoices.target} />
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setRiskyScreen(null)}>Cancel</Button>
+            <Button isLoading={isAssigningContent} onClick={() => assignContent({ kind: 'screen', screenId: riskyScreen.id, expectedUpdatedAt: riskyScreen.updatedAt })}>Assign after review</Button>
+          </div>
+        </div>}
+      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal

@@ -112,15 +112,16 @@ export async function renderSnapshot(revision: PublicationRevision, target: Rend
     const sourceWidth = swapped ? source.height : source.width;
     const sourceHeight = swapped ? source.width : source.height;
     if (target.scaling === 'none' && (sourceWidth > width || sourceHeight > height)) throw unavailable();
-    image = image.rotate(rotation).flatten({ background: '#ffffff' }).toColourspace('srgb');
+    const background = target.backgroundColor ?? '#ffffff';
+    image = image.rotate(rotation).flatten({ background }).toColourspace('srgb');
     if (target.scaling === 'none') {
       const padX = width - sourceWidth;
       const padY = height - sourceHeight;
-      image = image.extend({ left: Math.floor(padX / 2), right: Math.ceil(padX / 2), top: Math.floor(padY / 2), bottom: Math.ceil(padY / 2), background: '#ffffff' });
-    } else image = image.resize(width, height, { fit: target.scaling, background: '#ffffff', kernel: 'lanczos3' });
+      image = image.extend({ left: Math.floor(padX / 2), right: Math.ceil(padX / 2), top: Math.floor(padY / 2), bottom: Math.ceil(padY / 2), background });
+    } else image = image.resize(width, height, { fit: target.scaling, background, kernel: 'lanczos3' });
     // Materialize before safe-area padding: Sharp applies each operation only once.
     const intermediate = await bounded(image.png()).toBuffer();
-    image = sharp(intermediate, sharpOptions).extend({ top, right, bottom, left, background: '#ffffff' });
+    image = sharp(intermediate, sharpOptions).extend({ top, right, bottom, left, background });
     const grayscale = target.colorSpace !== 'rgb';
     if (grayscale) image = image.toColourspace('b-w');
     const { data: pixels, info } = await bounded(image.removeAlpha().raw()).toBuffer({ resolveWithObject: true });

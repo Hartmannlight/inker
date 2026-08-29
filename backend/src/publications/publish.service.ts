@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { readFile, realpath, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { resolve, sep } from 'node:path';
 import * as sharpModule from 'sharp';
 import type sharpFactory from 'sharp';
@@ -12,8 +13,8 @@ import { PublicationPersistenceService } from './publication-persistence.service
 import { canonicalJson, fixtureIds, publicationArtifacts, sha256, type PublicationContent } from './publication-content';
 import { normalizePublicationActions } from './publication-actions';
 
-type Draft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string } | { sourceSnapshotId: string };
-type PublishInput = { idempotencyKey: string; expectedRevision: number; draft: Draft; deviceIds: number[]; allowedActions: AllowedAction[] };
+export type PublicationDraft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string } | { screenDesignId: number; expectedUpdatedAt: string } | { sourceSnapshotId: string };
+type PublishInput = { idempotencyKey: string; expectedRevision: number; draft: PublicationDraft; deviceIds: number[]; allowedActions: AllowedAction[] };
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestException('Invalid publication command');
@@ -38,7 +39,7 @@ export class PublishService {
     // Replay precedes draft lookup: deletion/edit after success cannot change a retry.
     const previous = await this.prisma.publicationCommand.findUnique({ where: { keyHash } });
     if (previous) return this.replay(previous, requestHash);
-    const prepared = await this.snapshot(input.draft);
+    const prepared = await this.snapshotDraft(input.draft);
     try {
       return await sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
         // First statement acquires the SQLite writer lock, including commands
@@ -53,6 +54,10 @@ export class PublishService {
         if ('screenId' in input.draft) {
           const screen = await tx.screen.findUnique({ where: { id: input.draft.screenId } });
           if (!screen || screen.updatedAt.toISOString() !== input.draft.expectedUpdatedAt || screen.imageUrl !== prepared.imageUrl) throw new ConflictException('Draft changed; reload before publishing');
+        }
+        if ('screenDesignId' in input.draft) {
+          const design = await tx.screenDesign.findUnique({ where: { id: input.draft.screenDesignId } });
+          if (!design || design.updatedAt.toISOString() !== input.draft.expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');
         }
         if (await tx.device.count({ where: { id: { in: input.deviceIds }, isActive: true } }) !== input.deviceIds.length) throw new NotFoundException('Target device not found');
         const content = { ...prepared.content, ...actions };
@@ -97,6 +102,38 @@ export class PublishService {
     });
   }
 
+  /** Internal orchestration helper for a local uploaded screen. It never reads a
+   * live URL and reuses an identical immutable snapshot when possible. */
+  async publishUploadedScreen(screenId: number, expectedUpdatedAt: string) {
+    const prepared = await this.snapshotDraft({ screenId, expectedUpdatedAt });
+    return sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
+      return this.publishUploadedScreenInTransaction(tx, screenId, expectedUpdatedAt, prepared);
+    }));
+  }
+
+  /** The caller owns the enclosing transaction. This is used by the playlist
+   * picker so its screen snapshots and playlist revision commit together. */
+  async publishUploadedScreenInTransaction(
+    tx: Prisma.TransactionClient,
+    screenId: number,
+    expectedUpdatedAt: string,
+    prepared: { content: PublicationContent; imageUrl?: string },
+  ) {
+    const contentHash = sha256(canonicalJson(prepared.content));
+    const screen = await tx.screen.findUnique({ where: { id: screenId }, select: { updatedAt: true, imageUrl: true } });
+    if (!screen) throw new NotFoundException('Draft screen not found');
+    if (screen.updatedAt.toISOString() !== expectedUpdatedAt || screen.imageUrl !== prepared.imageUrl)
+      throw new ConflictException('Draft changed; reload before publishing');
+    const existing = await tx.publicationRevision.findFirst({ where: { contentHash }, orderBy: { publishedAt: 'desc' } });
+    if (existing) return existing;
+    return (await this.persistence.createPublication({
+      publicationKey: `screen-assignment-${randomUUID()}`,
+      protocolVersion: '1.0',
+      content: prepared.content as unknown as Prisma.InputJsonValue,
+      contentHash,
+    }, tx)).revision;
+  }
+
   private replay(receipt: { requestHash: string; result: Prisma.JsonValue }, requestHash: string) {
     if (receipt.requestHash !== requestHash) throw new ConflictException('Idempotency key already used for a different command');
     if (!receipt.result) throw new ServiceUnavailableException('Publication command incomplete');
@@ -113,7 +150,7 @@ export class PublishService {
       !Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 0 || !Array.isArray(input.deviceIds) ||
       input.deviceIds.length > 100 || !input.deviceIds.every(positive)) throw new BadRequestException('Invalid publication command');
     const draft = object(input.draft);
-    let parsed: Draft;
+    let parsed: PublicationDraft;
     if ('fixtureArtifacts' in draft) {
       keys(draft, ['fixtureArtifacts']);
       const ids = fixtureIds(draft.fixtureArtifacts);
@@ -123,15 +160,23 @@ export class PublishService {
       keys(draft, ['sourceSnapshotId']);
       if (typeof draft.sourceSnapshotId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(draft.sourceSnapshotId)) throw new BadRequestException('Invalid source snapshot reference');
       parsed = { sourceSnapshotId: draft.sourceSnapshotId };
-    } else {
+    } else if ('screenId' in draft) {
       keys(draft, ['screenId', 'expectedUpdatedAt']);
       if (!positive(draft.screenId) || typeof draft.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(draft.expectedUpdatedAt) || !Number.isFinite(Date.parse(draft.expectedUpdatedAt))) throw new BadRequestException('Only fixture or uploaded screen drafts are publishable');
       parsed = { screenId: draft.screenId, expectedUpdatedAt: draft.expectedUpdatedAt };
+    } else {
+      keys(draft, ['screenDesignId', 'expectedUpdatedAt']);
+      if (!positive(draft.screenDesignId) || typeof draft.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(draft.expectedUpdatedAt) || !Number.isFinite(Date.parse(draft.expectedUpdatedAt))) throw new BadRequestException('Only fixture, uploaded screen, or captured design drafts are publishable');
+      parsed = { screenDesignId: draft.screenDesignId, expectedUpdatedAt: draft.expectedUpdatedAt };
     }
     return { idempotencyKey: input.idempotencyKey.toLowerCase(), expectedRevision: Number(input.expectedRevision), draft: parsed, deviceIds: [...new Set(input.deviceIds as number[])].sort((a, b) => a - b), allowedActions };
   }
 
-  private async snapshot(draft: Draft): Promise<{ content: PublicationContent; imageUrl?: string }> {
+  /**
+   * Produces the same bounded immutable snapshot used by the public publish
+   * command. Callers must revalidate the draft inside their write transaction.
+   */
+  async snapshotDraft(draft: PublicationDraft): Promise<{ content: PublicationContent; imageUrl?: string }> {
     if ('fixtureArtifacts' in draft) return { content: { schemaVersion: 1, fixtureArtifacts: draft.fixtureArtifacts } };
     if ('sourceSnapshotId' in draft) {
       const row = await this.prisma.sourceSnapshot.findUnique({ where: { snapshotId: draft.sourceSnapshotId } });
@@ -142,26 +187,52 @@ export class PublishService {
       const data = row.data;
       const ids = data && typeof data === 'object' && !Array.isArray(data)
         && Object.keys(data).length === 1 ? fixtureIds(data.fixtureArtifacts) : null;
-      if (!ids) throw new BadRequestException('Source snapshot has no supported fixture artifact schema');
-      return { content: { schemaVersion: 1, fixtureArtifacts: ids, sourceSnapshot: {
+      const sourceSnapshot = {
         sourceId: row.sourceDefinitionId, snapshotId: row.snapshotId, revision: row.revision,
         contentHash: row.contentHash, connectorVersion: row.connectorVersion,
-      } } };
+      };
+      if (ids) return { content: { schemaVersion: 1, fixtureArtifacts: ids, sourceSnapshot } };
+      const panel = data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length === 1
+        ? (data as Record<string, unknown>).grafanaPanel : null;
+      if (!panel || typeof panel !== 'object' || Array.isArray(panel)) throw new BadRequestException('Source snapshot has no supported artifact schema');
+      const image = panel as Record<string, unknown>;
+      const width = image.width as number, height = image.height as number;
+      if (typeof image.png !== 'string' || !Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height)
+        || width < 1 || height < 1 || width * height > 4_194_304
+        || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.png) || image.png.length > 3_000_000) throw new BadRequestException('Grafana image snapshot invalid');
+      try {
+        const bytes = Buffer.from(image.png, 'base64');
+        const normalized = await sharp(bytes, { limitInputPixels: 4_194_304, animated: false }).rotate().toColourspace('srgb').png().toBuffer({ resolveWithObject: true });
+        if (normalized.data.length > 2 * 1024 * 1024 || normalized.info.width !== width || normalized.info.height !== height) throw new Error();
+        return { content: { schemaVersion: 1, image: { png: normalized.data.toString('base64'), width: normalized.info.width, height: normalized.info.height,
+          sha256: sha256(normalized.data) }, sourceSnapshot } };
+      } catch { throw new BadRequestException('Grafana image snapshot invalid'); }
     }
-    const screen = await this.prisma.screen.findUnique({ where: { id: draft.screenId } });
-    if (!screen) throw new NotFoundException('Draft screen not found');
-    if (screen.updatedAt.toISOString() !== draft.expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');
+    const isDesign = 'screenDesignId' in draft;
+    const id = isDesign ? draft.screenDesignId : draft.screenId;
+    const expectedUpdatedAt = draft.expectedUpdatedAt;
+    const design = isDesign
+      ? await this.prisma.screenDesign.findUnique({ where: { id }, select: { updatedAt: true } })
+      : null;
+    const uploaded = isDesign
+      ? null
+      : await this.prisma.screen.findUnique({ where: { id }, select: { imageUrl: true, updatedAt: true } });
+    const screen = design ?? uploaded;
+    if (!screen) throw new NotFoundException(isDesign ? 'Draft screen design not found' : 'Draft screen not found');
+    if (screen.updatedAt.toISOString() !== expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');
     // No URLs, providers, live design/plugin renders or arbitrary filesystem reads.
-    if (!/^\/uploads\/screens\/[a-zA-Z0-9_-]+\.(png|jpe?g|webp|bmp)$/i.test(screen.imageUrl)) throw new BadRequestException('Only local uploaded images can be published');
+    const imageUrl = uploaded?.imageUrl;
+    if (!isDesign && !/^\/uploads\/screens\/[a-zA-Z0-9_-]+\.(png|jpe?g|webp|bmp)$/i.test(imageUrl!)) throw new BadRequestException('Only local uploaded images can be published');
     try {
-      const root = await realpath(resolve(process.cwd(), 'uploads', 'screens'));
-      const path = await realpath(resolve(root, screen.imageUrl.split('/').pop()!));
+      const root = await realpath(resolve(process.cwd(), 'uploads', isDesign ? 'captures' : 'screens'));
+      const filename = isDesign ? `capture_${id}.png` : imageUrl!.split('/').pop()!;
+      const path = await realpath(resolve(root, filename));
       if (!path.startsWith(root + sep) || (await stat(path)).size > 8 * 1024 * 1024) throw new Error();
       const bytes = await readFile(path);
       // Decode and strip metadata; store bounded, self-contained image pixels.
       const { data, info } = await sharp(bytes, { limitInputPixels: 16_777_216, animated: false }).rotate().toColourspace('srgb').png().toBuffer({ resolveWithObject: true });
       if (data.length > 2 * 1024 * 1024) throw new Error();
-      return { imageUrl: screen.imageUrl, content: { schemaVersion: 1, image: { png: data.toString('base64'), width: info.width, height: info.height, sha256: sha256(data) } } };
-    } catch { throw new BadRequestException('Draft image unavailable or unsupported'); }
+      return { ...(imageUrl ? { imageUrl } : {}), content: { schemaVersion: 1, image: { png: data.toString('base64'), width: info.width, height: info.height, sha256: sha256(data) } } };
+    } catch { throw new BadRequestException(isDesign ? 'Design capture unavailable or unsupported' : 'Draft image unavailable or unsupported'); }
   }
 }

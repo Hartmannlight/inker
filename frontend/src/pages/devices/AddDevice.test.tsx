@@ -5,13 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import { AddDevice } from './AddDevice';
 
-const { create, createEnrollment } = vi.hoisted(() => ({
+const { create, createEnrollment, getContentAssignmentChoices } = vi.hoisted(() => ({
   create: vi.fn(),
   createEnrollment: vi.fn(),
+  getContentAssignmentChoices: vi.fn(),
 }));
 
 vi.mock('../../services/api', () => ({
-  deviceService: { create, createEnrollment },
+  deviceService: { create, createEnrollment, getContentAssignmentChoices },
 }));
 
 vi.mock('../../utils/qrcode', () => ({
@@ -39,6 +40,7 @@ describe('AddDevice pairing action', () => {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     });
+    getContentAssignmentChoices.mockResolvedValue({ screens: [], playlists: [] });
   });
 
   it('lets an admin choose a profile and creates the short-code enrollment after the device', async () => {

@@ -28,6 +28,7 @@ describe('ScreensController (e2e)', () => {
     update: async () => ({ ...mockScreen, name: 'Updated Screen' }),
     remove: async () => ({ message: 'Screen deleted successfully', affectedPlaylists: 0 }),
     findPublicScreens: async () => ({ items: [], total: 0 }),
+    createFromImage: async () => mockScreen,
   };
 
   beforeAll(async () => {
@@ -81,6 +82,18 @@ describe('ScreensController (e2e)', () => {
 
       expect(response.body.data).toHaveProperty('id');
       expect(response.body.data).toHaveProperty('name');
+    });
+
+    it('creates a screen from a local image upload', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/screens')
+        .field('name', 'Uploaded Screen')
+        .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47]), {
+          filename: 'screen.png', contentType: 'image/png',
+        })
+        .expect(201);
+
+      expect(response.body.data).toHaveProperty('name', 'Test Screen');
     });
   });
 

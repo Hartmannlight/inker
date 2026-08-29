@@ -40,6 +40,16 @@ export class UpdateScreenDto {
   @MaxLength(2048)
   thumbnailUrl?: string;
 
+  @ApiPropertyOptional({ example: 800, description: 'Known raster width in pixels' })
+  @IsOptional()
+  @IsInt()
+  width?: number;
+
+  @ApiPropertyOptional({ example: 480, description: 'Known raster height in pixels' })
+  @IsOptional()
+  @IsInt()
+  height?: number;
+
   @ApiPropertyOptional({
     example: true,
     description: 'Whether screen is publicly accessible',

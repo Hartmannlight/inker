@@ -38,6 +38,17 @@ export class PresentationService {
       return artifact;
   }
 
+  /**
+   * Admin-only callers use the same immutable artifact selected for delivery.
+   * This is deliberately read-only: previewing must not render, publish, or
+   * advance a device's desired/acknowledged state.
+   */
+  async preview(deviceId: number) {
+    const { artifact } = await this.read(deviceId, this.prisma);
+    if (!artifact) throw new NotFoundException('No published device content');
+    return artifact;
+  }
+
   private async read(deviceId: number, database: Prisma.TransactionClient) {
     const device = await database.device.findUnique({ where: { id: deviceId }, include: {
       profile: true, deliveryPolicy: true, publicationState: { include: { desiredRevision: true } },

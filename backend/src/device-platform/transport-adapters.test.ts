@@ -36,8 +36,8 @@ describe('built-in transport adapters', () => {
 
     expect(registration.apiKey).toHaveLength(43);
     expect(registration.externalId).toBeNull();
-    expect(registration.pairingTokenHash).toBeNull();
-    expect(registration.bootstrap).toBeUndefined();
+    expect(registration).not.toHaveProperty('pairingTokenHash');
+    expect(registration).not.toHaveProperty('bootstrap');
   });
 
   it('requires a MAC address for the legacy pull registration path', () => {
@@ -46,28 +46,13 @@ describe('built-in transport adapters', () => {
     );
   });
 
-  it('prepares the existing WebDisplay bootstrap while persisting only its hash', () => {
+  it('prepares a WebDisplay identity without legacy bootstrap material', () => {
     const gateway = { pushPresentation: async () => undefined };
     const registration = new WebSocketTransportAdapter(gateway as any).prepareRegistration();
 
     expect(registration.apiKey).toBeNull();
     expect(registration.externalId).toHaveLength(16);
-    expect(registration.pairingTokenHash).toHaveLength(64);
-    expect(registration.bootstrap?.pairingToken).toHaveLength(43);
-    expect(registration.pairingTokenHash).not.toBe(registration.bootstrap?.pairingToken);
-  });
-
-  it('rotates WebDisplay bootstrap material without changing its public identity', async () => {
-    let dispatchedDeviceId: number | undefined;
-    const adapter = new WebSocketTransportAdapter({
-      pushPresentation: async (deviceId: number) => { dispatchedDeviceId = deviceId; },
-    } as any);
-
-    const rotated = adapter.rotateBootstrap({ externalId: 'stable-external-id' });
-    await adapter.dispatchRefresh(9);
-
-    expect(rotated.externalId).toBe('stable-external-id');
-    expect(rotated.pairingTokenHash).not.toBe(rotated.bootstrap?.pairingToken);
-    expect(dispatchedDeviceId).toBe(9);
+    expect(registration).not.toHaveProperty('pairingTokenHash');
+    expect(registration).not.toHaveProperty('bootstrap');
   });
 });

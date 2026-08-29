@@ -395,15 +395,6 @@ export class PluginsService {
   }
 
   // ========================
-  // Grafana helpers
-  // ========================
-
-  async getGrafanaConnectionById(instanceId: number): Promise<never> {
-    await this.findInstanceById(instanceId);
-    throw new ServiceUnavailableException('SOURCE_REFRESH_REQUIRES_CONNECTOR');
-  }
-
-  // ========================
   // Builtin Plugins
   // ========================
 

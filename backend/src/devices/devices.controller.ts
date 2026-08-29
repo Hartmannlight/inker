@@ -9,8 +9,10 @@ import {
   Delete,
   Headers,
   Query,
+  Res,
   ParseIntPipe,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -19,14 +21,21 @@ import {
   ApiHeader,
 } from '@nestjs/swagger';
 import { DevicesService } from './devices.service';
+import { ContentAssignmentService } from './content-assignment.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { Public } from '../common/decorators/public.decorator';
+import { PresentationService } from '../device-platform/presentation.service';
+import { matchesIfNoneMatch } from '../device-platform/pull-content.controller';
 
 @ApiTags('devices')
 @Controller('devices')
 export class DevicesController {
-  constructor(private readonly devicesService: DevicesService) {}
+  constructor(
+    private readonly devicesService: DevicesService,
+    private readonly presentations: PresentationService,
+    private readonly assignments: ContentAssignmentService,
+  ) {}
 
   @Post()
   @ApiBearerAuth('access-token')
@@ -57,6 +66,28 @@ export class DevicesController {
   @ApiResponse({ status: 404, description: 'Device not found' })
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.devicesService.findOne(id);
+  }
+
+  @Get(':id/preview')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get the currently assigned immutable device artifact for an admin preview' })
+  @ApiResponse({ status: 200, description: 'Current published device artifact' })
+  @ApiResponse({ status: 304, description: 'Artifact has not changed' })
+  @ApiResponse({ status: 404, description: 'Device or published device content not found' })
+  async preview(
+    @Param('id', ParseIntPipe) id: number,
+    @Headers('if-none-match') validator: string | undefined,
+    @Res() response: Response,
+  ) {
+    const artifact = await this.presentations.preview(id);
+    const etag = `"${artifact.sha256}"`;
+    response.set({ ETag: etag, 'Cache-Control': 'private, no-cache' });
+    response.vary('Cookie');
+    if (matchesIfNoneMatch(validator, etag)) {
+      response.status(304).end();
+      return;
+    }
+    response.type(artifact.mimeType).status(200).send(artifact.bytes);
   }
 
   @Patch(':id')
@@ -101,11 +132,18 @@ export class DevicesController {
     return this.devicesService.regenerateApiKey(id);
   }
 
-  @Post(':id/pairing')
+  @Put(':id/content-assignment')
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Create a new one-time pairing link for a web display' })
-  regeneratePairing(@Param('id', ParseIntPipe) id: number) {
-    return this.devicesService.regeneratePairingToken(id);
+  @ApiOperation({ summary: 'Atomically assign no content, one publication revision, or one published playlist revision' })
+  contentAssignment(@Param('id', ParseIntPipe) id: number, @Body() body: unknown) {
+    return this.assignments.assign(id, body);
+  }
+
+  @Get(':id/content-assignment')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Read the current content assignment and eligible single/rotating content choices' })
+  contentAssignmentChoices(@Param('id', ParseIntPipe) id: number) {
+    return this.assignments.read(id);
   }
 
   @Get(':id/logs')

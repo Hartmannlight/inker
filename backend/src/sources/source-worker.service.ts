@@ -8,6 +8,8 @@ import { OUTBOX_POLICY, queueRetryDelay } from '../jobs/queue-policy';
 import { EncryptionService } from '../common/services/encryption.service';
 import { DEFAULT_INSTANCE_SECRET_PATH } from '../config/instance-secrets';
 import { canonicalJson, sha256 } from '../publications/publication-content';
+import { publicationArtifacts, type PublicationContent } from '../publications/publication-content';
+import { PublicationPersistenceService } from '../publications/publication-persistence.service';
 import { runConnector, validateConnectorResult, type ConnectorType } from './connectors';
 import { SOURCE_LIMITS, SOURCE_REFRESH, scheduleSource } from './source-job';
 import { sourceWrite } from './source-writes';
@@ -17,7 +19,8 @@ type Result = Awaited<ReturnType<typeof runConnector>>;
 
 @Injectable()
 export class SourceWorkerService {
-  constructor(private readonly prisma: PrismaService, private readonly store: OutboxStore) {}
+  constructor(private readonly prisma: PrismaService, private readonly store: OutboxStore,
+    private readonly publications?: PublicationPersistenceService) {}
   async schedule(now = new Date()) {
     const due = await this.prisma.sourceDefinition.findMany({ where: { enabled: true, nextRefreshAt: { lte: now },
       refreshJobs: { none: { completedAt: null, event: { status: { in: ['pending', 'processing'] } } } } },
@@ -112,6 +115,19 @@ export class SourceWorkerService {
       if (previous) return previous.errorCode ? 'failed' as const : 'completed' as const;
       const lastGood = source.latestValidSnapshot;
       const data = result ? result.data : lastGood?.data ?? null;
+      const contentHash = sha256(canonicalJson(data));
+      // A byte-identical provider result has no new snapshot revision. This
+      // keeps the pinned publication/render key stable, so devices cannot be
+      // prompted to download unchanged Grafana pixels on periodic refresh.
+      if (result && source.connectorType === 'grafana' && lastGood && lastGood.contentHash === contentHash && lastGood.connectorVersion === result.connectorVersion) {
+        await tx.sourceDefinition.update({ where: { sourceDefinitionId: source.sourceDefinitionId }, data: {
+          lastAttemptAt: now, lastSuccessAt: now, consecutiveFailures: 0, circuitOpenUntil: null,
+          nextRefreshAt: new Date(now.getTime() + source.refreshIntervalSeconds * 1000),
+        } });
+        await tx.sourceRefreshJob.update({ where: { eventId: event.eventId }, data: { completedAt: now } });
+        await tx.outboxEffect.upsert({ where: { eventId: event.eventId }, create: { key: sha256(`source:${event.eventId}`), eventId: event.eventId, completedAt: now }, update: {} });
+        return 'completed' as const;
+      }
       const terminal = !result && (!retryable || event.attempts >= OUTBOX_POLICY.maxAttempts);
       const failures = result ? 0 : source.consecutiveFailures + 1;
       const circuitUntil = !result && failures >= SOURCE_LIMITS.circuitFailures ? new Date(now.getTime() + SOURCE_LIMITS.circuitCooldownMs) : null;
@@ -122,10 +138,13 @@ export class SourceWorkerService {
         createdAt: now, sourceTimestamp: result?.sourceTimestamp ? new Date(result.sourceTimestamp) : lastGood?.sourceTimestamp,
         validDataCreatedAt: result ? now : lastGood?.validDataCreatedAt,
         freshnessState: result ? 'fresh' : lastGood ? 'stale' : 'error', staleAfterSeconds: source.refreshIntervalSeconds,
-        data: data === null ? Prisma.JsonNull : data as Prisma.InputJsonValue, contentHash: sha256(canonicalJson(data)),
+        data: data === null ? Prisma.JsonNull : data as Prisma.InputJsonValue, contentHash,
         errorCode: result ? null : errorCode ?? 'SOURCE_REFRESH_FAILED', retryable: result ? false : !terminal,
         refreshEventId: event.eventId, attempt: event.attempts,
       } });
+      if (result && source.connectorType === 'grafana') {
+        await this.advanceGrafanaPublications(tx, source.sourceDefinitionId, snapshot);
+      }
       await tx.sourceDefinition.update({ where: { sourceDefinitionId: source.sourceDefinitionId }, data: {
         snapshotRevision: snapshot.revision, latestSnapshotId: snapshot.snapshotId,
         ...(result ? { latestValidSnapshotId: snapshot.snapshotId, lastSuccessAt: now } : {}),
@@ -154,5 +173,45 @@ export class SourceWorkerService {
       }
       return result ? 'completed' as const : 'failed' as const;
     }, { timeout: 5000 }));
+  }
+
+  /** A provider worker may advance only publications already assigned to a
+   * device and explicitly pinned to this immutable source. */
+  private async advanceGrafanaPublications(tx: Prisma.TransactionClient, sourceId: string,
+    snapshot: { snapshotId: string; revision: number; contentHash: string; connectorVersion: string; data: Prisma.JsonValue }) {
+    if (!this.publications) return;
+    const panel = snapshot.data && typeof snapshot.data === 'object' && !Array.isArray(snapshot.data)
+      ? (snapshot.data as Record<string, unknown>).grafanaPanel : null;
+    if (!panel || typeof panel !== 'object' || Array.isArray(panel)) return;
+    const image = panel as Record<string, unknown>;
+    const png = image.png, width = image.width, height = image.height;
+    if (typeof png !== 'string' || typeof width !== 'number' || typeof height !== 'number'
+      || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)
+      || width < 1 || height < 1 || !/^[A-Za-z0-9+/]+={0,2}$/.test(png)) return;
+    const bytes = Buffer.from(png, 'base64');
+    if (!bytes.length || bytes.toString('base64') !== png || bytes.length > 2 * 1024 * 1024) return;
+    const publishedImage = { png, width, height, sha256: sha256(bytes) };
+    const revisions = await tx.publicationRevision.findMany({ where: { desiredByDevices: { some: {} } },
+      include: { desiredByDevices: { select: { deviceId: true } } } });
+    for (const revision of revisions) {
+      try {
+        publicationArtifacts(revision);
+        const content = revision.content as unknown as PublicationContent;
+        if (!content || typeof content !== 'object' || content.schemaVersion !== 1
+          || !content.sourceSnapshot || content.sourceSnapshot.sourceId !== sourceId) continue;
+        const next: PublicationContent = { ...content, image: publishedImage,
+          sourceSnapshot: { sourceId, snapshotId: snapshot.snapshotId, revision: snapshot.revision,
+            contentHash: snapshot.contentHash, connectorVersion: snapshot.connectorVersion } };
+        const contentHash = sha256(canonicalJson(next));
+        if (contentHash === revision.contentHash) continue;
+        const appended = await this.publications.appendRevision({ publicationId: revision.publicationId,
+          protocolVersion: revision.protocolVersion, content: next as unknown as Prisma.InputJsonValue, contentHash }, tx);
+        for (const device of revision.desiredByDevices) {
+          await this.publications.setDesiredRevision(device.deviceId, appended.publicationRevisionId, tx);
+        }
+      } catch {
+        // Invalid historical publication content is never rewritten by a source refresh.
+      }
+    }
   }
 }

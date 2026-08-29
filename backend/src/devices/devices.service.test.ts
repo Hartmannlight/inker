@@ -63,27 +63,11 @@ describe('DevicesService', () => {
         ? {
             apiKey: null,
             externalId: 'external-id',
-            pairingTokenHash: 'pairing-hash',
-            pairingExpiresAt: new Date(Date.now() + 60_000),
-            bootstrap: { pairingToken: 'pairing-token' },
           }
         : {
             apiKey: 'generated-key',
             externalId: null,
-            pairingTokenHash: null,
-          pairingExpiresAt: null,
           },
-      ...(mode === 'websocket'
-        ? {
-            rotateBootstrap: (device: any) => ({
-              apiKey: null,
-              externalId: device.externalId,
-              pairingTokenHash: 'rotated-pairing-hash',
-              pairingExpiresAt: new Date(Date.now() + 60_000),
-              bootstrap: { pairingToken: 'rotated-pairing-token' },
-            }),
-          }
-        : {}),
     }),
   };
 
@@ -178,7 +162,7 @@ describe('DevicesService', () => {
       expect(result).toHaveProperty('isOnline');
     });
 
-    it('keeps the WebDisplay bootstrap response while persisting only its hash', async () => {
+    it('creates a WebDisplay identity without issuing a legacy bootstrap', async () => {
       mockPrisma.device.create.mockResolvedValue(makeDevice({
         deviceType: 'web-display',
         profileId: 'browser-hd-1920x1080',
@@ -195,10 +179,9 @@ describe('DevicesService', () => {
       const data = mockPrisma.device.create.calls[0][0].data;
       expect(data.deviceType).toBe('web-display');
       expect(data.transport).toBe('websocket');
-      expect(data.pairingTokenHash).toBe('pairing-hash');
-      expect(data).not.toHaveProperty('pairingToken');
-      expect(result.pairingToken).toBe('pairing-token');
-      expect(result.displayUrl).toBe('/display/external-id?pair=pairing-token');
+      expect(data).not.toHaveProperty('pairingTokenHash');
+      expect(result).not.toHaveProperty('pairingToken');
+      expect(result).not.toHaveProperty('displayUrl');
     });
   });
 
@@ -323,27 +306,6 @@ describe('DevicesService', () => {
         deliveryPolicyId: 'reference-connected-browser',
       } as any)).rejects.toThrow(
         'A device profile cannot switch between legacy transport families in place',
-      );
-    });
-  });
-
-  describe('regeneratePairingToken()', () => {
-    it('delegates WebDisplay bootstrap rotation to the selected adapter', async () => {
-      mockPrisma.device.findUnique.mockResolvedValue(makeDevice({
-        deviceType: 'web-display',
-        profileId: 'browser-hd-1920x1080',
-        deliveryPolicyId: 'reference-connected-browser',
-        externalId: 'external-id',
-      }));
-      mockPrisma.device.update.mockResolvedValue({});
-
-      const result = await service.regeneratePairingToken(1);
-
-      expect(mockPrisma.device.update.calls[0][0].data.pairingTokenHash).toBe(
-        'rotated-pairing-hash',
-      );
-      expect(result.displayUrl).toBe(
-        '/display/external-id?pair=rotated-pairing-token',
       );
     });
   });

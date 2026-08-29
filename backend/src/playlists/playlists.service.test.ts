@@ -95,7 +95,7 @@ describe('PlaylistsService', () => {
       expect(result.screens[0]).not.toBeNull();
       expect(result.screens[0]!.id).toBe('design-5');
       expect(result.screens[0]!.isDesigned).toBe(true);
-      expect(result.screens[0]!.imageUrl).toContain('/api/device-images/design/5');
+      expect(result.screens[0]!.imageUrl).toContain('/screen-designs/5/preview');
     });
 
     it('should transform regular screen items to screens array', async () => {

@@ -1,7 +1,9 @@
 import type { JsonValue } from '@inker/contracts';
 import { types } from 'node:util';
+import { validateGrafanaPanelConfiguration } from './grafana-connector';
+import { runGrafanaConnector } from './grafana-worker-connector';
 
-export type ConnectorType = 'fixture' | 'slow' | 'failure';
+export type ConnectorType = 'fixture' | 'slow' | 'failure' | 'grafana';
 export interface ConnectorConfiguration {
   data: JsonValue;
   delayMs?: number;
@@ -12,6 +14,7 @@ export interface ConnectorContext { signal: AbortSignal; attempt: number; secret
 export interface ConnectorResult { data: JsonValue; sourceTimestamp?: string; connectorVersion: string; }
 
 export const MAX_CONNECTOR_DATA_BYTES = 64 * 1024;
+export const MAX_GRAFANA_PANEL_DATA_BYTES = 3 * 1024 * 1024;
 export const MAX_CONNECTOR_DATA_DEPTH = 16;
 const INVALID_CONFIG = 'SOURCE_CONNECTOR_INVALID_CONFIG';
 const INVALID_RESULT = 'SOURCE_CONNECTOR_INVALID_RESULT';
@@ -40,15 +43,15 @@ function record(value: unknown, code: string): Record<string, PropertyDescriptor
 }
 
 /** Clone without invoking getters/toJSON, while accounting for actual UTF-8 JSON. */
-function copyData(value: unknown, code: string, secret?: string): JsonValue {
+function copyData(value: unknown, code: string, secret?: string, maximum = MAX_CONNECTOR_DATA_BYTES): JsonValue {
   let bytes = 0;
   const ancestors = new Set<object>();
   const add = (count: number) => {
     bytes += count;
-    if (bytes > MAX_CONNECTOR_DATA_BYTES) invalid(code);
+    if (bytes > maximum) invalid(code);
   };
   const stringBytes = (text: string) => {
-    if (text.length > MAX_CONNECTOR_DATA_BYTES || secret && text.includes(secret)) invalid(code);
+    if (text.length > maximum || secret && text.includes(secret)) invalid(code);
     return Buffer.byteLength(JSON.stringify(text), 'utf8');
   };
   const visit = (input: unknown, depth: number): JsonValue => {
@@ -61,7 +64,7 @@ function copyData(value: unknown, code: string, secret?: string): JsonValue {
     ancestors.add(input);
     try {
       if (Array.isArray(input)) {
-        if (Object.getPrototypeOf(input) !== Array.prototype || input.length > MAX_CONNECTOR_DATA_BYTES / 2
+        if (Object.getPrototypeOf(input) !== Array.prototype || input.length > maximum / 2
           || Object.getOwnPropertySymbols(input).length) return invalid(code);
         const descriptors = Object.getOwnPropertyDescriptors(input);
         if (Object.keys(descriptors).length !== input.length + 1) return invalid(code);
@@ -90,6 +93,7 @@ function copyData(value: unknown, code: string, secret?: string): JsonValue {
 }
 
 export function validateConnectorConfiguration(type: ConnectorType, config: unknown): ConnectorConfiguration {
+  if (type === 'grafana') return validateGrafanaPanelConfiguration(config) as unknown as ConnectorConfiguration;
   if (!['fixture', 'slow', 'failure'].includes(type)) return invalid(INVALID_CONFIG);
   const properties = record(config, INVALID_CONFIG);
   const allowed = ['data', ...(type === 'slow' ? ['delayMs'] : []), ...(type === 'failure' ? ['failuresBeforeSuccess'] : [])];
@@ -114,9 +118,10 @@ export function validateConnectorResult(value: unknown, secret?: string): Connec
   const properties = record(value, INVALID_RESULT);
   if (Object.keys(properties).some(key => !['data', 'sourceTimestamp', 'connectorVersion'].includes(key))
     || !properties.data || typeof properties.connectorVersion?.value !== 'string'
-    || !/^builtin-(fixture|slow|failure)-v1$/.test(properties.connectorVersion.value)) return invalid(INVALID_RESULT);
+    || !/^(?:builtin-(fixture|slow|failure)-v1|grafana-v1)$/.test(properties.connectorVersion.value)) return invalid(INVALID_RESULT);
   const connectorVersion = properties.connectorVersion.value as string;
-  const result: ConnectorResult = { data: copyData(properties.data.value, INVALID_RESULT, secret), connectorVersion };
+  const maximum = connectorVersion === 'grafana-v1' ? MAX_GRAFANA_PANEL_DATA_BYTES : MAX_CONNECTOR_DATA_BYTES;
+  const result: ConnectorResult = { data: copyData(properties.data.value, INVALID_RESULT, secret, maximum), connectorVersion };
   if (properties.sourceTimestamp) {
     const timestamp = properties.sourceTimestamp.value;
     // Built-in sources use canonical UTC timestamps only; no local-clock guesses.
@@ -153,6 +158,7 @@ export async function runConnector(type: ConnectorType, config: unknown, context
   if (!(signal instanceof AbortSignal) || !Number.isSafeInteger(attempt) || attempt < 1
     || secret !== undefined && typeof secret !== 'string') return invalid('SOURCE_CONNECTOR_INVALID_CONTEXT');
   checkAbort(signal);
+  if (type === 'grafana') return runGrafanaConnector(config, context);
   // Snapshot configuration before waiting: caller mutations cannot alter a run.
   const normalized = validateConnectorConfiguration(type, config);
   if (type === 'slow' && normalized.delayMs! > 0) await wait(normalized.delayMs!, signal);

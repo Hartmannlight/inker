@@ -13,10 +13,9 @@ describe('SettingsController (e2e)', () => {
   const mockWelcomeConfig = { enabled: true, title: 'Hello World', subtitle: 'This is inker!', autoAssignPlaylist: true };
 
   const mockSettingsService = {
-    getAll: async () => ({ github_token: null }),
+    getAll: async () => ({ allow_local_network: null }),
     set: async () => undefined,
     delete: async () => undefined,
-    testGitHubToken: async () => ({ valid: true, message: 'Token valid!' }),
     getWelcomeScreenConfig: async () => mockWelcomeConfig,
     setWelcomeScreenConfig: async (config: any) => config,
     invalidateDefaultScreen: async () => undefined,
@@ -49,15 +48,15 @@ describe('SettingsController (e2e)', () => {
         .get('/settings')
         .expect(200);
 
-      expect(response.body.data).toHaveProperty('github_token');
+      expect(response.body.data).toHaveProperty('allow_local_network');
     });
   });
 
   describe('PUT /settings/:key', () => {
     it('should update a setting', async () => {
       const response = await request(app.getHttpServer())
-        .put('/settings/github_token')
-        .send({ value: 'ghp_test123' })
+        .put('/settings/allow_local_network')
+        .send({ value: 'true' })
         .expect(200);
 
       expect(response.body.data).toHaveProperty('success', true);
@@ -67,7 +66,7 @@ describe('SettingsController (e2e)', () => {
   describe('DELETE /settings/:key', () => {
     it('should delete a setting', async () => {
       const response = await request(app.getHttpServer())
-        .delete('/settings/github_token')
+        .delete('/settings/allow_local_network')
         .expect(200);
 
       expect(response.body.data).toHaveProperty('success', true);
@@ -104,14 +103,4 @@ describe('SettingsController (e2e)', () => {
     });
   });
 
-  describe('POST /settings/test-github-token', () => {
-    it('should test a GitHub token', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/settings/test-github-token')
-        .send({ token: 'ghp_test123' })
-        .expect(201);
-
-      expect(response.body.data).toHaveProperty('valid', true);
-    });
-  });
 });

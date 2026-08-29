@@ -19,8 +19,6 @@ class DummyMqttAdapter implements TransportAdapter {
     return {
       apiKey: null,
       externalId: null,
-      pairingTokenHash: null,
-      pairingExpiresAt: null,
     };
   }
 

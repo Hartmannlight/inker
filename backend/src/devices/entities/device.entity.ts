@@ -124,6 +124,28 @@ export type SerializedDevice<T> = T & {
   latestFirmwareVersion?: string | null;
 };
 
+export type NormalizedDeviceTelemetry = {
+  batteryPercent: number | null;
+  rssi: number | null;
+  source: 'websocket' | 'legacy-pull' | null;
+  updatedAt: string | null;
+};
+
+/**
+ * Only websocket values have a persisted zero-value provenance. Legacy columns
+ * used zero as a schema default, so an unqualified zero is deliberately unknown.
+ */
+export function normalizeDeviceTelemetry(device: { telemetry?: unknown; battery?: number | null; wifi?: number | null; lastSeenAt?: Date | null }): NormalizedDeviceTelemetry {
+  const record = device.telemetry && typeof device.telemetry === 'object' ? device.telemetry as Record<string, unknown> : undefined;
+  const websocket = record?.websocket && typeof record.websocket === 'object' ? record.websocket as Record<string, unknown> : undefined;
+  const legacyPull = record?.legacyPull && typeof record.legacyPull === 'object' ? record.legacyPull as Record<string, unknown> : undefined;
+  const updatedAt = typeof record?.updatedAt === 'string' ? record.updatedAt : null;
+  const battery = typeof websocket?.batteryPercent === 'number' ? websocket.batteryPercent : typeof legacyPull?.batteryPercent === 'number' ? legacyPull.batteryPercent : device.battery && device.battery !== 0 ? device.battery : null;
+  const rssi = typeof websocket?.rssi === 'number' ? websocket.rssi : typeof legacyPull?.rssi === 'number' ? legacyPull.rssi : device.wifi && device.wifi !== 0 ? device.wifi : null;
+  const source = websocket ? 'websocket' : legacyPull || battery !== null || rssi !== null ? 'legacy-pull' : null;
+  return { batteryPercent: battery, rssi, source, updatedAt: updatedAt ?? (source === 'legacy-pull' ? device.lastSeenAt?.toISOString() ?? null : null) };
+}
+
 /**
  * Serialize device with computed status and isOnline fields
  *
@@ -136,7 +158,6 @@ export function serializeDevice<T extends { isActive: boolean; lastSeenAt: Date 
   const online = isDeviceOnline(device);
   const source = device as T & {
     apiKey?: string;
-    pairingTokenHash?: string;
     profile?: any;
     deliveryPolicy?: any;
     capabilitiesOverride?: unknown;
@@ -152,12 +173,12 @@ export function serializeDevice<T extends { isActive: boolean; lastSeenAt: Date 
     ...rest
   } = source;
   delete (rest as Record<string, unknown>).apiKey;
-  delete (rest as Record<string, unknown>).pairingTokenHash;
   const serialized: Record<string, unknown> = {
     ...rest,
     capabilitiesOverride: capabilitiesOverride ?? null,
     status: online ? 'online' : 'offline',
     isOnline: online,
+    telemetryStatus: normalizeDeviceTelemetry(source),
   };
   if (profile && deliveryPolicy) {
     const resolved = resolveDeviceConfiguration(profile, deliveryPolicy, capabilitiesOverride);

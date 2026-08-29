@@ -93,15 +93,11 @@ export function Sidebar() {
       </svg>,
     },
     {
-      to: '/plugins',
-      label: 'Plugins',
+      to: '/integrations',
+      label: 'Integrations',
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M21 7.5l-2.25-1.313M21 7.5v2.25m0-2.25l-2.25 1.313M3 7.5l2.25-1.313M3 7.5l2.25 1.313M3 7.5v2.25m9 3l2.25-1.313M12 12.75l-2.25-1.313M12 12.75V15m0 6.75l2.25-1.313M12 21.75V19.5m0 2.25l-2.25-1.313m0-16.875L12 2.25l2.25 1.313M21 14.25v2.25l-2.25 1.313m-13.5 0L3 16.5v-2.25"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 7.5h9m-9 9h9M5.25 3.75h13.5a1.5 1.5 0 011.5 1.5v13.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V5.25a1.5 1.5 0 011.5-1.5z" />
         </svg>
       ),
     },
@@ -226,21 +222,6 @@ export function Sidebar() {
           })}
         </nav>
 
-        {/* Buy Me a Coffee */}
-        <div className="px-4 pb-2 pt-4 border-t border-sidebar-border flex justify-center">
-          <a
-            href="https://buymeacoffee.com/wojo_o"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <img
-              src="/bmc-button.png"
-              alt="Buy Me A Coffee"
-              className="h-10"
-            />
-          </a>
-        </div>
-
         {/* Footer with version info */}
         <div className="px-4 pb-4">
           <button
@@ -251,13 +232,9 @@ export function Sidebar() {
                 : 'cursor-default'
             }`}
           >
-            <div className={`w-2 h-2 rounded-full ${
-              versionInfo?.updateAvailable
-                ? 'bg-amber-400 animate-pulse'
-                : 'bg-status-success-dot animate-pulse'
-            }`} />
+            {versionInfo?.updateAvailable && <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
             <span className="text-xs text-sidebar-text-muted">
-              {versionInfo?.updateAvailable ? 'Update Available' : 'System Online'}
+              {versionInfo?.updateAvailable ? 'Update Available' : 'Version'}
             </span>
             <span className={`ml-auto text-xs ${
               versionInfo?.updateAvailable

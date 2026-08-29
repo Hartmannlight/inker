@@ -474,45 +474,4 @@ export class PluginsController {
     return this.pluginsService.handleWebhook(slug, body);
   }
 
-  // ========================
-  // Grafana proxy
-  // ========================
-
-  @Post('grafana/dashboards')
-  @ApiOperation({ summary: 'List Grafana dashboards via parent instance' })
-  async grafanaDashboards(@Body() body: { instanceId: number }) {
-    return this.pluginsService.getGrafanaConnectionById(body.instanceId);
-  }
-
-  @Post('grafana/panels')
-  @ApiOperation({ summary: 'List panels for a Grafana dashboard' })
-  async grafanaPanels(@Body() body: { instanceId: number; dashboard_uid: string }) {
-    return this.pluginsService.getGrafanaConnectionById(body.instanceId);
-  }
-
-  @Post('grafana/generate-screen')
-  @ApiOperation({ summary: 'Generate a Grafana screen (child instance)' })
-  async grafanaGenerateScreen(@Body() body: {
-    parentInstanceId: number;
-    dashboard_uid: string;
-    panel_id: number | string;
-    time_range?: string;
-    screen_width?: number;
-    screen_height?: number;
-    name?: string;
-  }) {
-    const parent = await this.pluginsService.findInstanceById(body.parentInstanceId);
-    return this.pluginsService.createInstance({
-      pluginId: parent.pluginId,
-      name: body.name || 'Grafana Screen',
-      settings: {
-        parentInstanceId: body.parentInstanceId,
-        dashboard_uid: body.dashboard_uid,
-        panel_id: body.panel_id,
-        time_range: body.time_range || 'now-6h',
-        screen_width: body.screen_width || 800,
-        screen_height: body.screen_height || 480,
-      },
-    });
-  }
 }

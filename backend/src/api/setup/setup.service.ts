@@ -103,6 +103,7 @@ export class SetupService {
         lastSeenAt: Date;
         battery?: number;
         wifi?: number;
+        telemetry?: any;
       } = {
         lastSeenAt: new Date(),
       };
@@ -119,6 +120,14 @@ export class SetupService {
       // Update wifi RSSI if provided
       if (metrics?.wifi !== undefined && !isNaN(metrics.wifi)) {
         updateData.wifi = metrics.wifi;
+      }
+      if (metrics?.battery !== undefined || metrics?.wifi !== undefined) {
+        const existing = device.telemetry && typeof device.telemetry === 'object' ? device.telemetry as Record<string, unknown> : {};
+        const previous = existing.legacyPull && typeof existing.legacyPull === 'object' ? existing.legacyPull as Record<string, unknown> : {};
+        updateData.telemetry = { ...existing, legacyPull: { ...previous,
+          ...(metrics?.battery !== undefined && !isNaN(metrics.battery) ? { batteryPercent: metrics.battery } : {}),
+          ...(metrics?.wifi !== undefined && !isNaN(metrics.wifi) ? { rssi: metrics.wifi } : {}),
+        }, updatedAt: new Date().toISOString() };
       }
 
       device = await this.prisma.device.update({

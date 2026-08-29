@@ -266,6 +266,7 @@ export class PlaylistsService {
       if (item.pluginInstance) {
         const previewUrl = `/api/plugins/instances/${item.pluginInstance.id}/render?mode=preview`;
         return {
+          itemId: item.id,
           id: `plugin-${item.pluginInstance.id}`,
           screenId: `plugin-${item.pluginInstance.id}`,
           name: item.pluginInstance.name || item.pluginInstance.plugin?.name || 'Plugin',
@@ -280,8 +281,9 @@ export class PlaylistsService {
           height: Number(item.pluginInstance.settings?.screen_height) || 480,
         };
       } else if (item.screenDesign) {
-        const previewUrl = `/api/device-images/design/${item.screenDesign.id}?preview=true`;
+        const previewUrl = `/screen-designs/${item.screenDesign.id}/preview`;
         return {
+          itemId: item.id,
           id: `design-${item.screenDesign.id}`,
           screenId: `design-${item.screenDesign.id}`,
           name: item.screenDesign.name,
@@ -294,6 +296,7 @@ export class PlaylistsService {
         };
       } else if (item.screen) {
         return {
+          itemId: item.id,
           id: item.screen.id,
           screenId: String(item.screen.id),
           name: item.screen.name,
@@ -517,7 +520,8 @@ export class PlaylistsService {
         const transformedScreens = updatedPlaylistWithItems.items.map((item: any) => {
           if (item.pluginInstance) {
             const previewUrl = `/api/plugins/instances/${item.pluginInstance.id}/render?mode=preview`;
-            return {
+          return {
+              itemId: item.id,
               id: `plugin-${item.pluginInstance.id}`,
               screenId: `plugin-${item.pluginInstance.id}`,
               name: item.pluginInstance.name || item.pluginInstance.plugin?.name || 'Plugin',
@@ -532,8 +536,9 @@ export class PlaylistsService {
               height: Number(item.pluginInstance.settings?.screen_height) || 480,
             };
           } else if (item.screenDesign) {
-            const previewUrl = `/api/device-images/design/${item.screenDesign.id}?preview=true`;
-            return {
+            const previewUrl = `/screen-designs/${item.screenDesign.id}/preview`;
+          return {
+              itemId: item.id,
               id: `design-${item.screenDesign.id}`,
               screenId: `design-${item.screenDesign.id}`,
               name: item.screenDesign.name,
@@ -545,7 +550,8 @@ export class PlaylistsService {
               isDesigned: true,
             };
           } else if (item.screen) {
-            return {
+          return {
+              itemId: item.id,
               id: item.screen.id,
               screenId: String(item.screen.id),
               name: item.screen.name,

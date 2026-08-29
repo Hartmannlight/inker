@@ -3,161 +3,43 @@ import { useParams } from 'react-router-dom';
 import { config } from '../../config';
 import { comparePresentationRevisions, parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import { TimerTestPanel } from './TimerTestPanel';
-import {
-  exchangeDeviceEnrollment,
-  normalizePairingBaseUrl,
-  normalizePairingCode,
-  PairingExchangeError,
-} from './pairing';
 
 type PresentationManifest = WebDisplayManifest;
 
-type ConnectionState = 'pairing' | 'connecting' | 'connected' | 'offline' | 'unpaired' | 'error';
+type ConnectionState = 'connecting' | 'connected' | 'offline' | 'unpaired' | 'error';
 
 const UNPAIRED_MESSAGE = 'Dieses Display ist noch nicht gekoppelt.';
 
-function replaceVisibleUrlWithout(...parameters: string[]) {
-  const url = new URL(window.location.href);
-  for (const parameter of parameters) url.searchParams.delete(parameter);
-  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-}
-
-function shortPairingMessage(error: unknown): string {
-  if (!(error instanceof PairingExchangeError)) {
-    return 'Die Kopplung ist fehlgeschlagen. Bitte versuche es erneut.';
-  }
-  switch (error.kind) {
-    case 'validation':
-      return error.message.startsWith('Enter')
-        ? 'Gib eine gültige HTTP- oder HTTPS-Basis-URL ein.'
-        : 'Gib einen gültigen zehnstelligen Code ein.';
-    case 'invalid':
-      return 'Der Code ist ungültig, abgelaufen oder wurde bereits verwendet.';
-    case 'forbidden':
-      return 'Der Server hat die Kopplung abgelehnt. Prüfe HTTPS und die Serverfreigabe.';
-    case 'rate-limited':
-      return 'Zu viele Versuche. Bitte warte eine Minute und versuche es erneut.';
-    case 'offline':
-      return 'Inker ist nicht erreichbar. Prüfe Netzwerk und Basis-URL.';
-    default:
-      return 'Der Server hat keine gültige Kopplungsantwort geliefert.';
-  }
-}
-
 export function WebDisplay() {
   const { externalId: routeExternalId = '' } = useParams<{ externalId: string }>();
-  const initialExternalId = routeExternalId === 'pair' ? '' : routeExternalId;
+  const initialExternalId = routeExternalId;
   const initialSearch = useRef(new URLSearchParams(window.location.search));
-  const initialShortCode = useRef(initialSearch.current.get('code'));
   const [timerTest] = useState(() => initialSearch.current.get('test') === 'timers');
   const [timerRefreshSignal, setTimerRefreshSignal] = useState(0);
-  const [activeExternalId, setActiveExternalId] = useState(initialExternalId);
+  const [activeExternalId] = useState(initialExternalId);
   const initialStorageKey = initialExternalId ? `inker_display_${initialExternalId}` : null;
   const [credential, setCredential] = useState(() => initialStorageKey ? localStorage.getItem(initialStorageKey) : null);
-  const [pairingToken, setPairingToken] = useState(() => initialExternalId ? initialSearch.current.get('pair') : null);
-  const [pairingBaseUrl, setPairingBaseUrl] = useState(window.location.origin);
-  const [pairingCode, setPairingCode] = useState(initialShortCode.current ?? '');
-  const [connectionApiUrl, setConnectionApiUrl] = useState(config.apiUrl);
+  const [connectionApiUrl] = useState(config.apiUrl);
   const [presentation, setPresentation] = useState<PresentationManifest | null>(null);
   const displayedBlob = useRef<string | null>(null);
   const displayedRevision = useRef<Pick<WebDisplayManifest, 'revision' | 'renderRevision'>>({ revision: -1 });
   const displayedIdentity = useRef<string | null>(null);
   useEffect(() => () => { if (displayedBlob.current) URL.revokeObjectURL(displayedBlob.current); }, []);
-  const [state, setState] = useState<ConnectionState>(
-    pairingToken || initialShortCode.current ? 'pairing' : credential ? 'connecting' : 'unpaired',
-  );
+  const [state, setState] = useState<ConnectionState>(credential ? 'connecting' : 'unpaired');
   const [message, setMessage] = useState(
-    pairingToken || credential ? 'Connecting to Inker…' : initialShortCode.current ? 'Code wird geprüft…' : UNPAIRED_MESSAGE,
+    credential ? 'Connecting to Inker…' : UNPAIRED_MESSAGE,
   );
-  const longPairingStarted = useRef(false);
-  const shortPairingStarted = useRef(false);
   const storageKey = activeExternalId ? `inker_display_${activeExternalId}` : null;
-
-  const pairWithShortCode = useCallback(async (baseUrl: string, code: string) => {
-    const normalizedCode = normalizePairingCode(code);
-    if (!normalizedCode) {
-      setState('error');
-      setMessage('Gib einen gültigen zehnstelligen Code ein.');
-      return;
-    }
-
-    let normalizedBaseUrl: string;
-    try {
-      normalizedBaseUrl = normalizePairingBaseUrl(baseUrl);
-    } catch (error) {
-      setState('error');
-      setMessage(shortPairingMessage(error));
-      return;
-    }
-
-    setState('pairing');
-    setMessage('Code wird geprüft…');
-    try {
-      const result = await exchangeDeviceEnrollment(normalizedBaseUrl, normalizedCode);
-      const nextStorageKey = `inker_display_${result.device.externalId}`;
-
-      localStorage.setItem(nextStorageKey, result.credential);
-      setActiveExternalId(result.device.externalId);
-      setCredential(result.credential);
-      setConnectionApiUrl(`${normalizedBaseUrl}/api`);
-      setPairingCode('');
-      setPairingBaseUrl('');
-      setState('connecting');
-      setMessage('Kopplung erfolgreich. Verbindung wird hergestellt…');
-      window.history.replaceState(
-        window.history.state,
-        '',
-        `/display/${encodeURIComponent(result.device.externalId)}${timerTest ? '?test=timers' : ''}`,
-      );
-    } catch (error) {
-      setState('error');
-      setMessage(shortPairingMessage(error));
-    }
-  }, [timerTest]);
 
   const timerUnauthorized = useCallback(() => {
     if (storageKey && localStorage.getItem(storageKey) === credential) localStorage.removeItem(storageKey);
     setCredential(storageKey ? localStorage.getItem(storageKey) : null);
     setState('unpaired');
-    setMessage('Pairing is no longer valid. Generate a new pairing link.');
+    setMessage('Pairing is no longer valid. Open the Inker start page to pair again.');
   }, [storageKey, credential]);
 
   useEffect(() => {
-    if (!initialShortCode.current || shortPairingStarted.current) return;
-    shortPairingStarted.current = true;
-    replaceVisibleUrlWithout('code', 'baseUrl');
-    void pairWithShortCode(pairingBaseUrl, initialShortCode.current);
-  }, [pairWithShortCode, pairingBaseUrl]);
-
-  useEffect(() => {
-    if (!pairingToken || longPairingStarted.current || !activeExternalId || !storageKey) return;
-    longPairingStarted.current = true;
-    replaceVisibleUrlWithout('pair');
-    setState('pairing');
-    fetch(`${config.apiUrl}/web-displays/pair`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ externalId: activeExternalId, pairingToken }),
-    })
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.message || 'Pairing failed');
-        return body.data ?? body;
-      })
-      .then((result: { credential: string }) => {
-        localStorage.setItem(storageKey, result.credential);
-        setPairingToken(null);
-        setCredential(result.credential);
-        setState('connecting');
-      })
-      .catch((error) => {
-        setState('error');
-        setMessage(error instanceof Error ? error.message : 'Pairing failed');
-      });
-  }, [activeExternalId, pairingToken, storageKey]);
-
-  useEffect(() => {
-    if (!credential || pairingToken || !activeExternalId || !storageKey) return;
+    if (!credential || !activeExternalId || !storageKey) return;
     const identity = `${new URL(connectionApiUrl, window.location.origin).toString()}|${activeExternalId}`;
     // Credential rotation/reconnect preserves the same device's last image. A
     // different device or server has its own revision namespace and private image.
@@ -243,7 +125,7 @@ export function WebDisplay() {
             setCredential(storedCredential);
           }
           setState('unpaired');
-          setMessage('Pairing is no longer valid. Generate a new pairing link.');
+          setMessage('Pairing is no longer valid. Open the Inker start page to pair again.');
           return;
         }
         setState('offline');
@@ -306,18 +188,11 @@ export function WebDisplay() {
       window.removeEventListener('resize', reportViewport);
       socket?.close(1000, 'Display closed');
     };
-  }, [activeExternalId, connectionApiUrl, credential, pairingToken, storageKey, timerTest]);
-
-  const submitShortCode = (event: React.FormEvent) => {
-    event.preventDefault();
-    void pairWithShortCode(pairingBaseUrl, pairingCode);
-  };
-
-  const showPairingForm = !credential && !pairingToken;
+  }, [activeExternalId, connectionApiUrl, credential, storageKey, timerTest]);
 
   return (
     <main className="fixed inset-0 overflow-auto" style={{ background: presentation?.content.background ?? '#050505' }}>
-      {timerTest && credential && activeExternalId && !pairingToken && <TimerTestPanel
+      {timerTest && credential && activeExternalId && <TimerTestPanel
         key={`${connectionApiUrl}|${activeExternalId}|${credential}`} apiUrl={connectionApiUrl} externalId={activeExternalId}
         credential={credential} connected={state === 'connected'} refreshSignal={timerRefreshSignal} onUnauthorized={timerUnauthorized} />}
       {presentation && (
@@ -336,51 +211,7 @@ export function WebDisplay() {
             <h1 className="text-2xl font-semibold">Inker Web Display</h1>
             <p role="status" className="mt-3 text-sm text-white/70">{message}</p>
 
-            {showPairingForm && (
-              <form onSubmit={submitShortCode} className="mt-8 space-y-5 rounded-2xl border border-white/20 bg-white/10 p-5 text-left">
-                <div>
-                  <label htmlFor="pairing-base-url" className="block text-sm font-medium text-white">Basis-URL</label>
-                  <input
-                    id="pairing-base-url"
-                    type="url"
-                    value={pairingBaseUrl}
-                    onChange={(event) => setPairingBaseUrl(event.target.value)}
-                    placeholder="https://inker.example"
-                    autoComplete="url"
-                    required
-                    className="mt-2 w-full rounded-lg border border-white/25 bg-black/50 px-3 py-3 text-base text-white outline-none focus:border-white"
-                  />
-                  {pairingBaseUrl.trim().toLowerCase().startsWith('http://') && (
-                    <p role="alert" className="mt-2 rounded-lg border border-amber-300/50 bg-amber-300/10 p-2 text-xs text-amber-100">
-                      <strong>Unsicheres HTTP:</strong> Code und ausgegebenes Credential sind auf dem Transportweg nicht verschlüsselt. Nur mit ausdrücklich freigegebenem, vertrauenswürdigem Netz verwenden.
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label htmlFor="pairing-code" className="block text-sm font-medium text-white">Kopplungscode</label>
-                  <input
-                    id="pairing-code"
-                    value={pairingCode}
-                    onChange={(event) => setPairingCode(event.target.value)}
-                    placeholder="ABCDE-FGHJK"
-                    inputMode="text"
-                    autoCapitalize="characters"
-                    autoComplete="one-time-code"
-                    spellCheck={false}
-                    required
-                    className="mt-2 w-full rounded-lg border border-white/25 bg-black/50 px-3 py-3 font-mono text-lg uppercase tracking-widest text-white outline-none focus:border-white"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={state === 'pairing'}
-                  className="min-h-12 w-full rounded-lg bg-white px-4 py-3 font-semibold text-black disabled:opacity-50"
-                >
-                  {state === 'pairing' ? 'Code wird geprüft…' : 'Koppeln'}
-                </button>
-                <p className="text-xs text-white/60">Der alte Zugang bleibt bei ungültigem Code, Rate-Limit, Offline- oder Netzwerkfehler unverändert.</p>
-              </form>
-            )}
+            {!credential && <a href="/?mode=pair" className="mt-6 inline-block rounded-lg bg-white px-4 py-3 font-semibold text-black">Open Inker start page to pair</a>}
           </div>
         </div>
       )}

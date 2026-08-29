@@ -61,9 +61,14 @@ const grafanaActions: PluginAction[] = [
   },
 ];
 
-const pluginActionRegistry: Record<string, PluginAction[]> = {
-  grafana_panel: grafanaActions,
-};
+// Retain the component definitions temporarily for an existing open modal, but
+// do not register them for new user flows.
+void grafanaActions;
+
+// Grafana plugin actions were retired with the worker-owned Source flow.
+// Legacy instances redirect to /integrations/grafana instead of opening these
+// legacy settings or creating child instances.
+const pluginActionRegistry: Record<string, PluginAction[]> = {};
 
 export function getPluginActions(slug: string): PluginAction[] {
   return pluginActionRegistry[slug] || [];

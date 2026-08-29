@@ -259,6 +259,26 @@ describe("publication persistence boundary", () => {
     expect(await prisma.publicationCommand.count()).toBe(1);
   });
 
+  test('UX-03 publishes an immutable local design capture and rejects a changed design revision', async () => {
+    const design = await prisma.screenDesign.create({ data: { name: 'Published capture' } });
+    const captureDirectory = join(backendRoot, 'uploads', 'captures');
+    const capturePath = join(captureDirectory, `capture_${design.id}.png`);
+    mkdirSync(captureDirectory, { recursive: true });
+    const png = PULL_FIXTURE_ARTIFACTS.find(artifact => artifact.mimeType === 'image/png')!;
+    writeFileSync(capturePath, png.bytes);
+    try {
+      const targetDevice = await target('captured-design');
+      const draft = { screenDesignId: design.id, expectedUpdatedAt: design.updatedAt.toISOString() };
+      const result = await publisher.publish('captured-design', { idempotencyKey: randomUUID(), expectedRevision: 0,
+        deviceIds: [targetDevice.id], draft }) as any;
+      const revision = await prisma.publicationRevision.findUniqueOrThrow({ where: { publicationRevisionId: result.publicationRevisionId } });
+      expect(revision.content).toMatchObject({ schemaVersion: 1, image: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+      await prisma.screenDesign.update({ where: { id: design.id }, data: { name: 'Changed after capture' } });
+      await expect(publisher.publish('captured-design-change', { idempotencyKey: randomUUID(), expectedRevision: 0,
+        deviceIds: [], draft })).rejects.toThrow('Draft changed');
+    } finally { unlinkSync(capturePath); }
+  });
+
   test('WP-17 100 sequential and 100 parallel browser/pull reads perform zero SQL writes', async () => {
     const browser = await target(), pull = await target('pull', true);
     await publisher.publish('stable', command([browser.id, pull.id]));

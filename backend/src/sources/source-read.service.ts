@@ -9,7 +9,7 @@ export function publicDefinition(source: SourceDefinition) {
     protocolVersion: '1.0', sourceDefinitionId: source.sourceDefinitionId,
     definitionVersion: source.definitionVersion, name: source.name,
     connectorType: source.connectorType, schemaVersion: source.schemaVersion,
-    configuration: source.configuration, secretReferences: source.secretId ? { provider: source.secretId } : {},
+    configuration: source.configuration, secretReferences: {}, secretConfigured: source.secretId !== null,
     ...(source.transformationCode != null ? { transformationCode: source.transformationCode } : {}),
     refreshIntervalSeconds: source.refreshIntervalSeconds, timeoutMs: source.timeoutMs,
     concurrencyGroup: source.concurrencyGroup,

@@ -43,6 +43,8 @@ export interface DisplayCapabilities {
   rotation: 0 | 90 | 180 | 270;
   safeArea: SafeArea;
   scaling: 'none' | 'contain' | 'cover';
+  /** Letterbox/pillarbox background for raster contain output. */
+  backgroundColor?: string;
   renderFormats: RenderFormat[];
   mimeTypes: string[];
   eInk?: {
@@ -185,6 +187,9 @@ function validateDisplay(value: unknown, context: ValidationContext, path: strin
   }
   validateSafeArea(record.safeArea, context, `${path}.safeArea`);
   requiredEnum(record, 'scaling', ['none', 'contain', 'cover'] as const, context, path);
+  if (record.backgroundColor !== undefined && (typeof record.backgroundColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(record.backgroundColor))) {
+    addIssue(context, 'error', 'invalid_background_color', `${path}.backgroundColor`, 'Expected a #RRGGBB background color.');
+  }
   requiredEnumArray(record, 'renderFormats', RENDER_FORMATS, context, path);
   requiredStringArray(record, 'mimeTypes', context, path);
   if (record.eInk !== undefined) validateEInk(record.eInk, context, `${path}.eInk`);

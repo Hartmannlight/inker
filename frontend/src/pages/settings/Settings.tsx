@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { MainLayout } from '../../components/layout';
 import { DeviceConnection } from '../../components/settings/DeviceConnection';
 import { WelcomeScreenSettings } from '../../components/settings/WelcomeScreenSettings';
-import { ApiSettings } from '../../components/settings/ApiSettings';
 import { AdminSessions } from '../../components/settings/AdminSessions';
 import { Card } from '../../components/common';
 import { settingsService } from '../../services/api';
@@ -132,19 +131,6 @@ export function Settings() {
             <h2 className="text-xl font-semibold text-text-primary">Welcome Screen</h2>
           </div>
           <WelcomeScreenSettings />
-        </div>
-
-        {/* API Settings Section */}
-        <div className="space-y-6">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-gradient-to-br from-purple-100 to-bg-muted rounded-xl">
-              <svg className="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-semibold text-text-primary">API Settings</h2>
-          </div>
-          <ApiSettings />
         </div>
 
         {/* Network Security Section */}

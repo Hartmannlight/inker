@@ -1,6 +1,6 @@
 # ADR-009 – Richtlinie für HTTP-Pairing im lokalen Netz
 
-- Status: Offen
+- Status: Akzeptiert
 - Datum: 2026-08-24
 - Ersetzt: –
 - Ersetzt durch: –
@@ -14,24 +14,24 @@ ausgegebenes Geräte-Credential gegenüber Teilnehmern im lokalen Netz offen.
 
 ## Entscheidung
 
-Noch offen ist, ob die erste Version internes LAN-HTTP überhaupt anbietet oder
-lokales HTTPS von Anfang an verlangt. Bis zur Entscheidung gilt HTTPS als sicherer
-Standard. Eine HTTP-Ausnahme darf nicht stillschweigend aktiv sein; falls sie
-implementiert wird, benötigt sie explizite Administratorfreigabe, eine sichtbare
-Warnung und eine klar abgegrenzte Vertrauensannahme.
+HTTPS ist der Produktionsdefault und wird serverseitig erzwungen. Für eine
+bewusst vertrauenswürdige lokale Installation darf ein Administrator ausschließlich
+über `PAIRING_ALLOW_INSECURE_HTTP=true` und einen Containerneustart HTTP-Pairing
+freigeben. Die Pairing-Oberfläche erklärt diese Voraussetzung bei einem 403; sie
+aktiviert HTTP nie selbst und leitet die Entscheidung nicht aus Host-Headern ab.
 
-Entschieden wird vor der Implementierung des vollständigen Pairingflows anhand
-eines dokumentierten lokalen Zertifikats-/Provisioning-Smoke-Tests und eines
-Threat-Model-Reviews.
+`PAIRING_TRUST_PROXY=true` ist eine davon unabhängige Freigabe für genau einen
+TLS terminierenden Reverse Proxy. Nur dann wird dessen `X-Forwarded-Proto` für
+die HTTPS-Prüfung berücksichtigt. Der lokale HTTP-Opt-in ersetzt kein TLS und
+setzt voraus, dass das lokale Netz ausdrücklich als vertrauenswürdig bewertet
+wurde.
 
 ## Folgen
 
-- Folgepakete können den HTTPS-Pfad implementieren, ohne auf diese Komfortfrage zu
-  warten.
-- Ein möglicher HTTP-Modus bleibt eine bewusste Sicherheitsentscheidung und keine
-  automatische Fallbacklogik.
-- Lokale Discovery und Zertifikatsverteilung benötigen gegebenenfalls zusätzliche
-  Produktarbeit.
+- Produktions- und Proxy-Installationen verwenden HTTPS ohne lokale Ausnahme.
+- HTTP bleibt eine sichtbare, persistente Administratorentscheidung im Compose-
+  Environment und kein automatischer Fallback.
+- Bestehende Device-Credentials bleiben von der Transportentscheidung unberührt.
 
 ## Alternativen
 

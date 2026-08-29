@@ -126,4 +126,23 @@ describe('plugin template boundary', () => {
         .rejects.toMatchObject({ status: 503, message: 'PLUGIN_ISOLATION_REQUIRED' });
     }
   });
+
+  test('UX-09 offline recipe reductions render only bounded markup and keep static partials visibly blocked', async () => {
+    const { renderer } = harness();
+    // Manually reduced from three MIT-licensed source trees recorded in
+    // TRMNL_COMPATIBILITY_ASSESSMENT.md. No upstream code or assets are copied.
+    const fixtures = [
+      { name: 'monkey-island-quotes', markup: '<p>{{ quote }}</p>', data: { quote: 'Three-headed monkey' }, expected: '<p>Three-headed monkey</p>' },
+      { name: 'countdown-countup', markup: '<strong>{{ event }}</strong>: {{ days }}', data: { event: 'Launch', days: 3 }, expected: '<strong>Launch</strong>: 3' },
+      { name: 'flip-date-shared-partial', markup: "{% render 'shared' %}", data: {}, expected: null },
+    ] as const;
+    for (const fixture of fixtures) {
+      if (fixture.expected === null) {
+        await expect(renderer.renderToHtml(fixture.markup, fixture.data)).rejects
+          .toMatchObject({ status: 503, message: 'PLUGIN_ISOLATION_REQUIRED' });
+      } else {
+        expect(await renderer.renderToHtml(fixture.markup, fixture.data)).toBe(fixture.expected);
+      }
+    }
+  });
 });

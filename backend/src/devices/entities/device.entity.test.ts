@@ -6,6 +6,7 @@ import {
   serializeDevice,
   serializeDevices,
   isNewerVersion,
+  normalizeDeviceTelemetry,
 } from './device.entity';
 
 describe('device.entity', () => {
@@ -80,19 +81,32 @@ describe('device.entity', () => {
       expect(result.id).toBe(1);
     });
 
+    it('keeps explicit websocket zero telemetry but hides unproven legacy defaults', () => {
+      expect(normalizeDeviceTelemetry({ battery: 0, wifi: 0, lastSeenAt: new Date('2026-08-29T00:00:00.000Z') }))
+        .toEqual({ batteryPercent: null, rssi: null, source: null, updatedAt: null });
+      expect(normalizeDeviceTelemetry({ battery: 0, wifi: 0, telemetry: { websocket: { batteryPercent: 0, rssi: 0 }, updatedAt: '2026-08-29T00:00:00.000Z' } }))
+        .toEqual({ batteryPercent: 0, rssi: 0, source: 'websocket', updatedAt: '2026-08-29T00:00:00.000Z' });
+      expect(normalizeDeviceTelemetry({ battery: 0, wifi: 0, telemetry: { legacyPull: { batteryPercent: 0, rssi: 0 }, updatedAt: '2026-08-29T00:00:00.000Z' } }))
+        .toEqual({ batteryPercent: 0, rssi: 0, source: 'legacy-pull', updatedAt: '2026-08-29T00:00:00.000Z' });
+    });
+
+    it('normalizes legacy pull values with their observation time', () => {
+      const seenAt = new Date('2026-08-29T01:02:03.000Z');
+      expect(normalizeDeviceTelemetry({ battery: 72, wifi: -63, lastSeenAt: seenAt }))
+        .toEqual({ batteryPercent: 72, rssi: -63, source: 'legacy-pull', updatedAt: seenAt.toISOString() });
+    });
+
     it('never serializes credential, pairing or enrollment hashes', () => {
       const device = {
         id: 1,
         isActive: true,
         lastSeenAt: new Date(),
         apiKey: 'raw-api-key',
-        pairingTokenHash: 'pairing-hash',
         credentials: [{ credentialId: 'cred-1', tokenHash: 'token-hash', kind: 'device' }],
         enrollments: [{ enrollmentId: 'enrollment-1', codeHash: 'code-hash', attemptCount: 1 }],
       };
       const result = serializeDevice(device) as any;
       expect(result.apiKey).toBeUndefined();
-      expect(result.pairingTokenHash).toBeUndefined();
       expect(result.credentials).toEqual([{ credentialId: 'cred-1', kind: 'device' }]);
       expect(result.enrollments).toEqual([{ enrollmentId: 'enrollment-1', attemptCount: 1 }]);
     });

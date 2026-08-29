@@ -21,11 +21,6 @@ export type LegacyTransport = 'pull' | 'websocket';
 export interface TransportRegistration {
   apiKey: string | null;
   externalId: string | null;
-  pairingTokenHash: string | null;
-  pairingExpiresAt: Date | null;
-  bootstrap?: {
-    pairingToken: string;
-  };
 }
 
 export interface TransportAdapter {
@@ -39,7 +34,6 @@ export interface TransportAdapter {
     transport: LegacyTransport;
   };
   prepareRegistration(input: { macAddress?: string }): TransportRegistration;
-  rotateBootstrap?(device: { id: number; externalId: string | null }): TransportRegistration;
   /** With context: reuse the revision keyed by deliveryId on retry and honor signal. */
   dispatchRefresh(deviceId: number, context?: DeliveryContext): Promise<void>;
   /** Connected transports must drop sessions when their durable consumer lease expires. */

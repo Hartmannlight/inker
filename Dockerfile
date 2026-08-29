@@ -84,7 +84,15 @@ WORKDIR /app
 
 COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
+# The builder also runs the renderer unit suite. Keep Chromium's shared-library
+# set here so that those tests execute in CI without affecting the runtime image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl libglib2.0-0 libnss3 libnspr4 libdbus-1-3 libatk1.0-0 \
+    libatk-bridge2.0-0 libexpat1 libatspi2.0-0 libx11-6 libxcomposite1 \
+    libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libdrm2 libcups2 libxcb1 \
+    libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgtk-3-0 libgdk-pixbuf-2.0-0 \
+    libxkbcommon0 libasound2 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=contracts-builder /contracts/package.json /contracts/package.json
 COPY --from=contracts-builder /contracts/README.md /contracts/README.md

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button, Card, Input } from '../../components/common';
 import { MainLayout } from '../../components/layout';
 import { useMutation } from '../../hooks/useApi';
-import { deviceService } from '../../services/api';
+import { deviceService, type ContentAssignmentChoices } from '../../services/api';
 import type { Device, DeviceFormData } from '../../types';
 import { DevicePairingPanel } from '../../components/devices/DevicePairingPanel';
 
@@ -26,10 +26,44 @@ export function AddDevice() {
   const [width, setWidth] = useState('1920');
   const [height, setHeight] = useState('1080');
   const [created, setCreated] = useState<Device | null>(null);
+  const [contentChoices, setContentChoices] = useState<ContentAssignmentChoices | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentMessage, setContentMessage] = useState<string | null>(null);
   const { mutate: createDevice, isLoading } = useMutation(
     (data: DeviceFormData) => deviceService.create(data),
     { successMessage: 'Device created', onSuccess: setCreated },
   );
+
+  useEffect(() => {
+    if (!created) {
+      setContentChoices(null);
+      setContentMessage(null);
+      return;
+    }
+    let cancelled = false;
+    setContentLoading(true);
+    deviceService.getContentAssignmentChoices(String(created.id))
+      .then(choices => { if (!cancelled) setContentChoices(choices); })
+      .catch(() => { if (!cancelled) setContentMessage('Content choices could not be loaded. Pairing is still available.'); })
+      .finally(() => { if (!cancelled) setContentLoading(false); });
+    return () => { cancelled = true; };
+  }, [created]);
+
+  const chooseContent = async (assignment: { kind: 'none' } | { kind: 'screen'; screenId: number; expectedUpdatedAt: string }) => {
+    if (!created || !contentChoices) return;
+    setContentLoading(true);
+    setContentMessage(null);
+    try {
+      await deviceService.assignContent(String(created.id), contentChoices.current.desiredPublicationRevisionId, contentChoices.current.playbackVersion, assignment);
+      const choices = await deviceService.getContentAssignmentChoices(String(created.id));
+      setContentChoices(choices);
+      setContentMessage(assignment.kind === 'none' ? 'You can choose content later from device details.' : 'Single screen assigned.');
+    } catch (error) {
+      setContentMessage(error instanceof Error ? error.message : 'Content could not be assigned.');
+    } finally {
+      setContentLoading(false);
+    }
+  };
 
   const chooseType = (type: DeviceType) => {
     setDeviceType(type);
@@ -95,6 +129,16 @@ export function AddDevice() {
                   autoStart
                 />
               )}
+              <section className="rounded-xl border border-border-light bg-bg-muted p-4">
+                <h2 className="text-lg font-semibold text-text-primary">What should this device show?</h2>
+                <p className="mt-1 text-sm text-text-muted">Optional. Pairing remains available even when you choose content later.</p>
+                {contentLoading && !contentChoices ? <p className="mt-3 text-sm text-text-muted">Loading available screens…</p> : <div className="mt-3 space-y-2">
+                  {contentChoices?.screens.map(screen => <button key={screen.id} type="button" disabled={contentLoading} onClick={() => chooseContent({ kind: 'screen', screenId: screen.id, expectedUpdatedAt: screen.updatedAt })} className="block w-full rounded-lg border border-border-light bg-bg-card p-3 text-left hover:border-accent disabled:opacity-50"><span className="block font-medium text-text-primary">{screen.name}</span><span className="block text-xs text-text-muted">Single screen</span></button>)}
+                  {contentChoices?.screens.length === 0 && <p className="text-sm text-text-muted">No uploaded screens are available yet.</p>}
+                  <Button variant="outline" size="sm" disabled={contentLoading || !contentChoices} onClick={() => chooseContent({ kind: 'none' })}>Choose later</Button>
+                </div>}
+                {contentMessage && <p className="mt-3 text-sm text-text-secondary" role="status">{contentMessage}</p>}
+              </section>
               <Link to={`/devices/${created.id}`} className="inline-block text-sm text-accent underline">View device details</Link>
             </div>
           ) : (

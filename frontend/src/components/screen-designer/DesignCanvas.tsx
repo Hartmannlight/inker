@@ -12,7 +12,7 @@ import { screenDesignerService } from '../../services/api';
 import config from '../../config';
 
 export interface DesignCanvasHandle {
-  captureForDevice: () => Promise<{ captureUrl: string; filename: string; size: number } | null>;
+  captureForDevice: (screenIdOverride?: number) => Promise<{ captureUrl: string; filename: string; size: number } | null>;
   hasDrawingContent: () => boolean;
   saveDrawingAsWidget: () => Promise<void>;
   clearDrawing: (deleteFromServer?: boolean) => void;
@@ -223,8 +223,9 @@ export const DesignCanvas = forwardRef<DesignCanvasHandle, DesignCanvasProps>(fu
    * widgets with Puppeteer and composite them together. This avoids browser
    * canvas taint restrictions.
    */
-  const captureForDevice = useCallback(async (): Promise<{ captureUrl: string; filename: string; size: number } | null> => {
-    if (!screenId) {
+  const captureForDevice = useCallback(async (screenIdOverride?: number): Promise<{ captureUrl: string; filename: string; size: number } | null> => {
+    const targetScreenId = screenIdOverride ?? screenId;
+    if (!targetScreenId) {
       console.warn('Cannot capture: missing screenId');
       return null;
     }
@@ -245,7 +246,7 @@ export const DesignCanvas = forwardRef<DesignCanvasHandle, DesignCanvasProps>(fu
       }
 
       // Send to backend - backend will render widgets with Puppeteer and composite drawing
-      const result = await screenDesignerService.captureWithDrawing(screenId, drawingBlob);
+      const result = await screenDesignerService.captureWithDrawing(targetScreenId, drawingBlob);
       return result;
     } catch (error) {
       console.error('[captureForDevice] Failed:', error);

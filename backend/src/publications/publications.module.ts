@@ -7,6 +7,6 @@ import { PublicationsController } from './publications.controller';
   imports: [PublicationsCoreModule],
   controllers: [PublicationsController],
   providers: [PublishService],
-  exports: [PublicationsCoreModule],
+  exports: [PublicationsCoreModule, PublishService],
 })
 export class PublicationsModule {}

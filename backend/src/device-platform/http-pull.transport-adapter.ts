@@ -19,8 +19,6 @@ export class HttpPullTransportAdapter implements TransportAdapter {
     return {
       apiKey: generateToken(32),
       externalId: null,
-      pairingTokenHash: null,
-      pairingExpiresAt: null,
     };
   }
 

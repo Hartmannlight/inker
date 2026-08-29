@@ -61,4 +61,11 @@ describe('outbox version and secret boundary', () => {
       expect(() => parseOutboxEvent({ ...ready, ...patch })).toThrow('OUTBOX_INVALID_PAYLOAD');
     }
   });
+  test('delivers a canonical desired-publication clear to exactly its device', () => {
+    const cleared = { eventId: 'clear-1', eventType: 'device.publication.desired-revision.cleared',
+      aggregateType: 'DevicePublicationState', aggregateId: '9', aggregateRevision: '4', payloadVersion: 1, payload: { deviceId: 9 } };
+    expect(parseOutboxEvent(cleared).deviceIds).toEqual([9]);
+    expect(parseOutboxEvent({ ...cleared, aggregateRevision: '5' }).key).not.toBe(parseOutboxEvent(cleared).key);
+    expect(() => parseOutboxEvent({ ...cleared, payload: { deviceId: 9, publicationRevisionId: 'secret' } })).toThrow('OUTBOX_INVALID_PAYLOAD');
+  });
 });

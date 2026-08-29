@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { MainLayout } from '../../components/layout';
 import { CustomWidgetPreviewRenderer } from '../../components/common';
 import { useInfiniteScroll } from '../../hooks';
@@ -10,16 +10,11 @@ import type { DataSource, CustomWidget, CustomWidgetPreview } from '../../types'
 type Tab = 'data-sources' | 'custom-widgets';
 
 /**
- * Extensions Page - Combines Data Sources and Custom Widgets into one view
- *
- * This page provides a unified interface for managing:
- * - Data Sources: External APIs and RSS feeds for dynamic widget content
- * - Custom Widgets: User-created widgets that use data sources
+ * Extensions are Inker display packages and user-created widgets. External
+ * connections and data sources live under Integrations.
  */
 export function Extensions() {
-  const [searchParams] = useSearchParams();
-  const initialTab = searchParams.get('tab') === 'custom-widgets' ? 'custom-widgets' : 'data-sources';
-  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const [activeTab, setActiveTab] = useState<Tab>('custom-widgets');
 
   // Fetch data sources with infinite scroll
   const dataSourcesApi = useCallback(
@@ -61,21 +56,10 @@ export function Extensions() {
           <div>
             <h1 className="text-2xl font-bold text-text-primary">Extensions</h1>
             <p className="mt-1 text-sm text-text-muted">
-              Manage data sources and custom widgets for dynamic content
+              Manage installed and custom display packages.
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {activeTab === 'data-sources' && (
-              <Link
-                to="/data-sources/new"
-                className="flex items-center gap-2 px-4 py-2 bg-accent text-text-inverse rounded-lg hover:bg-accent-hover transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                New Data Source
-              </Link>
-            )}
             {activeTab === 'custom-widgets' && (
               <Link
                 to="/custom-widgets/new"
@@ -95,7 +79,7 @@ export function Extensions() {
           <nav className="flex gap-8">
             <button
               onClick={() => setActiveTab('data-sources')}
-              className={`pb-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              className={`hidden pb-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === 'data-sources'
                   ? 'border-accent text-accent'
                   : 'border-transparent text-text-muted hover:text-text-secondary hover:border-border-default'

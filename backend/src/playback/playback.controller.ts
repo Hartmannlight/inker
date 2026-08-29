@@ -20,6 +20,10 @@ export class PlaybackController {
   publish(@Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
     return this.playback.publish(id, body);
   }
+  @Post("playlists/:id/publish-from-draft")
+  publishFromDraft(@Param("id", ParseIntPipe) id: number, @Body() body: unknown) {
+    return this.playback.publishFromDraft(id, body);
+  }
   @Get("devices/:id")
   read(@Param("id", ParseIntPipe) id: number) {
     return this.playback.read(id);

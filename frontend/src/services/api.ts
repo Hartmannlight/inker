@@ -16,6 +16,8 @@ import type {
   ScreenDesign,
   ScreenWidget,
   WidgetTemplate,
+  Plugin,
+  PluginInstance,
   DataSource,
   DataSourceFormData,
   DataSourceTestResult,
@@ -23,7 +25,6 @@ import type {
   CustomWidget,
   CustomWidgetFormData,
   CustomWidgetPreview,
-  GitHubTokenTestResult,
 } from '../types';
 import { config } from '../config';
 import {
@@ -72,7 +73,8 @@ apiClient.interceptors.response.use(
     // A late admin response must not navigate them away from their display.
     if (error.response?.status === 401) {
       const currentPath = window.location.pathname;
-      if (currentPath !== '/login' && !isPublicDisplayPath(currentPath)) {
+      const rootPairing = currentPath === '/' && new URL(window.location.href, 'http://localhost').searchParams.get('mode') === 'pair';
+      if (currentPath !== '/login' && !rootPairing && !isPublicDisplayPath(currentPath)) {
         resetCsrfToken();
         window.location.href = '/login';
       }
@@ -163,6 +165,23 @@ export interface DeviceEnrollment {
   code: string;
   expiresAt: string;
   createdAt: string;
+}
+
+export type ContentAssignment =
+  | { kind: 'none' }
+  | { kind: 'screen'; screenId: number; expectedUpdatedAt: string }
+  | { kind: 'screen'; publicationRevisionId: string }
+  | { kind: 'playlist'; playlistRevisionId: string };
+
+export interface ContentAssignmentChoices {
+  current: {
+    desiredPublicationRevisionId: string | null;
+    playbackVersion: number;
+    playlistRevisionId: string | null;
+  };
+  target?: { width: number; height: number; renderFormats: Array<'html' | 'png' | 'jpeg' | 'bmp1'>; backgroundColor: string };
+  screens: Array<{ id: number; name: string; updatedAt: string; width: number | null; height: number | null; compatibility: { kind: 'exact' | 'adaptable' | 'risky' | 'unknown'; reason: string } }>;
+  playlists: Array<{ playlistRevisionId: string; playlistId: number; name: string; revision: number; publishedAt: string }>;
 }
 
 export const deviceService = {
@@ -263,11 +282,33 @@ export const deviceService = {
     }
   },
 
-  async regeneratePairing(deviceId: string): Promise<{ deviceId: number; displayUrl: string; pairingExpiresAt: string }> {
+  async getPublishedPreview(id: string): Promise<Blob | null> {
     try {
-      const response = await apiClient.post<ApiResponse<{ deviceId: number; displayUrl: string; pairingExpiresAt: string }>>(
-        `/devices/${deviceId}/pairing`
-      );
+      const response = await apiClient.get(`/devices/${id}/preview`, { responseType: 'blob' });
+      return response.data as Blob;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  async getContentAssignmentChoices(id: string): Promise<ContentAssignmentChoices> {
+    try {
+      const response = await apiClient.get<ApiResponse<ContentAssignmentChoices>>(`/devices/${id}/content-assignment`);
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  async assignContent(id: string, expectedDesiredRevisionId: string | null, expectedPlaybackVersion: number, assignment: ContentAssignment) {
+    try {
+      const response = await apiClient.put<ApiResponse<unknown>>(`/devices/${id}/content-assignment`, {
+        version: 1,
+        expectedDesiredRevisionId,
+        expectedPlaybackVersion,
+        assignment,
+      });
       return response.data.data;
     } catch (error) {
       throw new Error(getErrorMessage(error));
@@ -345,10 +386,9 @@ export const screenService = {
       }
       formData.append('file', data.file);
 
-      const response = await apiClient.post<ApiResponse<Screen>>('/screens', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      const response = await axios.post<ApiResponse<Screen>>(`${API_URL}/screens`, formData, {
+        withCredentials: true,
+        headers: csrfHeadersFor('post'),
       });
       return response.data.data;
     } catch (error) {
@@ -363,10 +403,9 @@ export const screenService = {
       if (data.description) formData.append('description', data.description);
       if (data.file) formData.append('file', data.file);
 
-      const response = await apiClient.put<ApiResponse<Screen>>(`/screens/${id}`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      const response = await axios.put<ApiResponse<Screen>>(`${API_URL}/screens/${id}`, formData, {
+        withCredentials: true,
+        headers: csrfHeadersFor('put'),
       });
       return response.data.data;
     } catch (error) {
@@ -385,6 +424,22 @@ export const screenService = {
 
 // Playlist Service
 export const playlistService = {
+  async getPlaybackDraft(id: string): Promise<{ draftHash: string }> {
+    try {
+      const response = await apiClient.get<ApiResponse<{ draftHash: string }>>(`/playback/playlists/${id}/draft`);
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
+  async publishFromDraft(id: string, idempotencyKey: string, expectedDraftHash: string): Promise<{ playlistRevisionId: string; revision: number; contentHash: string }> {
+    try {
+      const response = await apiClient.post<ApiResponse<{ playlistRevisionId: string; revision: number; contentHash: string }>>(`/playback/playlists/${id}/publish-from-draft`, { version: 1, idempotencyKey, expectedDraftHash });
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  },
   async getAll(page = 1, limit = 20): Promise<PaginatedResponse<Playlist>> {
     try {
       const response = await apiClient.get<ApiResponse<PaginatedResponse<Playlist>>>(
@@ -454,6 +509,26 @@ export const playlistService = {
     } catch (error) {
       throw new Error(getErrorMessage(error));
     }
+  },
+
+  async addItem(playlistId: string, screenId: string, duration = 60): Promise<unknown> {
+    const response = await apiClient.post<ApiResponse<unknown>>(`/playlists/${playlistId}/items`, { screenId: Number(screenId), duration });
+    return response.data.data;
+  },
+
+  async updateItem(playlistId: string, itemId: number, data: { order?: number; duration?: number }): Promise<unknown> {
+    const response = await apiClient.patch<ApiResponse<unknown>>(`/playlists/${playlistId}/items/${itemId}`, data);
+    return response.data.data;
+  },
+
+  async removeItem(playlistId: string, itemId: number): Promise<unknown> {
+    const response = await apiClient.delete<ApiResponse<unknown>>(`/playlists/${playlistId}/items/${itemId}`);
+    return response.data.data;
+  },
+
+  async reorderItems(playlistId: string, items: Array<{ id: number; order: number }>): Promise<unknown> {
+    const response = await apiClient.post<ApiResponse<unknown>>(`/playlists/${playlistId}/reorder`, { items });
+    return response.data.data;
   },
 
   async updateScreenOrder(
@@ -875,6 +950,29 @@ export const screenDesignerService = {
   },
 };
 
+export const publicationService = {
+  async get(publicationKey: string): Promise<{ revisions: Array<{ revision: number }> } | null> {
+    try {
+      const response = await apiClient.get<ApiResponse<{ revisions: Array<{ revision: number }> }>>(`/publications/${publicationKey}`);
+      return response.data.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+      throw new Error(getErrorMessage(error));
+    }
+  },
+
+  async publishDesign(publicationKey: string, input: { idempotencyKey: string; expectedRevision: number; screenDesignId: number; expectedUpdatedAt: string; deviceIds: number[] }) {
+    try {
+      const response = await apiClient.post<ApiResponse<{ publicationId: string; publicationRevisionId: string; revision: number; deviceIds: number[] }>>(
+        `/publications/${publicationKey}/publish`,
+        { idempotencyKey: input.idempotencyKey, expectedRevision: input.expectedRevision, deviceIds: input.deviceIds,
+          draft: { screenDesignId: input.screenDesignId, expectedUpdatedAt: input.expectedUpdatedAt } },
+      );
+      return response.data.data;
+    } catch (error) { throw new Error(getErrorMessage(error)); }
+  },
+};
+
 /**
  * Default widget templates for when the backend endpoint is not available
  */
@@ -1195,19 +1293,11 @@ export const settingsService = {
     }
   },
 
-  async testGitHubToken(token: string): Promise<GitHubTokenTestResult> {
-    try {
-      const response = await apiClient.post<ApiResponse<GitHubTokenTestResult>>('/settings/test-github-token', { token });
-      return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
-  },
 };
 
 // Plugin service
 export const pluginService = {
-  async getAll(): Promise<any[]> {
+  async getAll(): Promise<Plugin[]> {
     try {
       const response = await apiClient.get('/plugins');
       return response.data.data || response.data;
@@ -1216,7 +1306,7 @@ export const pluginService = {
     }
   },
 
-  async getById(id: number): Promise<any> {
+  async getById(id: number): Promise<Plugin> {
     try {
       const response = await apiClient.get(`/plugins/${id}`);
       return response.data.data || response.data;
@@ -1225,7 +1315,7 @@ export const pluginService = {
     }
   },
 
-  async getAllInstances(): Promise<any[]> {
+  async getAllInstances(): Promise<PluginInstance[]> {
     try {
       const response = await apiClient.get('/plugins/instances/all');
       return response.data.data || response.data;
@@ -1234,7 +1324,7 @@ export const pluginService = {
     }
   },
 
-  async getInstance(id: number): Promise<any> {
+  async getInstance(id: number): Promise<PluginInstance> {
     try {
       const response = await apiClient.get(`/plugins/instances/${id}`);
       return response.data.data || response.data;
@@ -1243,7 +1333,7 @@ export const pluginService = {
     }
   },
 
-  async createInstance(data: { pluginId: number; name?: string; settings?: Record<string, any> }): Promise<any> {
+  async createInstance(data: { pluginId: number; name?: string; settings?: Record<string, unknown> }): Promise<PluginInstance> {
     try {
       const response = await apiClient.post('/plugins/instances', data);
       return response.data.data || response.data;
@@ -1252,7 +1342,7 @@ export const pluginService = {
     }
   },
 
-  async updateInstance(id: number, data: { name?: string; settings?: Record<string, any> }): Promise<any> {
+  async updateInstance(id: number, data: { name?: string; settings?: Record<string, unknown> }): Promise<PluginInstance> {
     try {
       const response = await apiClient.put(`/plugins/instances/${id}`, data);
       return response.data.data || response.data;

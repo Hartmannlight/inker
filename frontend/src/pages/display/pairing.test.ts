@@ -31,8 +31,9 @@ describe('short-code pairing helpers', () => {
     const url = new URL(buildPairingBootstrapUrl('https://inker.example/base/', 'abcde-fghjk'));
 
     expect(url.origin).toBe('https://inker.example');
-    expect(url.pathname).toBe('/base/display/pair');
-    expect([...url.searchParams.keys()]).toEqual(['code']);
+    expect(url.pathname).toBe('/base/');
+    expect(url.searchParams.get('mode')).toBe('pair');
+    expect([...url.searchParams.keys()]).toEqual(['mode', 'code']);
     expect(url.searchParams.get('code')).toBe('ABCDE-FGHJK');
     expect(url.toString()).not.toContain('credential');
   });

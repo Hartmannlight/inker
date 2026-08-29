@@ -12,7 +12,7 @@ import {
   TimezoneSelectionModal,
 } from '../../components/screen-designer';
 import type { DesignCanvasHandle } from '../../components/screen-designer/DesignCanvas';
-import { screenDesignerService, customWidgetService, dataSourceService } from '../../services/api';
+import { screenDesignerService, customWidgetService, dataSourceService, publicationService } from '../../services/api';
 import { useNotification } from '../../contexts/NotificationContext';
 import type { ScreenDesign, ScreenWidget, WidgetTemplate } from '../../types';
 
@@ -38,6 +38,8 @@ export function ScreenDesigner() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishedRevision, setPublishedRevision] = useState<number | null>(null);
 
   const [design, setDesign] = useState<ScreenDesign | null>(null);
   const [widgets, setWidgets] = useState<ScreenWidget[]>([]);
@@ -391,9 +393,12 @@ export function ScreenDesigner() {
 
       // Auto-capture screen for pixel-perfect device rendering
       // This happens after save so the screen ID exists
-      if (savedDesignId && savedDesignId > 0 && designCanvasRef.current) {
+      if (savedDesignId && savedDesignId > 0) {
         try {
-          await designCanvasRef.current.captureForDevice();
+          const capture = designCanvasRef.current
+            ? await designCanvasRef.current.captureForDevice(savedDesignId)
+            : null;
+          if (!capture) await screenDesignerService.captureWithDrawing(savedDesignId, null);
         } catch (captureError) {
           console.error('Failed to capture screen for device:', captureError);
           // Don't show error to user - capture is a background optimization
@@ -565,6 +570,24 @@ export function ScreenDesigner() {
       setIsGeneratingExport(false);
     }
   }, [generateExportCode, showNotification]);
+
+  const handlePublish = useCallback(async () => {
+    if (!design?.id || design.id < 1) return;
+    setIsPublishing(true);
+    try {
+      const current = await screenDesignerService.getById(design.id);
+      const existing = await publicationService.get(`design-${design.id}`);
+      const expectedRevision = existing?.revisions[0]?.revision ?? publishedRevision ?? 0;
+      const result = await publicationService.publishDesign(`design-${design.id}`, {
+        idempotencyKey: crypto.randomUUID(), expectedRevision,
+        screenDesignId: current.id, expectedUpdatedAt: current.updatedAt, deviceIds: [],
+      });
+      setPublishedRevision(result.revision);
+      showNotification('success', `Published revision ${result.revision}. Assign it to a device from the device workflow.`);
+    } catch (error) {
+      showNotification('error', error instanceof Error ? error.message : 'Failed to publish the saved capture');
+    } finally { setIsPublishing(false); }
+  }, [design, publishedRevision, showNotification]);
 
   if (isLoading) {
     return (
@@ -738,6 +761,15 @@ export function ScreenDesigner() {
 
         {/* Actions */}
         <div className="flex items-center gap-2">
+          {publishedRevision !== null && <span className="text-xs text-status-success-text">Published revision {publishedRevision}</span>}
+          <button
+            onClick={handlePublish}
+            disabled={isPublishing || hasChanges || !design.id || design.id < 1}
+            className="px-3 py-1.5 text-sm font-medium text-accent border border-accent rounded-lg disabled:opacity-50"
+            title={hasChanges ? 'Save the design before publishing' : 'Publish the saved capture'}
+          >
+            {isPublishing ? 'Publishing…' : 'Publish'}
+          </button>
           {/* Export/Copy Code Button */}
           <button
             onClick={handleOpenExportModal}

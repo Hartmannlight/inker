@@ -7,15 +7,6 @@ export interface AuthState {
   error: string | null;
 }
 
-// GitHub token test result
-export interface GitHubTokenTestResult {
-  valid: boolean;
-  message: string;
-  rateLimit?: number;
-  rateLimitRemaining?: number;
-  username?: string;
-}
-
 // Device types
 /** A device model / display profile — dimensions + image format (PNG vs 1-bit BMP) */
 export interface DeviceModel {
@@ -40,9 +31,6 @@ export interface Device {
   profileId?: string;
   macAddress?: string | null;
   apiKey?: string;
-  displayUrl?: string;
-  pairingToken?: string;
-  pairingExpiresAt?: string | null;
   lastConnectedAt?: string | null;
   capabilities?: Record<string, unknown> | null;
   telemetry?: Record<string, unknown> | null;
@@ -53,9 +41,10 @@ export interface Device {
   /** Last time device connected */
   lastSeenAt: string;
   /** Battery level as percentage (0-100) */
-  battery: number;
+  battery: number | null;
   /** WiFi signal strength in dBm (typically -30 to -90) */
-  wifi: number;
+  wifi: number | null;
+  telemetryStatus?: { batteryPercent: number | null; rssi: number | null; source: 'websocket' | 'legacy-pull' | null; updatedAt: string | null };
   firmwareVersion?: string;
   /** Informational: a newer stable firmware than the device's current version exists (device detail only) */
   firmwareUpdateAvailable?: boolean;
@@ -104,6 +93,10 @@ export interface Screen {
   thumbnailUrl?: string;
   width: number;
   height: number;
+  compatibility?: {
+    kind: 'exact' | 'adaptable' | 'risky' | 'unknown';
+    reason: string;
+  };
   userId: string;
   createdAt: string;
   updatedAt: string;
@@ -145,6 +138,7 @@ export interface PlaylistScreen {
 }
 
 export interface PlaylistScreenWithDetails extends PlaylistScreen {
+  itemId?: number;
   id: string | number;
   name: string;
   description?: string;
@@ -549,8 +543,8 @@ export interface PluginInstance {
   id: number;
   pluginId: number;
   name?: string;
-  settings: Record<string, any>;
-  settingsEncrypted: Record<string, any>;
+  settings: Record<string, unknown>;
+  settingsEncrypted: Record<string, unknown>;
   plugin: Plugin;
   lastFetchedAt?: string;
   lastError?: string;

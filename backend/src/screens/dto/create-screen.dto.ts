@@ -1,7 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, IsBoolean, IsUrl, MaxLength } from 'class-validator';
+import { Allow, IsString, IsOptional, IsInt, IsBoolean, IsUrl, MaxLength } from 'class-validator';
 
 export class CreateScreenDto {
+  /** Multer may retain the multipart field on the validated body; it is never persisted. */
+  @Allow()
+  file?: unknown;
+
   @ApiProperty({
     example: 'Weather Dashboard',
     description: 'Screen name',
@@ -19,14 +23,15 @@ export class CreateScreenDto {
   @MaxLength(1000)
   description?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'https://example.com/screens/weather.png',
     description: 'Full-size image URL',
   })
+  @IsOptional()
   @IsString()
   @IsUrl()
   @MaxLength(2048)
-  imageUrl: string;
+  imageUrl?: string;
 
   @ApiPropertyOptional({
     example: 'https://example.com/screens/weather-thumb.png',
@@ -37,6 +42,16 @@ export class CreateScreenDto {
   @IsUrl()
   @MaxLength(2048)
   thumbnailUrl?: string;
+
+  @ApiPropertyOptional({ example: 800, description: 'Known raster width in pixels' })
+  @IsOptional()
+  @IsInt()
+  width?: number;
+
+  @ApiPropertyOptional({ example: 480, description: 'Known raster height in pixels' })
+  @IsOptional()
+  @IsInt()
+  height?: number;
 
   @ApiPropertyOptional({
     example: false,

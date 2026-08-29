@@ -48,7 +48,8 @@ describe('DevicePairingPanel', () => {
     expect(await screen.findByRole('img', { name: 'QR-Code zum Koppeln von Kitchen display' })).toHaveAttribute('src', 'data:image/png;base64,qr');
     const qrUrl = new URL(generateQRCodeDataUrl.mock.calls[0][0]);
     expect(qrUrl.origin).toBe('https://inker.example');
-    expect([...qrUrl.searchParams.keys()]).toEqual(['code']);
+    expect([...qrUrl.searchParams.keys()]).toEqual(['mode', 'code']);
+    expect(qrUrl.searchParams.get('mode')).toBe('pair');
     expect(qrUrl.searchParams.get('code')).toBe('ABCDE-FGHJK');
     expect(qrUrl.toString()).not.toContain('credential');
     expect(screen.getByText(/8:00/)).toBeInTheDocument();

@@ -26,8 +26,6 @@ model Device {
   deliveryPolicyId     String    @map("delivery_policy_id")
   macAddress           String?   @unique @map("mac_address")
   apiKey               String?   @unique @map("api_key")
-  pairingTokenHash     String?   @unique @map("pairing_token_hash")
-  pairingExpiresAt     DateTime? @map("pairing_expires_at")
   lastConnectedAt      DateTime? @map("last_connected_at")
   presentationRevision Int       @default(0) @map("presentation_revision")
   renderRevision       Int       @default(0) @map("render_revision")
@@ -35,8 +33,8 @@ model Device {
   modelId              Int?      @map("model_id")
   playlistId           Int?      @map("playlist_id")
   isActive             Boolean   @default(true) @map("is_active")
-  wifi                 Int       @default(0)
-  battery              Float     @default(0)
+  wifi                 Int?
+  battery              Float?
   refreshRate          Int       @default(900) @map("refresh_rate")
   imageTimeout         Int       @default(0) @map("image_timeout")
   width                Int       @default(0)
@@ -516,6 +514,16 @@ model PlaybackCommand {
   @@map("playback_commands")
 }
 
+// Durable receipt for the higher-level "publish draft playlist" operation.
+// Its request identity is the draft content, not the next numeric playlist
+// revision, so a lost response can be retried safely after success.
+model PlaylistDraftPublishCommand {
+  keyHash String @id @map("key_hash")
+  requestHash String @map("request_hash")
+  result Json?
+  @@map("playlist_draft_publish_commands")
+}
+
 // Durable handoff from domain transactions to the later WP-16 dispatcher.
 // Status values and numeric invariants are additionally constrained by SQL.
 model OutboxEvent {
@@ -559,6 +567,7 @@ model SourceSecret {
 
 model SourceDefinition {
   sourceDefinitionId String @id @default(uuid()) @map("source_definition_id")
+  legacyPluginInstanceId Int? @unique @map("legacy_plugin_instance_id")
   definitionVersion Int @default(1) @map("definition_version")
   name String
   connectorType String @map("connector_type")
@@ -715,6 +724,8 @@ model Screen {
   description  String?
   imageUrl     String   @map("image_url")
   thumbnailUrl String?  @map("thumbnail_url")
+  width        Int?
+  height       Int?
   modelId      Int?     @map("model_id")
   isPublic     Boolean  @default(false) @map("is_public")
   createdAt    DateTime @default(now()) @map("created_at")

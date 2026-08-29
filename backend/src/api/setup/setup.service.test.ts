@@ -38,8 +38,6 @@ describe('SetupService', () => {
           prepareRegistration: () => ({
             apiKey: 'generated-key',
             externalId: null,
-            pairingTokenHash: null,
-            pairingExpiresAt: null,
           }),
         }),
       } as any,

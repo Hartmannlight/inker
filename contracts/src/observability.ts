@@ -28,7 +28,7 @@ export interface OperationsQueueStatus {
 }
 export interface OperationsSourceActivity {
   sourceDefinitionId: string;
-  connectorType: 'fixture' | 'slow' | 'failure';
+  connectorType: 'fixture' | 'slow' | 'failure' | 'grafana';
   enabled: boolean;
   lastAttemptAt: string | null;
   lastSuccessAt: string | null;
@@ -166,7 +166,7 @@ function collection(rule: Rule, key: string, maximum: number = OPERATIONS_LIMITS
 }
 const queue = sample({ pending: count, delayed: count, processing: count, deadLetters: count, expiredClaims: count,
   oldestDueAgeSeconds: seconds, oldestProcessingAgeSeconds: seconds }, { queue: enumeration(OPERATIONS_QUEUE_NAMES) });
-const source = object({ sourceDefinitionId: uuid, connectorType: enumeration(['fixture', 'slow', 'failure']), enabled: boolean,
+const source = object({ sourceDefinitionId: uuid, connectorType: enumeration(['fixture', 'slow', 'failure', 'grafana']), enabled: boolean,
   lastAttemptAt: nullable(timestamp), lastSuccessAt: nullable(timestamp), ageSeconds: nullable(seconds),
   freshness: enumeration(['fresh', 'stale', 'error', 'missing']), errorCode: nullable(enumeration(OPERATIONS_ERROR_CODES)), circuitOpenUntil: nullable(timestamp) },
   record => (record.lastSuccessAt === null) === (record.ageSeconds === null));

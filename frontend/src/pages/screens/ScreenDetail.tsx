@@ -3,8 +3,8 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout';
 import { Button, Card, Modal } from '../../components/common';
 import { useApi, useMutation } from '../../hooks/useApi';
-import { screenService } from '../../services/api';
-import type { Screen } from '../../types';
+import { deviceService, screenService } from '../../services/api';
+import type { Device, PaginatedResponse, Screen } from '../../types';
 
 /**
  * ScreenDetail page component
@@ -14,6 +14,8 @@ export function ScreenDetail() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showAssignModal, setShowAssignModal] = useState(() => searchParams.get('assign') === '1');
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<number[]>([]);
 
   // Support returning to a specific page (e.g., playlist) via 'from' query param
   const rawBack = searchParams.get('from') || '/screens';
@@ -23,6 +25,10 @@ export function ScreenDetail() {
   const { data: screen, isLoading } = useApi<Screen>(
     () => screenService.getById(id!)
   );
+  const { data: devices } = useApi<PaginatedResponse<Device>>(
+    () => deviceService.getAll(1, 100),
+    { showErrorNotification: false },
+  );
 
   const { mutate: deleteScreen, isLoading: isDeleting } = useMutation(
     () => screenService.delete(id!),
@@ -30,6 +36,18 @@ export function ScreenDetail() {
       successMessage: 'Screen deleted successfully',
       onSuccess: () => navigate(backUrl),
     }
+  );
+  const { mutate: assignScreen, isLoading: isAssigning } = useMutation<void, number[]>(
+    async (deviceIds) => {
+      if (!screen) throw new Error('Screen is not loaded');
+      await Promise.all(deviceIds.map(async deviceId => {
+        const choices = await deviceService.getContentAssignmentChoices(String(deviceId));
+        await deviceService.assignContent(String(deviceId), choices.current.desiredPublicationRevisionId, choices.current.playbackVersion, {
+          kind: 'screen', screenId: Number(screen.id), expectedUpdatedAt: screen.updatedAt,
+        });
+      }));
+    },
+    { successMessage: 'Screen assigned to selected devices', onSuccess: () => setShowAssignModal(false) },
   );
 
   if (isLoading) {
@@ -100,6 +118,9 @@ export function ScreenDetail() {
             )}
           </div>
           <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={() => setShowAssignModal(true)}>
+              Assign to device
+            </Button>
             <Button
               variant="outline"
               onClick={() => navigate(`/screens/${id}/edit`)}
@@ -282,6 +303,19 @@ export function ScreenDetail() {
           </div>
         </div>
       </div>
+
+      <Modal
+        isOpen={showAssignModal}
+        onClose={() => setShowAssignModal(false)}
+        title="Assign screen to device"
+        footer={<div className="flex gap-3"><Button variant="outline" onClick={() => setShowAssignModal(false)} className="flex-1">Cancel</Button><Button disabled={selectedDeviceIds.length === 0} isLoading={isAssigning} onClick={() => assignScreen(selectedDeviceIds)} className="flex-1">Assign {selectedDeviceIds.length || ''} device{selectedDeviceIds.length === 1 ? '' : 's'}</Button></div>}
+      >
+        <p className="text-sm text-text-muted">Select one or more devices explicitly. This publishes the current screen revision and assigns it to every selected device.</p>
+        <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">
+          {(devices?.items ?? []).map(device => <label key={device.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-border-light p-3 hover:border-accent"><input type="checkbox" checked={selectedDeviceIds.includes(device.id)} onChange={event => setSelectedDeviceIds(ids => event.target.checked ? [...ids, device.id] : ids.filter(value => value !== device.id))} /><span><span className="block font-medium text-text-primary">{device.name}</span><span className="block text-xs text-text-muted">{device.deviceType === 'web-display' ? 'Web display' : 'TRMNL / BYOD'}</span></span></label>)}
+          {(devices?.items.length ?? 0) === 0 && <p className="text-sm text-text-muted">No devices are available.</p>}
+        </div>
+      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal

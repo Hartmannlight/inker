@@ -1,0 +1,2 @@
+ALTER TABLE "screens" ADD COLUMN "width" INTEGER;
+ALTER TABLE "screens" ADD COLUMN "height" INTEGER;

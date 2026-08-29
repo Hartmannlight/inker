@@ -42,12 +42,17 @@ export class ScreensService {
    * Create a new screen
    */
   async create(createScreenDto: CreateScreenDto) {
+    if (!createScreenDto.imageUrl) {
+      throw new BadRequestException('imageUrl is required when no image file is uploaded');
+    }
     const screen = await this.prisma.screen.create({
       data: {
         name: createScreenDto.name,
         description: createScreenDto.description,
         imageUrl: createScreenDto.imageUrl,
         thumbnailUrl: createScreenDto.thumbnailUrl,
+        width: createScreenDto.width,
+        height: createScreenDto.height,
         isPublic: createScreenDto.isPublic || false,
       },
 
@@ -125,8 +130,10 @@ export class ScreensService {
         data: {
           name: updateScreenDto.name,
           description: updateScreenDto.description,
-          imageUrl: updateScreenDto.imageUrl,
-          thumbnailUrl: updateScreenDto.thumbnailUrl,
+        imageUrl: updateScreenDto.imageUrl,
+        thumbnailUrl: updateScreenDto.thumbnailUrl,
+        width: updateScreenDto.width,
+        height: updateScreenDto.height,
           isPublic: updateScreenDto.isPublic,
         },
 
@@ -309,6 +316,8 @@ export class ScreensService {
         description,
         imageUrl,
         thumbnailUrl,
+        width,
+        height,
         isPublic: false,
       },
     });
@@ -374,6 +383,8 @@ export class ScreensService {
         description,
         imageUrl,
         thumbnailUrl,
+        width,
+        height,
         isPublic: false,
       },
     });
@@ -440,6 +451,8 @@ export class ScreensService {
         description,
         imageUrl,
         thumbnailUrl,
+        width,
+        height,
         isPublic: false,
       },
     });

@@ -117,7 +117,13 @@ export function parseOutboxEvent(event: EventInput): {
     return invalid();
   const created = event.eventType === PUB.revisionCreated;
   const assigned = event.eventType === PUB.desiredRevisionChanged;
+  const cleared = event.eventType === PUB.desiredRevisionCleared;
   if (assigned && event.aggregateRevision != null && !/^[1-9]\d*$/.test(event.aggregateRevision)) return invalid();
+  if (cleared) {
+    if (event.aggregateType !== 'DevicePublicationState' || !event.aggregateRevision || !/^[1-9]\d*$/.test(event.aggregateRevision) ||
+      event.aggregateId !== String(p.deviceId) || !positive(p.deviceId) || Object.keys(p).some(k => k !== 'deviceId')) return invalid();
+    return { key: effectKey(event.eventType, event.aggregateType, event.aggregateId, `cleared:${event.aggregateRevision}`), deviceIds: [p.deviceId as number] };
+  }
   const allowed = [
     'publicationId',
     'publicationRevisionId',

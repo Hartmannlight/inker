@@ -1,11 +1,11 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './contexts/AuthContext';
+import { AdminAuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary, ToastContainer } from './components/common';
 
 // Auth pages
-import { Login } from './pages/auth/Login';
+import { Landing } from './pages/auth/Landing';
 
 // Main pages
 import { Dashboard } from './pages/Dashboard';
@@ -24,9 +24,9 @@ import { Settings } from './pages/settings/Settings';
 import { DataSourceForm } from './pages/data-sources';
 import { CustomWidgetForm, CustomWidgetPreview } from './pages/custom-widgets';
 import { Extensions } from './pages/extensions';
+import { GrafanaPanelSource, Integrations } from './pages/integrations';
 // Plugin pages
-import { PluginLibrary, InstalledPlugins, PluginCreator, PluginInstanceForm, OAuthCallback } from './pages/plugins';
-import { GrafanaGeneratorPage } from './components/plugins/GrafanaGeneratorModal';
+import { PluginCreator, PluginInstanceForm, OAuthCallback } from './pages/plugins';
 import { WebDisplay } from './pages/display/WebDisplay';
 import { Remotes } from './pages/remotes/Remotes';
 import { Operations } from './pages/operations/Operations';
@@ -39,13 +39,13 @@ import { Operations } from './pages/operations/Operations';
 function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
+      <AdminAuthProvider>
         <NotificationProvider>
           <Router>
             <Routes>
             {/* Public routes */}
-            <Route path="/login" element={<Login />} />
-            <Route path="/display/pair" element={<WebDisplay />} />
+            <Route path="/login" element={<Landing defaultMode="admin" />} />
+            <Route path="/display/pair" element={<Navigate to="/?mode=pair" replace />} />
             <Route path="/display/:externalId" element={<WebDisplay />} />
 
             {/* Protected routes */}
@@ -188,7 +188,10 @@ function App() {
               }
             />
 
-            {/* Extensions - combines Data Sources and Custom Widgets */}
+            <Route path="/integrations" element={<ProtectedRoute><Integrations /></ProtectedRoute>} />
+            <Route path="/integrations/grafana" element={<ProtectedRoute><GrafanaPanelSource /></ProtectedRoute>} />
+
+            {/* Extensions - display packages and widgets */}
             <Route
               path="/extensions"
               element={
@@ -201,22 +204,14 @@ function App() {
             {/* OAuth callback (handles redirect from providers) */}
             <Route path="/plugins/oauth/callback" element={<OAuthCallback />} />
 
-            {/* Plugins */}
+            {/* Legacy plugin URLs retain bookmark compatibility. */}
             <Route
               path="/plugins"
-              element={
-                <ProtectedRoute>
-                  <PluginLibrary />
-                </ProtectedRoute>
-              }
+              element={<Navigate to="/extensions" replace />}
             />
             <Route
               path="/plugins/installed"
-              element={
-                <ProtectedRoute>
-                  <InstalledPlugins />
-                </ProtectedRoute>
-              }
+              element={<Navigate to="/extensions" replace />}
             />
             <Route
               path="/plugins/create"
@@ -238,7 +233,7 @@ function App() {
               path="/plugins/instances/:instanceId/generate"
               element={
                 <ProtectedRoute>
-                  <GrafanaGeneratorPage />
+                  <Navigate to="/integrations" replace />
                 </ProtectedRoute>
               }
             />
@@ -254,7 +249,7 @@ function App() {
             {/* Data Sources - redirect list to extensions, keep forms */}
             <Route
               path="/data-sources"
-              element={<Navigate to="/extensions" replace />}
+              element={<Navigate to="/integrations?tab=data-sources" replace />}
             />
             <Route
               path="/data-sources/new"
@@ -303,8 +298,7 @@ function App() {
               }
             />
 
-            {/* Redirect root to dashboard */}
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Landing />} />
 
             {/* 404 */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -312,7 +306,7 @@ function App() {
           <ToastContainer />
         </Router>
       </NotificationProvider>
-    </AuthProvider>
+      </AdminAuthProvider>
     </ErrorBoundary>
   );
 }

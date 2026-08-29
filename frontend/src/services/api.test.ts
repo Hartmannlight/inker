@@ -116,6 +116,16 @@ describe('API service', () => {
       expect(location.href).toBe(`${pathname}?code=ABCDE-FGHJK`);
     });
 
+    it('does not redirect the public root pairing flow after a late admin-session 401', async () => {
+      const location = { pathname: '/', href: '/?mode=pair' };
+      vi.stubGlobal('window', { location });
+      const error = { config: { url: '/auth/session' }, response: { status: 401 } };
+
+      await expect(rejectResponse(error)).rejects.toBe(error);
+
+      expect(location.href).toBe('/?mode=pair');
+    });
+
     it('still rejects non-authentication errors without redirecting', async () => {
       const location = { pathname: '/devices', href: '/devices' };
       vi.stubGlobal('window', { location });

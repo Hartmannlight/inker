@@ -22,6 +22,11 @@ services:
       INKER_INSTANCE_SECRET_PATH: /app/secrets/instance.json
       INKER_PORT: "${INKER_PORT:-80}"
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-UTC}
+      # HTTPS is required for pairing by default. A trusted local HTTP setup must
+      # explicitly opt in and restart the container; never enable it in production.
+      PAIRING_ALLOW_INSECURE_HTTP: "${PAIRING_ALLOW_INSECURE_HTTP:-false}"
+      # Trust X-Forwarded-Proto only when a known TLS reverse proxy is in front.
+      PAIRING_TRUST_PROXY: "${PAIRING_TRUST_PROXY:-false}"
       # Federation is closed by default. Private origins must also be explicitly allowed.
       FEDERATION_ALLOWED_ORIGINS: "${FEDERATION_ALLOWED_ORIGINS:-}"
       FEDERATION_PRIVATE_ORIGINS: "${FEDERATION_PRIVATE_ORIGINS:-}"

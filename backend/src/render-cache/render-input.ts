@@ -22,6 +22,8 @@ export interface RenderTarget {
   rotation: DisplayCapabilities['rotation'];
   format: Exclude<RenderFormat, 'html'>;
   scaling: DisplayCapabilities['scaling'];
+  /** Canonical #RRGGBB letterbox/pillarbox background. */
+  backgroundColor?: string;
   safeArea: DisplayCapabilities['safeArea'];
 }
 
@@ -49,7 +51,8 @@ export function validateRenderTarget(target: RenderTarget): void {
   if (!target || typeof target.profileId !== 'string' || !target.profileId.length || target.profileId.length > 200 ||
     !Number.isSafeInteger(target.width) || !Number.isSafeInteger(target.height) || target.width < 1 || target.height < 1 ||
     target.width * target.height > MAX_RENDER_PIXELS || ![0, 90, 180, 270].includes(target.rotation) ||
-    !['none', 'contain', 'cover'].includes(target.scaling) || !supportsPixels(target) || !target.safeArea) return invalid();
+    !['none', 'contain', 'cover'].includes(target.scaling) || !supportsPixels(target) || !target.safeArea ||
+    (target.backgroundColor !== undefined && !/^#[0-9a-fA-F]{6}$/.test(target.backgroundColor))) return invalid();
   const { top, right, bottom, left } = target.safeArea;
   if ([top, right, bottom, left].some(value => !Number.isSafeInteger(value) || value < 0) ||
     top + bottom >= target.height || left + right >= target.width) return invalid();
@@ -60,10 +63,11 @@ export function targetFor(configuration: Pick<ResolvedDeviceConfiguration, 'prof
   const { capabilities, profile } = configuration;
   if (profile.profileId !== capabilities.profileId) throw new NotAcceptableException('Render profile mismatch');
   const { width, height, colorSpace, bitDepth, rotation, scaling, safeArea } = capabilities.display;
+  const backgroundColor = capabilities.display.backgroundColor ?? '#ffffff';
   for (const format of capabilities.display.renderFormats) {
     if (format === 'html' || !capabilities.display.mimeTypes.includes(RENDER_MIME_TYPES[format])) continue;
     if (!supportsPixels({ format, colorSpace, bitDepth })) continue;
-    const target = { profileId: profile.profileId, width, height, colorSpace, bitDepth, rotation, format, scaling, safeArea: { ...safeArea } };
+    const target = { profileId: profile.profileId, width, height, colorSpace, bitDepth, rotation, format, scaling, backgroundColor, safeArea: { ...safeArea } };
     validateRenderTarget(target);
     return target;
   }
@@ -100,6 +104,7 @@ export function renderKey(
   });
   if (new Set(snapshots.map(snapshot => snapshot.sourceId)).size !== snapshots.length) throw new Error('Duplicate snapshot source');
   const { profileId, width, height, colorSpace, bitDepth, rotation, format, scaling } = target;
+  const backgroundColor = target.backgroundColor ?? '#ffffff';
   const { top, right, bottom, left } = target.safeArea;
   return sha256(canonicalJson({
     rendererVersion,
@@ -110,7 +115,7 @@ export function renderKey(
       protocolVersion: revision.protocolVersion,
       contentHash: revision.contentHash,
     },
-    target: { profileId, width, height, colorSpace, bitDepth, rotation, format, scaling, safeArea: { top, right, bottom, left } },
+    target: { profileId, width, height, colorSpace, bitDepth, rotation, format, scaling, backgroundColor, safeArea: { top, right, bottom, left } },
     snapshots,
   }));
 }

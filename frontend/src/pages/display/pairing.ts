@@ -75,7 +75,8 @@ export function buildPairingBootstrapUrl(baseUrl: string, code: string): string 
   if (!normalizedCode) {
     throw new PairingExchangeError('validation', 'Pairing code must contain ten Crockford Base32 characters.');
   }
-  const url = new URL(appendPath(baseUrl, '/display/pair'));
+  const url = new URL(appendPath(baseUrl, '/'));
+  url.searchParams.set('mode', 'pair');
   url.searchParams.set('code', formatPairingCode(normalizedCode));
   return url.toString();
 }

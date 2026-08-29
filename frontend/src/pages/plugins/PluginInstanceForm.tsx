@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MainLayout } from '../../components/layout';
 import { Button, LoadingSpinner } from '../../components/common';
 import { useApi, useMutation } from '../../hooks/useApi';
@@ -174,6 +174,12 @@ export function PluginInstanceForm() {
         </div>
       </MainLayout>
     );
+  }
+
+  // Legacy Grafana plugin instances are migrated to the worker-owned source
+  // flow. Never let this editor load dashboards or create child instances.
+  if (instance.plugin.slug === 'grafana_panel') {
+    return <Navigate to="/integrations/grafana" replace />;
   }
 
   const schema = instance.plugin.settingsSchema || [];

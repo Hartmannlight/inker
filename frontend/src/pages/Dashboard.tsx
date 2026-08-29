@@ -5,6 +5,7 @@ import { useApi } from '../hooks/useApi';
 import { dashboardService } from '../services/api';
 import { config } from '../config';
 import type { DashboardStats } from '../types';
+import { presentDeviceTelemetry } from '../utils/deviceTelemetry';
 
 /**
  * StatCard component for displaying statistics
@@ -404,7 +405,9 @@ export function Dashboard() {
                 </div>
               ) : (
                 <div className="divide-y divide-border-light">
-                  {stats.recentDevices.slice(0, 5).map((device) => (
+                  {stats.recentDevices.slice(0, 5).map((device) => {
+                    const telemetry = presentDeviceTelemetry(device);
+                    return (
                     <Link
                       key={device.id}
                       to={`/devices/${device.id}`}
@@ -435,16 +438,17 @@ export function Dashboard() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        {device.wifi !== undefined && device.wifi !== null && (
-                          <WifiIndicator signal={device.wifi} size="sm" />
+                        {telemetry.showWirelessSignal && (
+                          <WifiIndicator signal={telemetry.rssi} size="sm" />
                         )}
-                        {device.battery !== undefined && device.battery !== null && (
-                          <BatteryIndicator level={device.battery} size="sm" />
+                        {telemetry.showBattery && (
+                          <BatteryIndicator level={telemetry.battery} size="sm" />
                         )}
                         <OnlineStatus status={device.status} size="sm" />
                       </div>
                     </Link>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </Card>
@@ -498,7 +502,7 @@ export function Dashboard() {
                       className="group relative rounded-xl overflow-hidden bg-bg-muted aspect-video hover:ring-2 hover:ring-accent hover:ring-offset-2 hover:ring-offset-bg-card transition-all"
                     >
                       <img
-                        src={`${config.backendUrl}/api/device-images/design/${screen.id}?preview=true&t=${new Date(screen.updatedAt).getTime()}`}
+                        src={`${config.apiUrl}/screen-designs/${screen.id}/preview?t=${new Date(screen.updatedAt).getTime()}`}
                         alt={screen.name}
                         className="w-full h-full object-cover"
                       />
