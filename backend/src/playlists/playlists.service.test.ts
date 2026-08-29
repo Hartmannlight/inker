@@ -6,16 +6,16 @@ import { createMock } from '../test/mocks/helpers';
 
 describe('PlaylistsService', () => {
   let service: PlaylistsService;
-  let mockPrisma: MockPrisma;
+  let mockPrisma: MockPrisma & { playlistItem: MockPrisma['playlistItem'] & { createMany: ReturnType<typeof createMock> } };
   let mockEventsService: {
     notifyDevicesRefresh: ReturnType<typeof createMock>;
     notifyPlaylistUpdate: ReturnType<typeof createMock>;
   };
 
   beforeEach(() => {
-    mockPrisma = createMockPrisma();
-    // Add createMany (not in default mock) - used by playlist item batch creation
-    (mockPrisma.playlistItem as any).createMany = createMock();
+    const base = createMockPrisma();
+    // Preserve the common fixture and type its additional batch operation.
+    mockPrisma = Object.assign(base, { playlistItem: Object.assign(base.playlistItem, { createMany: createMock() }) });
     mockEventsService = {
       notifyDevicesRefresh: createMock().mockResolvedValue(undefined),
       notifyPlaylistUpdate: createMock().mockResolvedValue(undefined),
@@ -32,6 +32,8 @@ describe('PlaylistsService', () => {
         name: 'My Playlist',
         description: 'Test',
         isActive: true,
+        advanceOnTap: false,
+        createdAt: new Date(0), updatedAt: new Date(0),
         items: [],
       };
       mockPrisma.playlist.create.mockResolvedValue(playlist);
@@ -59,7 +61,8 @@ describe('PlaylistsService', () => {
       } as any);
 
       expect(mockPrisma.playlistItem.createMany.calls).toHaveLength(1);
-      expect(result.items).toHaveLength(1);
+      expect(result).not.toBeNull();
+      expect(result!.items).toHaveLength(1);
     });
   });
 
@@ -89,9 +92,10 @@ describe('PlaylistsService', () => {
       const result = await service.findOne(1);
 
       expect(result.screens).toHaveLength(1);
-      expect(result.screens[0].id).toBe('design-5');
-      expect(result.screens[0].isDesigned).toBe(true);
-      expect(result.screens[0].imageUrl).toContain('/api/device-images/design/5');
+      expect(result.screens[0]).not.toBeNull();
+      expect(result.screens[0]!.id).toBe('design-5');
+      expect(result.screens[0]!.isDesigned).toBe(true);
+      expect(result.screens[0]!.imageUrl).toContain('/api/device-images/design/5');
     });
 
     it('should transform regular screen items to screens array', async () => {
@@ -118,9 +122,10 @@ describe('PlaylistsService', () => {
       const result = await service.findOne(1);
 
       expect(result.screens).toHaveLength(1);
-      expect(result.screens[0].id).toBe(10);
-      expect(result.screens[0].isDesigned).toBe(false);
-      expect(result.screens[0].imageUrl).toBe('/image.png');
+      expect(result.screens[0]).not.toBeNull();
+      expect(result.screens[0]!.id).toBe(10);
+      expect(result.screens[0]!.isDesigned).toBe(false);
+      expect(result.screens[0]!.imageUrl).toBe('/image.png');
     });
   });
 

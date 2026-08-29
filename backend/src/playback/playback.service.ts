@@ -30,6 +30,7 @@ import {
 } from "./playback.events";
 import { effectKey } from "../events/outbox.types";
 import { QUEUE_POLICIES } from "../jobs/queue-policy";
+import { sqliteWrite } from "../sources/source-writes";
 
 type Tx = Prisma.TransactionClient;
 const positive = (v: unknown): v is number =>
@@ -333,21 +334,22 @@ export class PlaybackService {
     );
     if (event.eventType !== PLAYBACK_DUE)
       throw new Error("OUTBOX_INVALID_PAYLOAD");
-    return this.prisma.$transaction(
+    return sqliteWrite(this.prisma, () => this.prisma.$transaction(
       async (tx) => {
         checkAbort();
         const now = this.clock.now();
+        const fence = () => ({
+          eventId: event.eventId,
+          status: "processing" as const,
+          claimOwner: event.claimOwner,
+          claimToken: event.claimToken,
+          claimUntil: { gt: new Date() },
+        });
         // First statement takes the writer lock and fences all domain writes.
         if (
           !(
             await tx.outboxEvent.updateMany({
-              where: {
-                eventId: event.eventId,
-                status: "processing",
-                claimOwner: event.claimOwner,
-                claimToken: event.claimToken,
-                claimUntil: { gt: new Date(now) },
-              },
+              where: fence(),
               data: { claimOwner: event.claimOwner },
             })
           ).count
@@ -390,9 +392,12 @@ export class PlaybackService {
           data: { key, eventId: event.eventId, completedAt: new Date(now) },
         });
         checkAbort();
+        if (!(await tx.outboxEvent.updateMany({
+          where: fence(), data: { claimOwner: event.claimOwner },
+        })).count) throw new Error("OUTBOX_CLAIM_EXPIRED");
       },
       { timeout: QUEUE_POLICIES.timer.timeoutMs },
-    );
+    ));
   }
 
   private async entries(tx: Tx, id: string): Promise<PlaybackEntry[]> {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { PrismaClient } from '@prisma/client';
-import type { AllowedAction, CommandResult, InteractionEvent, JsonObject, TimerSnapshot } from '@inker/contracts';
+import { parseTimerSnapshot, type AllowedAction, type CommandResult, type InteractionEvent, type JsonObject, type TimerSnapshot } from '@inker/contracts';
 import type { IncomingHttpHeaders } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -20,6 +20,8 @@ import { CommandRegistry } from '../src/interactions/command-registry';
 import { TimerService, type TimerCommandAction } from '../src/timers/timer.service';
 import { TIMER_ACTIONS, TimerCommandHandler } from '../src/timers/timer-handlers';
 import { TIMER_CHANGED, parseTimerEvent } from '../src/timers/timer.events';
+import { TimerWorkerService } from '../src/timers/timer-worker.service';
+import { TIMER_DUE } from '../src/timers/timer-scheduling';
 
 const root = resolve(import.meta.dir, '..');
 type Actor = { deviceId: number; externalId: string; credentialId: string; token: string; headers: IncomingHttpHeaders };
@@ -74,8 +76,8 @@ describe('WP-24 persistent timer commands through real authenticated interaction
     }
   });
 
-  async function actor(): Promise<Actor> {
-    const externalId = randomUUID(), token = generateToken(48);
+  async function actor(externalId: string = randomUUID()): Promise<Actor> {
+    const token = generateToken(48);
     const device = await p.device.create({ data: { name: 'timer fixture', externalId,
       profileId: 'browser-hd-1920x1080', deliveryPolicyId: 'reference-connected-browser' } });
     const credential = await p.deviceCredential.create({ data: { deviceId: device.id, tokenHash: hashToken(token) } });
@@ -210,6 +212,45 @@ describe('WP-24 persistent timer commands through real authenticated interaction
     expect((await timers.listForDevice(owner)).timers).toEqual([]);
     expect(after.events.map(row => (row.payload as { reason: string }).reason).sort()).toEqual(['acknowledged', 'completed', 'created']);
   });
+
+  for (const [creatorByte, creatorPrefix, peerByte, peerPrefix] of [
+    [0xff, '_', 0xfb, '-'], [0xfb, '-', 0xff, '_'],
+  ] as const) {
+    test(`generated base64url IDs preserve ${creatorPrefix} creator and ${peerPrefix} acknowledging peer through expiry`, async () => {
+      // Same 12-byte base64url encoding as generated device IDs, with fixed
+      // bytes exercising both valid non-alphanumeric leading characters.
+      const creator = await actor(Buffer.alloc(12, creatorByte).toString('base64url'));
+      const acknowledgingPeer = await actor(Buffer.alloc(12, peerByte).toString('base64url'));
+      expect(creator.externalId[0]).toBe(creatorPrefix);
+      expect(acknowledgingPeer.externalId[0]).toBe(peerPrefix);
+      await publish([creator, acknowledgingPeer], allowedActions);
+      const created = await command('create', createPayload('shared', 1000), creator);
+      expect(created).toMatchObject({ version: 1, status: 'running', creatorDeviceId: creator.externalId });
+      const dueAt = Date.parse(created.endsAt!);
+      now = dueAt;
+      const due = await outbox.claim('timer-base64url-fixture', new Date(Math.max(now, Date.now())),
+        { eventType: TIMER_DUE, aggregateId: created.timerId });
+      expect(due).not.toBeNull();
+      await new TimerWorkerService(p as PrismaService, timers, { now: () => now }).completeDue(due!);
+      expect(await outbox.ack(due!)).toBe(true);
+      const completed = (await timers.listForDevice(acknowledgingPeer)).timers.find(timer => timer.timerId === created.timerId);
+      expect(completed).toMatchObject({ version: 2, status: 'completed', creatorDeviceId: creator.externalId,
+        completedAt: new Date(dueAt).toISOString(), acknowledgedAt: null });
+      if (!completed) throw new Error('Expected completed base64url timer');
+      now += 1000;
+      const acknowledged = await command('acknowledge', mutation(completed), acknowledgingPeer);
+      expect(acknowledged).toMatchObject({ version: 3, status: 'completed', creatorDeviceId: creator.externalId,
+        acknowledgedAt: new Date(now).toISOString(), acknowledgedByDeviceId: acknowledgingPeer.externalId });
+      for (const value of [created, completed, acknowledged]) {
+        expect(parseTimerSnapshot(value)).toMatchObject({ success: true, data: value });
+      }
+      expect(await p.timer.findUniqueOrThrow({ where: { timerId: created.timerId } })).toMatchObject({
+        creatorDeviceId: creator.deviceId, creatorExternalId: creator.externalId,
+        acknowledgedByDeviceId: acknowledgingPeer.deviceId, acknowledgedByExternalId: acknowledgingPeer.externalId,
+        status: 'completed', version: 3,
+      });
+    });
+  }
 
   test('overdue acknowledgement combines completion and acknowledgement into one version/event; backward time is clamped', async () => {
     let timer = await domain('create', createPayload('shared', 1000));

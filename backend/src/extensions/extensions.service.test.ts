@@ -2,6 +2,12 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { NotFoundException } from '@nestjs/common';
 import { ExtensionsService } from './extensions.service';
 import { createMockPrisma, MockPrisma } from '../test/mocks/prisma.mock';
+import type { Extension } from '@prisma/client';
+
+const extension = (values: Partial<Extension> = {}): Extension => ({
+  id: 1, name: 'Weather', type: 'widget', description: null, config: {}, isActive: true,
+  createdAt: new Date(0), updatedAt: new Date(0), ...values,
+});
 
 describe('ExtensionsService', () => {
   let service: ExtensionsService;
@@ -17,7 +23,7 @@ describe('ExtensionsService', () => {
   describe('create()', () => {
     it('should create an extension and return it', async () => {
       const dto = { name: 'Weather', type: 'widget', description: 'Weather ext' };
-      const created = { id: 1, ...dto, config: {}, isActive: true };
+      const created = extension(dto);
       mockPrisma.extension.create.mockResolvedValue(created);
 
       const result = await service.create(dto as any);
@@ -30,7 +36,7 @@ describe('ExtensionsService', () => {
 
   describe('findOne()', () => {
     it('should return extension when found', async () => {
-      const ext = { id: 1, name: 'Weather', isActive: true };
+      const ext = extension();
       mockPrisma.extension.findUnique.mockResolvedValue(ext);
 
       const result = await service.findOne(1);
@@ -55,7 +61,7 @@ describe('ExtensionsService', () => {
 
     it('should update extension and return it', async () => {
       mockPrisma.extension.findUnique.mockResolvedValue({ id: 1, name: 'Old' });
-      const updated = { id: 1, name: 'New', isActive: true };
+      const updated = extension({ name: 'New' });
       mockPrisma.extension.update.mockResolvedValue(updated);
 
       const result = await service.update(1, { name: 'New' } as any);

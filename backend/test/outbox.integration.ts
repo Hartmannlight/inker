@@ -9,7 +9,7 @@ import { EventsService } from '../src/events/events.service';
 import { OutboxStore } from '../src/events/outbox.store';
 import { PresentationService } from '../src/device-platform/presentation.service';
 import { ScreensService } from '../src/screens/screens.service';
-import { OUTBOX_POLICY } from '../src/events/outbox.types';
+import { effectKey, OUTBOX_POLICY } from '../src/events/outbox.types';
 import { PlaylistsService } from '../src/playlists/playlists.service';
 import { ScreenDesignerService } from '../src/screen-designer/screen-designer.service';
 import { DevicesService } from '../src/devices/devices.service';
@@ -51,7 +51,7 @@ describe('durable outbox with real SQLite transactions', () => {
     return p.device.create({
       data: {
         name: 'test',
-        externalId: 'test-device',
+        externalId: `test-device-${randomUUID()}`,
         profileId: 'browser-hd-1920x1080',
         deliveryPolicyId: 'reference-connected-browser',
       },
@@ -354,6 +354,92 @@ describe('durable outbox with real SQLite transactions', () => {
       status: 'dead-letter',
       attempts: OUTBOX_POLICY.maxAttempts,
     });
+  });
+
+  test('prepare resumes bounded target batches without duplicating recipients', async () => {
+    const d = await device();
+    for (let index = 0; index < 65; index++) await store.register(`bounded-consumer-${String(index).padStart(2, '0')}`);
+    await p.$executeRawUnsafe(`CREATE TRIGGER add_lower_consumer AFTER INSERT ON outbox_targets
+      WHEN (SELECT COUNT(*) FROM outbox_targets WHERE effect_key = NEW.effect_key) = 64
+      BEGIN
+        INSERT INTO outbox_consumers(consumer_id, expires_at)
+        SELECT 'bounded-consumer--late', expires_at FROM outbox_consumers ORDER BY consumer_id LIMIT 1;
+      END`);
+    await events.notifyDevicesRefresh([d.id]);
+    const claim = (await store.claim('bounded-prepare'))!;
+    try { expect((await store.prepare(claim)).duplicate).toBe(false); }
+    finally { await p.$executeRawUnsafe('DROP TRIGGER add_lower_consumer'); }
+    expect(await p.outboxDelivery.count()).toBe(1);
+    expect(await p.outboxTarget.count()).toBe(66);
+    expect(await p.outboxTarget.findUnique({ where: { effectKey_consumerId: {
+      effectKey: (await p.outboxEffect.findFirstOrThrow()).key, consumerId: 'bounded-consumer--late',
+    } } })).not.toBeNull();
+    // A completed same-event preparation is a frozen retry snapshot.
+    expect((await store.prepare(claim)).duplicate).toBe(false);
+    expect(await p.outboxDelivery.count()).toBe(1);
+    expect(await p.outboxTarget.count()).toBe(66);
+  });
+
+  test('prepare filters stale device identifiers before durable delivery', async () => {
+    const d = await device();
+    await events.notifyDevicesRefresh([d.id, 2_000_000_000]);
+    const claim = (await store.claim('existing-device-only'))!;
+    await store.prepare(claim);
+    expect(await p.outboxDelivery.findMany({ select: { deviceId: true } })).toEqual([{ deviceId: d.id }]);
+  });
+
+  test('consumer polling cannot observe a recipient snapshot before its atomic freeze', async () => {
+    const d = await device();
+    await events.notifyDevicesRefresh([d.id]);
+    const claim = (await store.claim('partial-snapshot-owner'))!;
+    await p.outboxEffect.create({ data: { key: 'partial-snapshot', eventId: claim.eventId } });
+    await p.outboxDelivery.create({ data: { effectKey: 'partial-snapshot', deviceId: d.id } });
+    await p.outboxTarget.create({ data: { effectKey: 'partial-snapshot', consumerId: 'partial-consumer' } });
+    expect(await store.pendingTargets('partial-consumer')).toEqual([]);
+    const second = await device();
+    await p.outboxDelivery.create({ data: { effectKey: 'partial-snapshot', deviceId: second.id } });
+    await p.outboxEffect.update({ where: { key: 'partial-snapshot' }, data: { preparedAt: new Date() } });
+    const pending = await store.pendingTargets('partial-consumer');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].effect.deliveries.map(row => row.deviceId).sort((a, b) => a - b)).toEqual(
+      [d.id, second.id].sort((a, b) => a - b),
+    );
+  });
+
+  test('a dead owner discards its invisible partial snapshot before a foreign retry', async () => {
+    const first = await device();
+    const second = await device();
+    await events.notifyDevicesRefresh([first.id]);
+    const owner = (await store.claim('partial-owner'))!;
+    const key = effectKey(
+      owner.eventType,
+      owner.aggregateType,
+      owner.aggregateId,
+      owner.aggregateRevision!,
+    );
+    await p.outboxEffect.create({ data: { key, eventId: owner.eventId } });
+    await p.outboxDelivery.create({ data: { effectKey: key, deviceId: first.id } });
+    await p.outboxTarget.create({ data: { effectKey: key, consumerId: 'partial-target' } });
+
+    const { eventId: _eventId, ...duplicateData } = owner;
+    await p.outboxEvent.create({ data: {
+      ...duplicateData,
+      payload: { ...(owner.payload as object), deviceIds: [second.id] },
+      status: 'pending', attempts: 0, availableAt: new Date(),
+      processedAt: null, lastAttemptAt: null, lastError: null,
+      claimToken: null, claimOwner: null, claimUntil: null,
+    } });
+    await store.fail(owner, 'OUTBOX_INVALID_PAYLOAD');
+
+    const retry = (await store.claim('foreign-retry'))!;
+    await store.prepare(retry);
+    expect(await p.outboxEffect.findUniqueOrThrow({ where: { key } })).toMatchObject({
+      eventId: retry.eventId,
+      preparedAt: expect.any(Date),
+    });
+    expect(await p.outboxDelivery.findMany({ where: { effectKey: key }, select: { deviceId: true } }))
+      .toEqual([{ deviceId: second.id }]);
+    expect(await p.outboxTarget.count({ where: { effectKey: key } })).toBe(0);
   });
 
   test('retention clears terminal payloads at 30/90 days, preserves live work and dedupe receipts', async () => {

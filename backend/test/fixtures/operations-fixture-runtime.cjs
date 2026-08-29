@@ -162,8 +162,12 @@ function logs(state) {
 }
 function audit(state) {
   owned(state, 'container', container(state));
-  const output = spawnSync('docker', ['logs', '--tail', '10000', container(state)], options);
-  check(output.status === 0, 'FIXTURE_LOG_READ_FAILED'); noSecrets(state, String(output.stdout) + String(output.stderr));
+  // A tail could hide an early bootstrap failure or secret before recovery.
+  // maxBuffer bounds the complete log stream and overflow fails closed below.
+  const output = spawnSync('docker', ['logs', container(state)], options);
+  check(output.status === 0, 'FIXTURE_LOG_READ_FAILED');
+  const containerLogs = String(output.stdout) + String(output.stderr); noSecrets(state, containerLogs);
+  check(!/\b(?:API_START_FAILED|WORKER_START_FAILED|P1008)\b/.test(containerLogs), 'FIXTURE_BOOTSTRAP_FAILURE');
   logs(state);
   const tables = db(state, `Promise.all([p.sourceSecret.findMany(),p.sourceDefinition.findMany(),p.sourceSnapshot.findMany(),
     p.sourceRefreshJob.findMany(),p.adminSession.findMany(),p.deviceCredential.findMany(),p.deviceEnrollment.findMany(),

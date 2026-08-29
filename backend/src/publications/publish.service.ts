@@ -7,6 +7,7 @@ import type sharpFactory from 'sharp';
 import type { AllowedAction } from '@inker/contracts';
 const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 import { PrismaService } from '../prisma/prisma.service';
+import { sqliteWrite } from '../sources/source-writes';
 import { PublicationPersistenceService } from './publication-persistence.service';
 import { canonicalJson, fixtureIds, publicationArtifacts, sha256, type PublicationContent } from './publication-content';
 import { normalizePublicationActions } from './publication-actions';
@@ -39,7 +40,7 @@ export class PublishService {
     if (previous) return this.replay(previous, requestHash);
     const prepared = await this.snapshot(input.draft);
     try {
-      return await this.prisma.$transaction(async tx => {
+      return await sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
         // First statement acquires the SQLite writer lock, including commands
         // with different keys. No read-to-write lock upgrade or process-local mutex.
         await tx.$executeRaw`INSERT INTO publication_commands (key_hash, request_hash) VALUES (${keyHash}, ${requestHash}) ON CONFLICT (key_hash) DO NOTHING`;
@@ -65,7 +66,7 @@ export class PublishService {
           revision: revision.revision, contentHash, deviceIds: input.deviceIds };
         await tx.publicationCommand.update({ where: { keyHash }, data: { result } });
         return result;
-      }, { timeout: 10_000 });
+      }, { timeout: 10_000 }), 'Publication busy; retry the same command');
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && ['P1008', 'P2028', 'P2034'].includes(error.code)) {
         throw new ServiceUnavailableException('Publication busy; retry the same command');

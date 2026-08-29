@@ -400,6 +400,7 @@ model PublicationRevision {
 
   @@unique([publicationId, revision])
   @@index([publicationId, publishedAt])
+  @@index([publishedAt])
   @@map("publication_revisions")
 }
 
@@ -646,6 +647,8 @@ model OutboxAggregate {
 model OutboxEffect {
   key String @id
   eventId String @unique @map("event_id")
+  preparedAt DateTime? @map("prepared_at")
+  progressCursor String? @map("progress_cursor")
   completedAt DateTime? @map("completed_at")
   deliveries OutboxDelivery[]
   targets OutboxTarget[]

@@ -1,5 +1,5 @@
 import { BadRequestException, HttpException, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
-import { INTERACTION_LIMITS, parseInteractionEvent, type CommandResult, type InteractionEvent } from '@inker/contracts';
+import { INTERACTION_LIMITS, parseInteractionEvent, type AllowedAction, type CommandResult, type InteractionEvent } from '@inker/contracts';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
@@ -8,6 +8,7 @@ import { hashToken } from '../common/utils/crypto.util';
 import { canonicalJson, publicationAllowedActions, sha256 } from '../publications/publication-content';
 import { RenderCacheService } from '../render-cache/render-cache.service';
 import { cloneIsolatedJson } from '../isolation/isolation-contract';
+import { sqliteWrite } from '../sources/source-writes';
 import { CommandRegistry, type HandlerResult } from './command-registry';
 
 type Tx = Prisma.TransactionClient;
@@ -41,11 +42,14 @@ export class InteractionService {
       return parsed.data;
     } catch { throw new BadRequestException('INTERACTION_INVALID_INPUT'); }
   }
-  private async surface(db: Tx, credential: Credential) {
+  private async surface(db: Tx, credential: Credential, observe = true) {
     const state = await db.devicePublicationState.findUnique({ where: { deviceId: credential.deviceId }, include: { desiredRevision: true } });
     const revision = state?.desiredRevision;
-    if (!revision) return { state, revision: null, allowedActions: [] };
-    const rendered = await this.cache.read(credential.device, revision, db);
+    if (!revision) {
+      const allowedActions: AllowedAction[] = [];
+      return { state, revision: null, allowedActions };
+    }
+    const rendered = await this.cache.read(credential.device, revision, db, observe);
     const allowedActions = rendered && !rendered.fallback && rendered.revision.publicationRevisionId === revision.publicationRevisionId
       ? publicationAllowedActions(revision) : [];
     return { state, revision, allowedActions };
@@ -84,7 +88,7 @@ export class InteractionService {
     const requestHash = sha256(canonicalJson(event));
     try {
       const initial = await this.authenticate(this.prisma, token);
-      return await this.prisma.$transaction(async tx => {
+      return await sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
         // Acquire SQLite's writer lock before identity, receipt and domain reads.
         await tx.$executeRaw`UPDATE devices SET id = id WHERE id = ${initial.deviceId}`;
         const credential = await this.authenticate(tx, token);
@@ -106,7 +110,7 @@ export class InteractionService {
           const sequence = await tx.interactionSequence.findUnique({ where: { credentialId: credential.credentialId } });
           if (sequence && event.clientSequence <= sequence.lastSequence) code = 'INTERACTION_SEQUENCE_REPLAY';
         }
-        const surface = code ? null : await this.surface(tx, credential);
+        const surface = code ? null : await this.surface(tx, credential, false);
         if (!code && (!surface?.revision || surface.revision.publicationId !== event.publicationId
           || String(surface.revision.revision) !== event.revision)) code = 'INTERACTION_NOT_ALLOWED';
         const permission = surface?.allowedActions.find(item => item.action === event.action && item.targetId === event.targetId);
@@ -149,7 +153,7 @@ export class InteractionService {
           createdAt: new Date(this.clock.now()) } });
         await this.authenticate(tx, token); // An expiry while processing rolls back the entire command.
         return result;
-      }, { timeout: 5000 });
+      }, { timeout: 5000 }), 'INTERACTION_UNAVAILABLE');
     } catch (error) {
       if (error instanceof UnauthorizedException || error instanceof HttpException && error.getStatus() === 429) throw error;
       throw new ServiceUnavailableException('INTERACTION_UNAVAILABLE');

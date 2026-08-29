@@ -78,6 +78,30 @@ function writeContainer(state, role, destination, content) {
 function remember(state, secret) {
   if (typeof secret === 'string' && secret.length && !state.secrets.includes(secret)) state.secrets.push(secret);
 }
+function acceptAdminCookie(state, role, headers) {
+  check(roles.includes(role), 'FIXTURE_ROLE_INVALID');
+  const session = state.servers?.[role];
+  check(session && Array.isArray(state.secrets), 'FIXTURE_STATE_INVALID');
+  const cookies = headers['set-cookie'] ?? [];
+  check(Array.isArray(cookies) && cookies.length <= 8
+    && cookies.every(value => typeof value === 'string' && value.length <= 4096), 'FIXTURE_SESSION_COOKIE_INVALID');
+  const matches = cookies.filter(value => value.startsWith('inker_admin_session='));
+  if (!matches.length) return false;
+  check(matches.length === 1, 'FIXTURE_SESSION_COOKIE_INVALID');
+  const match = /^inker_admin_session=([A-Za-z0-9_-]{43})(?:;|$)/.exec(matches[0]);
+  check(match, 'FIXTURE_SESSION_COOKIE_INVALID');
+  const cookie = `inker_admin_session=${match[1]}`;
+  if (session.cookie === cookie) return false;
+  remember(state, match[1]); session.cookie = cookie;
+  return true;
+}
+function sendsKnownAdminCookie(state, role, admin, headers) {
+  check(roles.includes(role), 'FIXTURE_ROLE_INVALID');
+  if (admin === true) return true;
+  const known = state.servers?.[role]?.cookie;
+  const explicit = Object.entries(headers).filter(([name]) => name.toLowerCase() === 'cookie');
+  return typeof known === 'string' && known.length > 0 && explicit.length === 1 && explicit[0][1] === known;
+}
 function save(state, first = false) {
   validate(state); fs.mkdirSync(temporary, { recursive: true });
   if (first) fs.writeFileSync(statePath, JSON.stringify(state), { flag: 'wx', mode: 0o600 });
@@ -107,6 +131,9 @@ function request(state, role, requestPath, { method = 'GET', data, admin = false
   owned(state, 'container', container(state, role));
   const secure = role !== 'home', bytes = data === undefined ? undefined : Buffer.from(JSON.stringify(data));
   const session = state.servers[role];
+  // Capture the actual caller intent before asynchronous responses can rotate
+  // the shared jar. CSRF-negative requests may send its cookie explicitly.
+  const acceptCookie = sendsKnownAdminCookie(state, role, admin, headers);
   return new Promise((resolve, reject) => {
     const request = (secure ? https : http).request({ hostname: '127.0.0.1', port: ports[role], path: requestPath,
       signal: AbortSignal.timeout(10000),
@@ -117,7 +144,12 @@ function request(state, role, requestPath, { method = 'GET', data, admin = false
       const chunks = []; let size = 0;
       response.on('error', reject);
       response.on('data', chunk => { size += chunk.length; if (size > 3 * 1024 * 1024) response.destroy(new Error('FIXTURE_HTTP_LIMIT')); else chunks.push(chunk); });
-      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, bytes: Buffer.concat(chunks) }));
+      response.on('end', () => {
+        try {
+          if (acceptCookie && acceptAdminCookie(state, role, response.headers)) save(state);
+          resolve({ status: response.statusCode, headers: response.headers, bytes: Buffer.concat(chunks) });
+        } catch (error) { reject(error); }
+      });
     });
     request.on('error', reject); request.setTimeout(10000, () => request.destroy(new Error('FIXTURE_HTTP_TIMEOUT'))); request.end(bytes);
   });
@@ -208,6 +240,9 @@ function counter(state, role) {
     if(lines.some(line=>!/^\\d{3}$/.test(line)))throw new Error('FIXTURE_COUNTER_INVALID');${drainSource("lines.reduce((counts,status)=>(counts[status]=(counts[status]||0)+1,counts),{})")}`;
   return JSON.parse(exec(state, role, ['bun', '-e', source]));
 }
+function assertStartupLogs(logs) {
+  check(typeof logs === 'string' && !/\b(?:API_START_FAILED|WORKER_START_FAILED|P1008)\b/.test(logs), 'FIXTURE_BOOTSTRAP_FAILURE');
+}
 function audit(state) {
   for (const role of roles) {
     const name = container(state, role); owned(state, 'container', name);
@@ -220,6 +255,9 @@ function audit(state) {
       let size=0;const texts=[];for(const file of paths)if(fs.existsSync(file)&&fs.statSync(file).isFile()){
         size+=fs.statSync(file).size;if(size>4*1024*1024)throw new Error('FIXTURE_LOG_LIMIT');texts.push(fs.readFileSync(file,'utf8'));}
       ${drainSource('texts')}`]);
+    // A supervisor retry must not turn a failed bootstrap into a passing gate.
+    // Inspect only log text: arbitrary persisted fixture data is not evidence.
+    assertStartupLogs([logs.stdout, logs.stderr, fileLogs].join('\n'));
     const output = [logs.stdout, logs.stderr, JSON.stringify(tables), fileLogs].join('\n');
     for (const secret of state.secrets) check(!output.includes(secret), 'FIXTURE_SECRET_LEAK');
   }
@@ -245,4 +283,4 @@ function cleanup(state) {
 }
 
 module.exports = { statePath, roles, container, check, exec, control, save, load, newState, wait, request, json, login,
-  db, createInfrastructure, configureRemotes, ready, counter, audit, cleanup, remember, caArchive };
+  db, createInfrastructure, configureRemotes, ready, counter, audit, cleanup, remember, caArchive, acceptAdminCookie, sendsKnownAdminCookie, assertStartupLogs };

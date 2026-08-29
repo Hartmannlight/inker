@@ -2,6 +2,12 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { NotFoundException, ConflictException } from '@nestjs/common';
 import { FirmwareService } from './firmware.service';
 import { createMockPrisma, MockPrisma } from '../test/mocks/prisma.mock';
+import type { Firmware } from '@prisma/client';
+
+const firmware = (values: Partial<Firmware> = {}): Firmware => ({
+  id: 1, version: '1.0.0', downloadUrl: 'https://example.com/fw', releaseNotes: null,
+  isStable: false, createdAt: new Date(0), ...values,
+});
 
 describe('FirmwareService', () => {
   let service: FirmwareService;
@@ -24,7 +30,7 @@ describe('FirmwareService', () => {
 
     it('should create firmware when version is new', async () => {
       mockPrisma.firmware.findUnique.mockResolvedValue(null);
-      const created = { id: 1, version: '2.0.0', isStable: false };
+      const created = firmware({ version: '2.0.0' });
       mockPrisma.firmware.create.mockResolvedValue(created);
 
       const result = await service.create({
@@ -45,7 +51,7 @@ describe('FirmwareService', () => {
     });
 
     it('should return the latest stable firmware', async () => {
-      const fw = { id: 3, version: '1.5.0', isStable: true };
+      const fw = firmware({ id: 3, version: '1.5.0', isStable: true });
       mockPrisma.firmware.findFirst.mockResolvedValue(fw);
 
       const result = await service.findLatestStable();
@@ -116,7 +122,7 @@ describe('FirmwareService', () => {
 
     it('should update isStable to true', async () => {
       mockPrisma.firmware.findUnique.mockResolvedValue({ id: 1, version: '1.0.0' });
-      const updated = { id: 1, version: '1.0.0', isStable: true };
+      const updated = firmware({ isStable: true });
       mockPrisma.firmware.update.mockResolvedValue(updated);
 
       const result = await service.markAsStable(1);

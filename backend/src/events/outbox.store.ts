@@ -8,6 +8,9 @@ import {
   parseOutboxEvent,
   retryDelay,
 } from './outbox.types';
+import { sqliteWrite } from '../sources/source-writes';
+
+const DELIVERY_PREPARE_BATCH = 64;
 
 export interface OutboxClaimBudget {
   /** The complete queue group, even if this worker claims a narrower subset. */
@@ -35,8 +38,9 @@ export class OutboxStore {
     now = new Date(),
     filter: Prisma.OutboxEventWhereInput = {},
     budget?: OutboxClaimBudget,
+    leaseNow = now,
   ): Promise<OutboxEvent | null> {
-    if (!budget) return this.claimFrom(this.prisma, owner, now, filter);
+    if (!budget) return this.claimFrom(this.prisma, owner, now, filter, leaseNow);
     const budgets = [budget, ...(budget.additional ?? [])];
     if (budgets.length > 8 || budgets.some(item => !Number.isSafeInteger(item.limit) || item.limit < 1
       || !item.where || typeof item.where !== 'object' || Array.isArray(item.where))) {
@@ -53,7 +57,7 @@ export class OutboxStore {
         } });
         if (active >= item.limit) return null;
       }
-      return this.claimFrom(tx, owner, now, { AND: [filter, ...budgets.map(item => item.where)] });
+      return this.claimFrom(tx, owner, now, { AND: [filter, ...budgets.map(item => item.where)] }, leaseNow);
     });
   }
 
@@ -62,6 +66,7 @@ export class OutboxStore {
     owner: string,
     now: Date,
     filter: Prisma.OutboxEventWhereInput,
+    leaseNow: Date,
   ): Promise<OutboxEvent | null> {
     // Without a queue budget the existing single-row CAS remains sufficient.
     const eligible: Prisma.OutboxEventWhereInput = {
@@ -112,7 +117,7 @@ export class OutboxStore {
         status: 'processing',
         claimOwner: owner,
         claimToken,
-        claimUntil: new Date(now.getTime() + POLICY.leaseMs),
+        claimUntil: new Date(leaseNow.getTime() + POLICY.leaseMs),
         lastAttemptAt: now,
         attempts: { increment: 1 },
       },
@@ -186,56 +191,112 @@ export class OutboxStore {
     await this.prisma.outboxConsumer.deleteMany({ where: { consumerId } });
   }
 
-  async prepare(event: OutboxEvent) {
+  async prepare(event: OutboxEvent, signal?: AbortSignal) {
     const parsed = parseOutboxEvent(event);
-    return this.prisma.$transaction(async (tx) => {
-      // The first statement takes the write lock and fences the complete effect transaction.
-      if (
-        !(
-          await tx.outboxEvent.updateMany({
-            where: this.fence(event, new Date()),
-            data: { claimOwner: event.claimOwner },
-          })
-        ).count
-      ) {
-        throw new Error('OUTBOX_CLAIM_EXPIRED');
-      }
-      const existing = await tx.outboxEffect.findUnique({
-        where: { key: parsed.key },
-      });
-      if (existing)
-        return { ...parsed, duplicate: existing.eventId !== event.eventId };
-      await tx.outboxEffect.create({
-        data: { key: parsed.key, eventId: event.eventId },
-      });
-      let recipients: Prisma.DeviceWhereInput = { id: { in: parsed.deviceIds } };
-      if (parsed.stateChange?.topic === 'timers') {
-        const timer = await tx.timer.findUnique({ where: { timerId: parsed.stateChange.timerId },
-          select: { visibility: true, creatorDeviceId: true } });
-        recipients = timer?.visibility === 'shared' ? { isActive: true }
-          : timer?.visibility === 'private' && timer.creatorDeviceId !== null
-            ? { id: timer.creatorDeviceId, isActive: true } : { id: { in: [] } };
-      }
-      const devices = await tx.device.findMany({
-        where: recipients,
-        select: { id: true },
-      });
-      if (devices.length)
-        await tx.outboxDelivery.createMany({
-          data: devices.map((d) => ({ effectKey: parsed.key, deviceId: d.id })),
-        });
-      const consumers = await tx.outboxConsumer.findMany({
-        where: { expiresAt: { gt: new Date() } },
-      });
-      if (consumers.length)
-        await tx.outboxTarget.createMany({
-          data: consumers.map((c) => ({
-            effectKey: parsed.key,
-            consumerId: c.consumerId,
-          })),
-        });
-      return { ...parsed, duplicate: false };
-    });
+    const specificIds = [...parsed.deviceIds].sort((a, b) => a - b);
+    for (;;) {
+      const batch = await sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
+        signal?.throwIfAborted();
+        const assertLease = async () => {
+          signal?.throwIfAborted();
+          if (!(await tx.outboxEvent.updateMany({
+            where: this.fence(event, new Date()), data: { claimOwner: event.claimOwner },
+          })).count) throw new Error('OUTBOX_CLAIM_EXPIRED');
+        };
+        await assertLease();
+        let existing = await tx.outboxEffect.findUnique({ where: { key: parsed.key } });
+        if (existing?.eventId !== undefined && existing.eventId !== event.eventId) {
+          if (existing.preparedAt) {
+            await assertLease();
+            return { done: true, duplicate: true };
+          }
+          const owner = await tx.outboxEvent.findUnique({
+            where: { eventId: existing.eventId }, select: { status: true },
+          });
+          if (owner && owner.status !== 'dead-letter') {
+            // Only the event that selected the recipient semantics may resume
+            // a live partial snapshot. This also prevents recipient unions
+            // between duplicate events carrying different payloads.
+            throw new Error('OUTBOX_EFFECT_INCOMPLETE');
+          }
+          // Targets cannot observe an effect before preparedAt. Once its owner
+          // is permanently terminal (or was retained away), discarding the
+          // invisible partial rows and starting from the new event is safe and
+          // gives operators an automatic recovery path without payload unions.
+          await tx.outboxEffect.delete({ where: { key: parsed.key } });
+          existing = null;
+        }
+        if (existing?.preparedAt) {
+          await assertLease();
+          return { done: true, duplicate: false };
+        }
+        if (!existing) await tx.outboxEffect.create({ data: { key: parsed.key, eventId: event.eventId } });
+
+        let devices: Array<{ deviceId: number }> = [];
+        if (parsed.stateChange?.topic === 'timers') {
+          const timer = await tx.timer.findUnique({ where: { timerId: parsed.stateChange.timerId },
+            select: { visibility: true, creatorDeviceId: true } });
+          if (timer?.visibility === 'shared') devices = await tx.$queryRaw(Prisma.sql`
+            SELECT d.id AS "deviceId" FROM devices d
+            WHERE d.is_active = 1 AND NOT EXISTS (
+              SELECT 1 FROM outbox_deliveries delivery
+              WHERE delivery.effect_key = ${parsed.key} AND delivery.device_id = d.id
+            ) ORDER BY d.id LIMIT ${DELIVERY_PREPARE_BATCH}
+          `);
+          else if (timer?.visibility === 'private' && timer.creatorDeviceId !== null)
+            devices = await tx.$queryRaw(Prisma.sql`
+              SELECT d.id AS "deviceId" FROM devices d
+              WHERE d.id = ${timer.creatorDeviceId} AND d.is_active = 1 AND NOT EXISTS (
+                SELECT 1 FROM outbox_deliveries delivery
+                WHERE delivery.effect_key = ${parsed.key} AND delivery.device_id = d.id
+              ) ORDER BY d.id LIMIT ${DELIVERY_PREPARE_BATCH}
+            `);
+        } else {
+          // json_each keeps the statement below SQLite's parameter limit while
+          // joining through devices filters stale or forged recipient IDs.
+          devices = await tx.$queryRaw(Prisma.sql`
+            SELECT d.id AS "deviceId" FROM devices d
+            WHERE d.id IN (
+              SELECT CAST(value AS INTEGER) FROM json_each(${JSON.stringify(specificIds)})
+            ) AND NOT EXISTS (
+              SELECT 1 FROM outbox_deliveries delivery
+              WHERE delivery.effect_key = ${parsed.key} AND delivery.device_id = d.id
+            ) ORDER BY d.id LIMIT ${DELIVERY_PREPARE_BATCH}
+          `);
+        }
+        const deviceIds = devices.map(row => row.deviceId);
+        if (deviceIds.length) {
+          await tx.outboxDelivery.createMany({
+            data: deviceIds.map(deviceId => ({ effectKey: parsed.key, deviceId })),
+          });
+          await assertLease();
+          return { done: false, duplicate: false };
+        }
+
+        const consumers = await tx.$queryRaw<Array<{ consumerId: string }>>(Prisma.sql`
+          SELECT consumer.consumer_id AS "consumerId" FROM outbox_consumers consumer
+          WHERE consumer.expires_at > ${new Date()} AND NOT EXISTS (
+            SELECT 1 FROM outbox_targets target
+            WHERE target.effect_key = ${parsed.key}
+              AND target.consumer_id = consumer.consumer_id
+          ) ORDER BY consumer.consumer_id LIMIT ${DELIVERY_PREPARE_BATCH}
+        `);
+        if (consumers.length) {
+          const consumerIds = consumers.map(row => row.consumerId);
+          await tx.outboxTarget.createMany({ data: consumerIds.map(consumerId => ({
+            effectKey: parsed.key, consumerId,
+          })) });
+          await assertLease();
+          return { done: false, duplicate: false };
+        }
+        await tx.outboxEffect.update({ where: { key: parsed.key }, data: { preparedAt: new Date() } });
+        await assertLease();
+        return { done: true, duplicate: false };
+      }));
+      if (batch.duplicate) return { ...parsed, duplicate: true };
+      if (batch.done) return { ...parsed, duplicate: false };
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
   }
 
   async targetsComplete(key: string, now = new Date()) {
@@ -264,7 +325,10 @@ export class OutboxStore {
       where: {
         consumerId,
         delivered: false,
-        effect: { eventId: { in: processing.map((e) => e.eventId) } },
+        effect: {
+          preparedAt: { not: null },
+          eventId: { in: processing.map((e) => e.eventId) },
+        },
       },
       include: { effect: { include: { deliveries: true } } },
       take: POLICY.batchSize,

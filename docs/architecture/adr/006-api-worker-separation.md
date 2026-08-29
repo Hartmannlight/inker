@@ -24,8 +24,8 @@ Outbox und Queue. Provider-Zugriffe, Source-Refresh, Rendering, Delivery-Retries
 Wartungsarbeit laufen im Worker. Blockierende oder nicht zuverlässig abbrechbare
 Arbeit läuft zusätzlich in Worker-Threads oder Subprozessen. Unbekannter
 Plugin-Code läuft niemals im API-Prozess und erhält keine Provider-Tokens. Die
-konkrete Ausführungsgrenze für Drittanbieter-Erweiterungen bleibt in
-[ADR-010](010-extension-isolation.md) offen.
+konkrete Ausführungsgrenze für Drittanbieter-Erweiterungen ist seit WP-22 im
+akzeptierten [ADR-010](010-extension-isolation.md) festgelegt.
 
 Ein Worker-Ausfall darf Read-Pfade für bereits publizierte Manifeste und Artefakte
 nicht stoppen. Die Datenbank ist gemäß [ADR-001](001-sqlite-postgresql-boundary.md)

@@ -48,7 +48,7 @@ describe('built-in transport adapters', () => {
 
   it('prepares the existing WebDisplay bootstrap while persisting only its hash', () => {
     const gateway = { pushPresentation: async () => undefined };
-    const registration = new WebSocketTransportAdapter(gateway as any).prepareRegistration({});
+    const registration = new WebSocketTransportAdapter(gateway as any).prepareRegistration();
 
     expect(registration.apiKey).toBeNull();
     expect(registration.externalId).toHaveLength(16);
@@ -63,7 +63,7 @@ describe('built-in transport adapters', () => {
       pushPresentation: async (deviceId: number) => { dispatchedDeviceId = deviceId; },
     } as any);
 
-    const rotated = adapter.rotateBootstrap({ id: 9, externalId: 'stable-external-id' });
+    const rotated = adapter.rotateBootstrap({ externalId: 'stable-external-id' });
     await adapter.dispatchRefresh(9);
 
     expect(rotated.externalId).toBe('stable-external-id');

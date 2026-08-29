@@ -1,4 +1,5 @@
 import { addIssue, parseContract, type ParseResult, type ValidationContext } from './validation';
+import { isDeviceIdentifier } from './device-identifier';
 
 export const TIMER_LIMITS = Object.freeze({
   durationMinMs: 1000,
@@ -98,7 +99,6 @@ const version = (value: unknown): value is number => integer(value, 1, TIMER_LIM
 const visibility = (value: unknown): value is TimerVisibility => value === 'private' || value === 'shared';
 const uuid = (value: unknown): value is string => typeof value === 'string'
   && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
-const deviceId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 const timestamp = (value: unknown): value is string => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
   const parsed = new Date(value);
@@ -126,7 +126,7 @@ export function parseTimerSnapshot(value: unknown): ParseResult<TimerSnapshot> {
     const invalid = (field?: string) => issue(context, 'invalid_timer_snapshot', field ? `${path}.${field}` : path);
     if (!uuid(record.timerId)) return invalid('timerId');
     if (!version(record.version)) return invalid('version');
-    if (!deviceId(record.creatorDeviceId)) return invalid('creatorDeviceId');
+    if (!isDeviceIdentifier(record.creatorDeviceId)) return invalid('creatorDeviceId');
     if (!visibility(record.visibility)) return invalid('visibility');
     if (!duration(record.durationMs)) return invalid('durationMs');
     if (!timestamp(record.startedAt)) return invalid('startedAt');
@@ -135,7 +135,7 @@ export function parseTimerSnapshot(value: unknown): ParseResult<TimerSnapshot> {
       if (record[key] !== null && !timestamp(record[key])) return invalid(key);
     }
     if (record.pausedRemainingMs !== null && !integer(record.pausedRemainingMs, 1, record.durationMs)) return invalid('pausedRemainingMs');
-    if (record.acknowledgedByDeviceId !== null && !deviceId(record.acknowledgedByDeviceId)) return invalid('acknowledgedByDeviceId');
+    if (record.acknowledgedByDeviceId !== null && !isDeviceIdentifier(record.acknowledgedByDeviceId)) return invalid('acknowledgedByDeviceId');
     const snapshot = record as unknown as TimerSnapshot;
     // All timestamp strings are canonical UTC values and can be ordered directly.
     if (snapshot.startedAt > snapshot.evaluatedAt) return invalid();

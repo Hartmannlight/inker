@@ -6,6 +6,9 @@ export class FederationIdentityService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
+    // An empty Prisma upsert may still acquire a writer lock. Existing identity
+    // needs no mutation when the API restarts alongside the worker.
+    if (await this.prisma.federationIdentity.findUnique({ where: { id: 1 }, select: { id: true } })) return;
     // Empty upsert update does not fire the immutable-identity UPDATE trigger.
     await this.prisma.federationIdentity.upsert({ where: { id: 1 }, create: { id: 1 }, update: {} });
   }

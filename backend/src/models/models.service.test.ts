@@ -2,6 +2,13 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { ModelsService } from './models.service';
 import { createMockPrisma, MockPrisma } from '../test/mocks/prisma.mock';
+import type { Model } from '@prisma/client';
+
+const modelFixture = (values: Partial<Model> = {}): Model => ({
+  id: 1, name: 'TRMNL', label: 'TRMNL', width: 800, height: 480, description: null,
+  mimeType: 'image/png', colors: 2, bitDepth: 1, rotation: 0, offsetX: 0, offsetY: 0,
+  kind: 'terminus', scaleFactor: 1, publishedAt: null, createdAt: new Date(0), updatedAt: new Date(0), ...values,
+});
 
 describe('ModelsService', () => {
   let service: ModelsService;
@@ -24,7 +31,7 @@ describe('ModelsService', () => {
 
     it('should create model when name is unique', async () => {
       mockPrisma.model.findUnique.mockResolvedValue(null);
-      const created = { id: 1, name: 'NewModel', width: 800, height: 480 };
+      const created = modelFixture({ name: 'NewModel', label: 'NewModel' });
       mockPrisma.model.create.mockResolvedValue(created);
 
       const result = await service.create({
@@ -46,7 +53,7 @@ describe('ModelsService', () => {
     });
 
     it('should return model when found', async () => {
-      const model = { id: 1, name: 'TRMNL', devices: [], screens: [], _count: { devices: 0, screens: 0 } };
+      const model = { ...modelFixture(), devices: [], screens: [], _count: { devices: 0, screens: 0 } };
       mockPrisma.model.findUnique.mockResolvedValue(model);
 
       const result = await service.findOne(1);

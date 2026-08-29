@@ -7,6 +7,7 @@ import { AdminCredentialService } from '../src/auth/admin-credential.service';
 import {
   ADMIN_SESSION_IDLE_TTL_MS,
   ADMIN_SESSION_ROTATION_MS,
+  ADMIN_SESSION_TOUCH_INTERVAL_MS,
   AdminSessionService,
 } from '../src/auth/admin-session.service';
 import { PasswordHasherService } from '../src/auth/password-hasher.service';
@@ -37,15 +38,16 @@ async function migrate(path: string) {
 
 describe('WP-12 admin credential and session persistence', () => {
   let prisma: PrismaClient;
+  let databasePath: string;
   let credentials: AdminCredentialService;
   let sessions: AdminSessionService;
 
   beforeEach(async () => {
     const directory = mkdtempSync(join(tmpdir(), 'inker-admin-auth-test-'));
     createdDirectories.push(directory);
-    const path = join(directory, 'inker.db');
-    await migrate(path);
-    prisma = new PrismaClient({ datasources: { db: { url: databaseUrl(path) } } });
+    databasePath = join(directory, 'inker.db');
+    await migrate(databasePath);
+    prisma = new PrismaClient({ datasources: { db: { url: databaseUrl(databasePath) } } });
     await prisma.$connect();
     credentials = new AdminCredentialService(
       prisma as never,
@@ -130,6 +132,42 @@ describe('WP-12 admin credential and session persistence', () => {
       sessionId: rotating.sessionId,
     });
   });
+
+  test('a contended technical touch never holds a valid admin request behind the SQLite writer', async () => {
+    await credentials.onModuleInit();
+    const admin = await prisma.adminAccount.findUniqueOrThrow({ where: { scopeKey: 'instance' } });
+    const created = await sessions.create(admin.adminId, {});
+    const now = new Date();
+    await prisma.adminSession.update({ where: { sessionId: created.sessionId },
+      data: { lastSeenAt: new Date(now.getTime() - ADMIN_SESSION_TOUCH_INTERVAL_MS) } });
+    const locker = new PrismaClient({ datasources: { db: { url: databaseUrl(databasePath) } } });
+    await locker.$connect();
+    let locked!: () => void, release!: () => void;
+    const lockReady = new Promise<void>(resolve => { locked = resolve; });
+    const holdLock = new Promise<void>(resolve => { release = resolve; });
+    const transaction = locker.$transaction(async tx => {
+      await tx.$executeRaw`UPDATE admin_sessions SET last_seen_at = last_seen_at WHERE session_id = ${created.sessionId}`;
+      locked();
+      await holdLock;
+    }, { timeout: 10_000, maxWait: 5_000 });
+    try {
+      await lockReady;
+      const started = performance.now();
+      expect(await sessions.validate(created.token, now)).toMatchObject({ sessionId: created.sessionId });
+      expect(performance.now() - started).toBeLessThan(1_000);
+    } finally {
+      release();
+      await transaction;
+      await locker.$disconnect();
+    }
+    let touched = false;
+    for (let attempt = 0; attempt < 100 && !touched; attempt++) {
+      const row = await prisma.adminSession.findUniqueOrThrow({ where: { sessionId: created.sessionId } });
+      touched = row.lastSeenAt.getTime() === now.getTime();
+      if (!touched) await Bun.sleep(25);
+    }
+    expect(touched).toBe(true);
+  }, 30_000);
 
   test('logout-all revokes every active session', async () => {
     await credentials.onModuleInit();

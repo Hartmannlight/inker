@@ -99,18 +99,26 @@ describe('WP-25 timer outbox recipient authorization', () => {
     expect(await recipients((await store.prepare(await claim(row.timerId, 2))).key)).toEqual([1, 2, 3, 4]);
   });
 
-  test('effect, authorized deliveries and consumer targets roll back together on a late SQL failure', async () => {
+  test('a late target failure retains bounded delivery progress and resumes without duplicates', async () => {
     const row = await timer('shared');
     await store.register('consumer');
     const event = await claim(row.timerId);
     await prisma.$executeRawUnsafe("CREATE TRIGGER fail_timer_target BEFORE INSERT ON outbox_targets BEGIN SELECT RAISE(ABORT, 'controlled fixture failure'); END");
     try {
       await expect(store.prepare(event)).rejects.toThrow();
-      expect(await prisma.outboxEffect.count()).toBe(0);
-      expect(await prisma.outboxDelivery.count()).toBe(0);
+      expect(await prisma.outboxEffect.count()).toBe(1);
+      expect(await prisma.outboxDelivery.count()).toBe(3);
       expect(await prisma.outboxTarget.count()).toBe(0);
+      expect((await prisma.outboxEffect.findFirstOrThrow()).preparedAt).toBeNull();
+      const duplicate = await claim(row.timerId);
+      await expect(store.prepare(duplicate)).rejects.toThrow('OUTBOX_EFFECT_INCOMPLETE');
     } finally { await prisma.$executeRawUnsafe('DROP TRIGGER fail_timer_target'); }
-    expect(await recipients((await store.prepare(event)).key)).toEqual([1, 2, 4]);
+    const completed = await store.prepare(event);
+    expect(await recipients(completed.key)).toEqual([1, 2, 4]);
+    expect(await prisma.outboxTarget.count()).toBe(1);
+    expect((await prisma.outboxEffect.findFirstOrThrow()).preparedAt).toBeInstanceOf(Date);
+    expect((await store.prepare(event)).duplicate).toBe(false);
+    expect(await prisma.outboxTarget.count()).toBe(1);
     expect(await prisma.outboxEvent.count({ where: { status: 'dead-letter' } })).toBe(0);
   });
 

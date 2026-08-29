@@ -69,6 +69,15 @@ describe('timer command payloads', () => {
 });
 
 describe('timer snapshot contract', () => {
+  test('preserves generated base64url IDs in timer creators and acknowledgements', () => {
+    for (const byte of [0xff, 0xfb]) {
+      const deviceId = Buffer.alloc(12, byte).toString('base64url');
+      const input = { ...snapshot('completed'), creatorDeviceId: deviceId,
+        acknowledgedByDeviceId: deviceId, acknowledgedAt: end };
+      expect(parseTimerSnapshot(input)).toEqual({ success: true, data: input, warnings: [] });
+    }
+  });
+
   test('accepts every lifecycle state and a jointly acknowledged completion', () => {
     for (const state of ['running', 'paused', 'completed', 'cancelled'] as const) {
       const value = snapshot(state), parsed = parseTimerSnapshot(value);
@@ -129,7 +138,7 @@ describe('timer snapshot contract', () => {
     const input = snapshot();
     for (const key of Object.keys(input)) { const changed = { ...input } as Record<string, unknown>; delete changed[key]; rejected(parseTimerSnapshot(changed)); }
     rejected(parseTimerSnapshot({ ...input, 'synthetic-secret-field': 'synthetic-secret' }));
-    for (const id of ['', '-invalid', '../synthetic-secret', 'name with spaces', 'x'.repeat(129), 'ä']) {
+    for (const id of ['', ':invalid', '.invalid', '../synthetic-secret', 'name with spaces', 'x'.repeat(129), 'ä', '_\n']) {
       rejected(parseTimerSnapshot({ ...input, creatorDeviceId: id }));
       rejected(parseTimerSnapshot({ ...snapshot('completed'), acknowledgedAt: end, acknowledgedByDeviceId: id }));
     }

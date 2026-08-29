@@ -28,7 +28,7 @@ describe('legacy plugin snapshot boundary', () => {
     };
     const prisma = {
       plugin: {
-        findUnique: mock(async () => ({ ...plugin, instances: [instance] })),
+        findUnique: mock(async (): Promise<(typeof plugin & { instances: typeof instance[] }) | null> => ({ ...plugin, instances: [instance] })),
         findMany: mock(async () => [{ ...plugin, instances: [instance] }]),
         upsert: mock(async () => plugin), deleteMany: mock(async () => ({ count: 0 })),
       },
@@ -46,7 +46,10 @@ describe('legacy plugin snapshot boundary', () => {
       encryptObject: mock(() => ({ customCredential: 'new-ciphertext' })),
     };
     const oauth = { getAccessToken: mock(async () => { throw new Error('unexpected OAuth'); }) };
-    const network = spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('unexpected request'); });
+    const network = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(
+      () => { throw new Error('unexpected request'); },
+      { preconnect: () => { throw new Error('unexpected preconnect'); } },
+    ));
     const service = new PluginsService(prisma as unknown as PrismaService,
       renderer as unknown as PluginRendererService, encryption as unknown as EncryptionService,
       oauth as unknown as OAuthService);
@@ -121,12 +124,30 @@ describe('legacy plugin snapshot boundary', () => {
     }
   });
 
-  test('startup retains legacy definitions and customized builtin configuration', async () => {
+  test('startup retains legacy definitions and customized builtin configuration without an upsert', async () => {
     const h = harness();
+    const before = structuredClone(h.plugin);
     await h.service.cleanupStalePlugins();
     await h.service.seedBuiltinPlugins();
     expect(h.prisma.plugin.deleteMany).not.toHaveBeenCalled();
-    expect(h.prisma.plugin.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: {} }));
+    expect(h.prisma.plugin.findUnique).toHaveBeenCalledWith({ where: { slug: 'grafana_panel' }, select: { id: true } });
+    expect(h.prisma.plugin.upsert).not.toHaveBeenCalled();
+    expect(h.plugin).toEqual(before);
+  });
+
+  test('startup inserts a missing builtin and preserves the empty-update concurrency safeguard', async () => {
+    const h = harness();
+    h.prisma.plugin.findUnique.mockResolvedValueOnce(null);
+    await h.service.seedBuiltinPlugins();
+    expect(h.prisma.plugin.upsert).toHaveBeenCalledTimes(1);
+    expect(h.prisma.plugin.upsert).toHaveBeenCalledWith({
+      where: { slug: 'grafana_panel' },
+      create: expect.objectContaining({ slug: 'grafana_panel', isBuiltin: true }),
+      update: {},
+    });
+    await h.service.seedBuiltinPlugins();
+    expect(h.prisma.plugin.upsert).toHaveBeenCalledTimes(1);
+    expect(h.prisma.plugin.deleteMany).not.toHaveBeenCalled();
   });
 
   test('plugin preview requires persisted data and does not synthesize a card', async () => {

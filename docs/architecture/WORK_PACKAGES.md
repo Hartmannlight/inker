@@ -84,7 +84,7 @@ müssen.
 | [x] | WP-26 | Föderationsvertrag und read-only Share-Credentials | WP-04, WP-12, WP-17 |
 | [x] | WP-27 | Remote-Abonnement, sichere Synchronisation und lokaler Fallback | WP-20, WP-26 |
 | [x] | WP-28 | Strukturierte Logs, Metriken und Betriebszustände | WP-20 |
-| [ ] | WP-29 | Last-, Fault-, Backup- und Security-Freigabegate | WP-19, WP-21, WP-25, WP-27, WP-28 |
+| [x] | WP-29 | Last-, Fault-, Backup- und Security-Freigabegate | WP-19, WP-21, WP-25, WP-27, WP-28 |
 
 ### Grobe Etappen
 
@@ -3452,7 +3452,7 @@ Worker-Verfügbarkeitsgauge; Details in `OBSERVABILITY_OPERATIONS.md`.
   Last prüfen und einen erneut auftretenden Fehler vor Freigabe beheben.
 - Nächster Schritt: WP-29 einschließlich Architekturabschnitt 12, Abschnitt-9-Audit,
   kombinierter Last, Faults, Security, Migration und vollständigem Backup/Restore.
-- Git: lokaler WP-28-Paketcommit folgt; kein weiterer Push, Merge oder Deployment.
+- Git: WP-28 lokal in `99f7747` committed; kein weiterer Push, Merge oder Deployment.
 
 ## WP-29 – Foundation-Freigabegate
 
@@ -3470,15 +3470,15 @@ End-to-End-Tests; gezielte kleine Fixes nur, wenn sie eindeutig im Testscope lie
 
 **Aufgaben:**
 
-- [ ] Simuliere mindestens 20 dauerhafte WebSocket-Displays.
-- [ ] Kombiniere Batterie-Pull, schnellen Pull, WebSocket und Touchaktionen.
-- [ ] Starte parallele Slow-/Failure-Sources und Renderanforderungen.
-- [ ] Miss API-Latenz, Queue-Alter, Renderdeduplizierung, DB-Writes und Speicher.
-- [ ] Unterbrich Worker, Redis, Remote-Server und WebSockets kontrolliert.
-- [ ] Teste Backup/Restore und Migration mit aktiven Timern und Publications.
-- [ ] Führe Auth-, Replay-, SSRF- und Secret-Redaction-Suite aus.
-- [ ] Dokumentiere Grenzwerte, Ergebnisse und alle P0/P1/P2-Befunde.
-- [ ] Aktualisiere Docker-/Betriebsdokumentation und Release-Checkliste.
+- [x] Simuliere mindestens 20 dauerhafte WebSocket-Displays.
+- [x] Kombiniere Batterie-Pull, schnellen Pull, WebSocket und Touchaktionen.
+- [x] Starte parallele Slow-/Failure-Sources und Renderanforderungen.
+- [x] Miss API-Latenz, Queue-Alter, Renderdeduplizierung, DB-Writes und Speicher.
+- [x] Unterbrich Worker, Redis, Remote-Server und WebSockets kontrolliert.
+- [x] Teste Backup/Restore und Migration mit aktiven Timern und Publications.
+- [x] Führe Auth-, Replay-, SSRF- und Secret-Redaction-Suite aus.
+- [x] Dokumentiere Grenzwerte, Ergebnisse und alle P0/P1/P2-Befunde.
+- [x] Aktualisiere Docker-/Betriebsdokumentation und Release-Checkliste.
 
 **Abnahme:** Alle Foundation-Erfolgskriterien sind nachweislich erfüllt; kein
 offener P0/P1-Befund bleibt und jeder P2-Befund besitzt einen Folgeschritt.
@@ -3488,6 +3488,42 @@ Testbericht im Repository.
 
 **Handoff:** Freigabeentscheidung, gemessene Kapazität und nächster Produkt-/Widget-
 Backlog notieren.
+
+### Zwischenstand WP-29 (2026-08-29, nicht abgenommen)
+
+WP-27 und WP-28 sind separat lokal committed (`456a343`, `99f7747`); Gates erfüllt.
+Last-/Faultfixture, vollständige CI-Verkabelung und Dreivolumen-Backup-/Restore-
+Prüfung entstehen mit getrennten Dateizuständigkeiten. §9-Audit findet noch
+duplizierte DaysUntil-Berechnung und eine unbeschränkte Tagesiteration; die
+gemeinsame begrenzte Implementierung wird gezielt samt Regressionstests korrigiert.
+Aktuelle Prüfmatrix, vorab festgelegte Grenzwerte und noch offene Belege stehen in
+`FOUNDATION_ACCEPTANCE.md`. Gestartete Prüfungen sind keine Abnahme.
+
+### Abschluss WP-29
+
+- Status: abgeschlossen am 2026-08-29.
+- Ergebnis: Software-Foundation und Architekturabschnitt 12 freigegeben; keine
+  offenen P0/P1, dokumentierte P2-Folgeschritte und Hardwaregrenzen.
+- Geänderte Kernpfade: vollständiger dynamischer Foundation-Runner, Last- und
+  Backup-/Restorefixtures, Outbox/Render/Source-/Publication-Härtungen,
+  gemeinsamer DaysUntil-/Geräte-ID-Contracts-Kern, CI und Betriebsdokumentation.
+- Ausgeführte Tests: frischer Linuxlauf 43/43 Gates; Contracts 95/2244,
+  Backend-Units 1160/6987, sämtliche Integration-, Container-, Security-, Last-,
+  Fault- und Restore-Gates. Finales Image
+  `sha256:9b57638e189b3d9f5c34f1ba51775aa341c189dab04d2a76e3e7498ee81117b6`.
+- Browser: Administratorlogin, Operations, Designer-Katalog und echtes gekoppeltes
+  Web-Display ohne Consolefehler; 1920×1080-Artefakt vollständig geladen.
+- Nicht ausführbare Tests und Grund: physische ESP32-S3-, Pi-/Kiosk- und
+  TRMNL-BYOD-/Energie-/Refreshmessungen mangels Hardware.
+- Bewusste Abweichungen vom Paket: keine; keine Gates übersprungen oder Grenzwerte
+  abgeschwächt. Frühere Fehlerläufe bleiben im Fortschritts-/Freigabebericht.
+- Neue Risiken/Schulden: bounded Publication-Cleanup kann bei sehr großem
+  geschütztem Altbestand eine breite negative Abfrage ausführen; `EXPLAIN`-/Index-
+  beziehungsweise materialisierte Eligibility-Prüfung als nicht blockierender P2.
+  HOST-01/HOST-02 bleiben Toolchain-Folgeprüfungen.
+- Nächster Schritt: Produkt-/Widget-Backlog außerhalb des Foundation-Scopes;
+  Hardwaregates separat. Kein Merge oder Deployment durch dieses Paket.
+- Git-Stand/Commit: wird nach diesem dokumentierten Abschluss lokal erstellt.
 
 ## 5. Handoff-Format pro abgeschlossenem Paket
 

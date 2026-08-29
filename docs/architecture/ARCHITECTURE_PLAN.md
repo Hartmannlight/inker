@@ -1,11 +1,15 @@
 # StatusPanel – Architektur- und Umsetzungsplan
 
-Stand: 24. August 2026  
+Zielbild: 24. August 2026; Statusabgleich: 29. August 2026
+
 Ausgangsbasis: Inker `0.6.0` auf Commit `83c72b0`
 
 Operative Abarbeitung: [`WORK_PACKAGES.md`](WORK_PACKAGES.md) zerlegt diesen Plan
-in geordnete, einzeln in einem neuen Chat ausführbare Arbeitspakete mit
-Abhängigkeiten, Abnahmekriterien, Tests und Handoff-Format.
+in geordnete Arbeitspakete mit Abhängigkeiten, Abnahmekriterien, Tests und
+Handoff-Format. Der aktuelle Goal-Auftrag erlaubt ihre fortlaufende Bearbeitung;
+Paketgrenzen und Abhängigkeiten bleiben verbindlich. Die Abschlüsse WP-00 bis
+WP-29 und die Software-Foundation-Freigabe sind dokumentiert. Physische
+Hardwareprüfungen bleiben offen.
 
 Verbindliche Einzelentscheidungen und bewusst offene Annahmen stehen im
 [ADR-Index](adr/README.md). Änderungen am Zielbild werden dort als neue,
@@ -20,9 +24,9 @@ echte E-Mail-, Smart-Home- oder Grafana-Integrationen folgen erst, wenn die
 Kernverträge belastbar sind.
 
 Wir entwickeln keinen vollständigen Neubau. Der vorhandene Inker-Editor, die
-Playlist-/Screen-Verwaltung und das Rendering bleiben die Ausgangsbasis. Die noch
-uncommittierte Geräteplattform ist ein guter Spike, wird aber vor dem Ausbau an den
-unten definierten Grenzen ausgerichtet.
+Playlist-/Screen-Verwaltung und das Rendering bleiben die Ausgangsbasis. Die am
+24. August noch uncommittierte Geräteplattform wurde als Spike gesichert und in
+den folgenden Paketen an den unten definierten Grenzen ausgerichtet.
 
 ### Annahmen für die erste belastbare Version
 
@@ -347,6 +351,11 @@ Renderer-Version. Gleiche Anfragen teilen sich dasselbe gecachte Artefakt.
 
 ## 9. Bekannte Probleme des aktuellen Forks
 
+Die Tabelle erfasst die Befunde des Ausgangsstands vom 24. August. Sie ist keine
+Liste weiterhin ungeprüft offener Fehler: Die Paket-Handoffs dokumentieren die
+Behebungen; WP-29 hat ihren aktuellen Bestand einschließlich des gemeinsamen
+begrenzten Days-Until-Kerns abschließend geprüft.
+
 | Problem | Auswirkung | Behebung im Plan |
 |---|---|---|
 | Neuer Pairing-Link wird bei vorhandenem Browser-Credential ignoriert | Widerrufenes Web-Display kann sich im selben Browser nicht neu verbinden | Phase 3 |
@@ -368,26 +377,36 @@ Jede Phase endet mit einem Gate. Die nächste Phase beginnt erst, wenn dieses Ga
 erfüllt ist. Dadurch bleibt das Projekt nach jedem Schritt verständlich und
 testbar.
 
+Die detaillierte Reihenfolge und ausdrücklich erlaubte Parallelität regelt
+`WORK_PACKAGES.md`. Die folgenden Häkchen gleichen die ursprüngliche Phasenliste
+mit den abgenommenen Paketen ab; sie ersetzen weder deren Prüfprotokolle noch das
+abschließende WP-29-Gate. Nicht umgesetzte Teilziele und Hardwareprüfungen bleiben
+ausdrücklich offen.
+
 ### Phase 0 – Repository und Arbeitsstand sichern
 
-**Warum:** Der komplette aktuelle Spike ist uncommittiert und liegt in einer
+**Warum:** Der ursprüngliche Spike war uncommittiert und lag in einer
 verschachtelten Git-Struktur. Vor Breaking Changes braucht es eine eindeutige,
 wiederherstellbare Basis.
 
-- [ ] Entscheiden, ob `StatusPanel` das eigentliche Repository wird oder
+- [x] Entscheiden, ob `StatusPanel` das eigentliche Repository wird oder
   `StatusPanel/inker` der alleinige Fork bleibt.
-- [ ] Die zweite Upstream-Arbeitskopie aus dem zukünftigen Repository auslagern
+- [x] Die zweite Upstream-Arbeitskopie aus dem zukünftigen Repository auslagern
   oder konsequent ignorieren.
-- [ ] Konzeptdokumente in einen eindeutigen `docs/architecture/`-Bereich
+- [x] Konzeptdokumente in einen eindeutigen `docs/architecture/`-Bereich
   überführen.
-- [ ] Den aktuellen Spike auf einem eigenen Branch sichern.
-- [ ] Lockfile-Rauschen von fachlichen Änderungen trennen.
-- [ ] Bestehende Änderungen in nachvollziehbare Themenblöcke aufteilen:
+- [x] Den aktuellen Spike auf einem eigenen Branch sichern.
+- [x] Lockfile-Rauschen von fachlichen Änderungen trennen.
+- [x] Bestehende Änderungen in nachvollziehbare Themenblöcke aufteilen:
   Geräteplattform, Web-Display, Pairing, Days-Until und Dokumentation.
-- [ ] Bun-Version und Installationsweg verbindlich dokumentieren.
+- [x] Bun-Version und Installationsweg verbindlich dokumentieren.
 
 **Gate:** Ein Repository, ein Branch, reproduzierbare Installation, sauberer
 Status und ein eindeutiger Vergleich zu Upstream.
+
+Nachweis: WP-00/WP-01, `REPOSITORY_BASELINE.md` und `TOOLCHAIN_BASELINE.md`.
+Der Referenzcheckout und das äußere commitlose Git-Verzeichnis wurden bewusst
+nicht gelöscht; nur `inker` ist das verbindliche Code-Repository.
 
 ### Phase 1 – Architekturverträge und ADRs festschreiben
 
@@ -396,112 +415,142 @@ aktuelle Spike sonst über String-Felder und Sonderfälle weiter.
 
 - [x] Architecture Decision Records für SQLite/PostgreSQL-Grenze, Redis/BullMQ,
   Hub-Föderation, Publish-Modell und Geräte-Pairing erstellen.
-- [ ] Versionierte TypeScript-Verträge für DeviceProfile, DeviceCapabilities,
+- [x] Versionierte TypeScript-Verträge für DeviceProfile, DeviceCapabilities,
   PresentationManifest, InteractionEvent, Command und SourceSnapshot definieren.
-- [ ] Verträge in ein frameworkunabhängiges Paket beziehungsweise einen
+- [x] Verträge in ein frameworkunabhängiges Paket beziehungsweise einen
   gemeinsamen `contracts`-Bereich legen.
-- [ ] JSON Schema oder eine gleichwertige Laufzeitvalidierung für Netzwerkgrenzen
+- [x] JSON Schema oder eine gleichwertige Laufzeitvalidierung für Netzwerkgrenzen
   festlegen.
 - [ ] Frontend, Backend und spätere Firmware-Clients aus denselben Protokollschemas
   ableiten.
-- [ ] Kompatibilitätsregeln für `protocolVersion` dokumentieren.
-- [ ] Einen kleinen Contract-Test-Harness für gültige und ungültige Nachrichten
+- [x] Kompatibilitätsregeln für `protocolVersion` dokumentieren.
+- [x] Einen kleinen Contract-Test-Harness für gültige und ungültige Nachrichten
   anlegen.
 
 **Gate:** Die drei Zielgeräte lassen sich allein über Profile, Policies und
 Capabilities ausdrücken; kein Vertrag erwähnt ein konkretes Widget.
+
+Nachweis: WP-03/WP-04 und `contracts/README.md`; Backend und Browser verwenden
+`@inker/contracts` mit Laufzeitparsern und gemeinsamen Fixtures. Die noch offene
+Client-Ableitung betrifft die spätere Firmware: Die protokollseitigen
+Referenzabläufe sind geprüft, ein physischer Firmwareclient wird nicht behauptet.
 
 ### Phase 2 – Datenmodell und Migrationen stabilisieren
 
 **Warum:** Alle späteren Bereiche hängen an zuverlässiger Persistenz und
 reproduzierbaren Upgrades.
 
-- [ ] Das aktuelle Prisma-Schema in Profile, Geräte, Credentials, Publications,
+- [x] Das aktuelle Prisma-Schema in Profile, Geräte, Credentials, Publications,
   Outbox und Zustandsrevisionen überführen.
-- [ ] Doppelte Felder zwischen Device und `capabilities` entfernen oder als klaren
+- [x] Doppelte Felder zwischen Device und `capabilities` entfernen oder als klaren
   Override modellieren.
-- [ ] Freie Strings für bekannte Zustände durch geprüfte Enums/Constraints
+- [x] Freie Strings für bekannte Zustände durch geprüfte Enums/Constraints
   ersetzen.
-- [ ] Eine Baseline-Migration für bestehende Inker-Installationen erstellen.
-- [ ] Jede folgende Schemaänderung als versionierte Vorwärtsmigration anlegen.
-- [ ] Containerstart auf `prisma migrate deploy` umstellen und bei Fehlern hart
+- [x] Eine Baseline-Migration für bestehende Inker-Installationen erstellen.
+- [x] Jede folgende Schemaänderung als versionierte Vorwärtsmigration anlegen.
+- [x] Containerstart auf `prisma migrate deploy` umstellen und bei Fehlern hart
   abbrechen.
-- [ ] Backup-/Restore-Test inklusive bestehender SQLite-Daten erstellen.
-- [ ] SQLite WAL, Busy Timeout und kurze Transaktionen konfigurieren.
-- [ ] Eine dokumentierte PostgreSQL-Migrationsgrenze definieren, aber PostgreSQL
+- [x] Backup-/Restore-Test inklusive bestehender SQLite-Daten erstellen.
+- [x] SQLite WAL, Busy Timeout und kurze Transaktionen konfigurieren.
+- [x] Eine dokumentierte PostgreSQL-Migrationsgrenze definieren, aber PostgreSQL
   noch nicht erzwingen.
 
 **Gate:** Leere und bestehende Testdatenbanken migrieren reproduzierbar; ein
 fehlgeschlagenes Upgrade startet die Anwendung nicht.
+
+Nachweis: WP-05 bis WP-07 und die ergänzten Migrationstests der Folgepakete,
+einschließlich positivem und negativem Containerstart. Der vollständige
+Backup-/Restore-Lauf mit aktuellem Fachzustand, Instanzschlüssel und Rendercache
+ist durch WP-29 einschließlich echtem Vorgängerschema-Upgrade abgeschlossen.
 
 ### Phase 3 – Authentifizierung, Pairing und Secret-Grenzen
 
 **Warum:** Geräte und spätere Mail-/Remote-Server-Zugänge brauchen voneinander
 getrennte Vertrauensbereiche.
 
-- [ ] Die Admin-PIN durch eine echte Setup- und Session-Authentifizierung mit
+- [x] Die Admin-PIN durch eine echte Setup- und Session-Authentifizierung mit
   sicheren Cookies ersetzen.
-- [ ] Default-PIN und Default-Verschlüsselungsschlüssel beim Start verbieten.
+- [x] Default-PIN und Default-Verschlüsselungsschlüssel beim Start verbieten.
 - [ ] Instanzschlüssel außerhalb der SQLite-Datenbank erzeugen und rotierbar
   speichern.
-- [ ] PairingEnrollment mit zehnstelligem Code, TTL, Hash, Versuchszähler und
+- [x] PairingEnrollment mit zehnstelligem Code, TTL, Hash, Versuchszähler und
   atomarem Consume implementieren.
-- [ ] Pairing per Eingabe und QR-Code unterstützen.
-- [ ] Geräterecht auf Manifest lesen, Telemetrie senden und erlaubte Commands
+- [x] Pairing per Eingabe und QR-Code unterstützen.
+- [x] Geräterecht auf Manifest lesen, Telemetrie senden und erlaubte Commands
   beschränken.
-- [ ] Credential-Rotation, Widerruf und Verlust eines Geräts abbilden.
-- [ ] Den aktuellen Re-Pairing-Fehler des Web-Displays beheben.
-- [ ] Pairing-, Replay-, Rate-Limit- und Race-Condition-Tests erstellen.
+- [x] Credential-Rotation, Widerruf und Verlust eines Geräts abbilden.
+- [x] Den aktuellen Re-Pairing-Fehler des Web-Displays beheben.
+- [x] Pairing-, Replay-, Rate-Limit- und Race-Condition-Tests erstellen.
 
 **Gate:** An einem neuen Gerät müssen nur Basis-URL und kurzer Code eingegeben
 werden; danach kann das Credential einzeln widerrufen und sicher ersetzt werden.
+
+Nachweis: WP-08 bis WP-12, WP-14/WP-15 und die Aktionsautorisierung in WP-23.
+WP-11 wurde im Goal zusätzlich auf Redaction-Regressionsfälle nachgeprüft.
+Der Instanzschlüssel wird außerhalb SQLite sicher erzeugt und wiederverwendet;
+`keyId`/Version bereiten Rotation vor. Echte Multi-Key-Rotation und automatische
+Re-Encryption sind laut WP-11-Handoff nicht implementiert, deshalb bleibt dieses
+zusammengesetzte Teilziel offen. Das ist von der geprüften Rotation einzelner
+Geräte- und Admin-Credentials zu unterscheiden. ADR-009 bleibt offen; HTTPS ist
+der Standard, LAN-HTTP benötigt die explizite Freigabe und Warnung.
 
 ### Phase 4 – Geräteplattform und Transportadapter refaktorieren
 
 **Warum:** Pull, WebSocket und Interaktionen müssen austauschbare Delivery-Wege
 sein, nicht Sonderfälle in `DevicesService`.
 
-- [ ] DeviceDriver in Profile Resolver, TransportAdapter und DeliveryPolicy
+- [x] DeviceDriver in Profile Resolver, TransportAdapter und DeliveryPolicy
   aufteilen.
-- [ ] Adapter über NestJS-Provider registrieren statt die Registry bei jedem
+- [x] Adapter über NestJS-Provider registrieren statt die Registry bei jedem
   Gerätetyp manuell zu ändern.
-- [ ] TRMNL Pull und Web-Display WebSocket auf dieselben Manifest-/Statusverträge
+- [x] TRMNL Pull und Web-Display WebSocket auf dieselben Manifest-/Statusverträge
   umstellen.
-- [ ] WebSocket-Authentifizierung, Heartbeat, tote Verbindungserkennung,
+- [x] WebSocket-Authentifizierung, Heartbeat, tote Verbindungserkennung,
   Payload-Schemas und Nachrichtendrosselung ergänzen.
-- [ ] Telemetrie puffern/drosseln, statt jeden Ping als Datenbankschreibvorgang zu
+- [x] Telemetrie puffern/drosseln, statt jeden Ping als Datenbankschreibvorgang zu
   speichern.
-- [ ] Event-Verarbeitung mit Fehlerpfad, Deduplizierung und Korrelations-ID
+- [x] Event-Verarbeitung mit Fehlerpfad, Deduplizierung und Korrelations-ID
   versehen.
-- [ ] Eine Transaktions-Outbox für fachliche Änderungen einführen.
-- [ ] Outbox-Ereignisse über Redis an den zuständigen Delivery-Prozess verteilen.
-- [ ] Pull-Fallback für dauerhaft verbundene Geräte definieren.
-- [ ] Referenzabläufe für Batterie-TRMNL, Netz-TRMNL, ESP32 und Pi-Browser testen.
+- [x] Eine Transaktions-Outbox für fachliche Änderungen einführen.
+- [x] Outbox-Ereignisse über Redis an den zuständigen Delivery-Prozess verteilen.
+- [x] Pull-Fallback für dauerhaft verbundene Geräte definieren.
+- [x] Referenzabläufe für Batterie-TRMNL, Netz-TRMNL, ESP32 und Pi-Browser testen.
 
 **Gate:** Dieselbe Publication erreicht alle vier Betriebsvarianten, ohne dass
 Rendering oder Dashboardcode den Transporttyp kennen.
+
+Nachweis: WP-13 bis WP-16, WP-17/WP-19 sowie persistierte Correlation in WP-28.
+Die Referenzabläufe verwenden echte HTTP-/WebSocket-/Redis-Laufzeiten und
+Capability-Fixtures. Das belegt die Softwaregrenze, nicht physische ESP32-/Pi-/
+TRMNL-Hardware oder die minimal zuverlässigen Firmware-Refreshintervalle (ADR-008).
 
 ### Phase 5 – Publish, Presentation und Render-Cache
 
 **Warum:** Displays müssen schnell und deterministisch bedient werden, auch wenn
 Quellen oder Renderer gerade langsam sind.
 
-- [ ] Entwurf und unveränderliche Publication-Version trennen.
-- [ ] Presentation-Aufrufe read-only und idempotent machen.
-- [ ] Playlist-/Rotationszustand als eigene deterministische Zustandsmaschine
+- [x] Entwurf und unveränderliche Publication-Version trennen.
+- [x] Presentation-Aufrufe read-only und idempotent machen.
+- [x] Playlist-/Rotationszustand als eigene deterministische Zustandsmaschine
   implementieren.
-- [ ] Render-Key aus Publication, Profil, Snapshots und Renderer-Version bilden.
-- [ ] Gleichzeitige identische Render-Jobs deduplizieren.
-- [ ] Artefakte atomar speichern und erst nach Erfolg veröffentlichen.
-- [ ] `ETag`, `If-None-Match`, Hash, MIME-Type und Größenmetadaten ausliefern.
-- [ ] Letztes gültiges Artefakt während Fehlern weiter ausliefern.
-- [ ] E-Ink-sichere Mindestintervalle und Full-Refresh-Hinweise in DeliveryPolicy
+- [x] Render-Key aus Publication, Profil, Snapshots und Renderer-Version bilden.
+- [x] Gleichzeitige identische Render-Jobs deduplizieren.
+- [x] Artefakte atomar speichern und erst nach Erfolg veröffentlichen.
+- [x] `ETag`, `If-None-Match`, Hash, MIME-Type und Größenmetadaten ausliefern.
+- [x] Letztes gültiges Artefakt während Fehlern weiter ausliefern.
+- [x] E-Ink-sichere Mindestintervalle und Full-Refresh-Hinweise in DeliveryPolicy
   berücksichtigen.
-- [ ] Cache-Invalidierung ausschließlich durch relevante Versionsänderungen
+- [x] Cache-Invalidierung ausschließlich durch relevante Versionsänderungen
   auslösen.
 
 **Gate:** 20 gleichartige Displayanfragen lösen höchstens ein Rendering aus;
 unveränderte Pull-Geräte erhalten `304 Not Modified`.
+
+Nachweis: WP-14 und WP-17 bis WP-19 einschließlich 20 gleichzeitiger Render-
+Anforderungen, unabhängiger Prozesse, echter Artefaktbytes, Read-only-/304- und
+Crash-/Fallback-Tests. WP-21 ergänzt unveränderlich gebundene Source-Snapshots.
+WP-29 ergänzt den kombinierten Lastlauf mit 20 dauerhaften Displays. Die
+E-Ink-Policywerte bleiben ungemessene Hardwareannahmen.
 
 ### Phase 6 – Worker- und Source-Fundament
 
@@ -577,26 +626,27 @@ abonnieren und auch bei deren Ausfall die letzte gültige Version liefern.
 **Warum:** Architekturqualität wird erst unter Fehlern, Neustarts und Parallelität
 sichtbar.
 
-- [ ] Einen Lasttest mit 20 dauerhaften WebSocket-Displays erstellen.
-- [ ] Einen kombinierten Test mit Pull-, WebSocket- und Touch-Geräten erstellen.
-- [ ] Parallele langsame Source-Jobs während Displayabrufen simulieren.
-- [ ] Grenzwerte für API-Latenz, Queue-Alter, Renderdauer und Speicher festlegen.
+- [x] Einen Lasttest mit 20 dauerhaften WebSocket-Displays erstellen.
+- [x] Einen kombinierten Test mit Pull-, WebSocket- und Touch-Geräten erstellen.
+- [x] Parallele langsame Source-Jobs während Displayabrufen simulieren.
+- [x] Grenzwerte für API-Latenz, Queue-Alter, Renderdauer und Speicher festlegen.
 - [x] Metriken für Sources, Jobs, Render-Cache, WebSockets, Pairing und Gerätealter
   erfassen.
 - [x] Strukturierte Logs mit Request-, Job-, Device- und Correlation-ID ausgeben.
 - [x] Health-, Readiness- und Degraded-Status trennen.
-- [ ] Backup, Restore, Migration und Neustart mit aktiven Timern testen.
-- [ ] Sicherheitsprüfung für öffentliche Endpunkte und Secret-Redaction
+- [x] Backup, Restore, Migration und Neustart mit aktiven Timern testen.
+- [x] Sicherheitsprüfung für öffentliche Endpunkte und Secret-Redaction
   durchführen.
-- [ ] Docker-Deployment und Betriebsdokumentation aktualisieren.
+- [x] Docker-Deployment und Betriebsdokumentation aktualisieren.
 
 **Gate:** Alle Zielgeräte und 20 simulierte Displays bleiben während langsamer
 Sources und eines kontrollierten Worker-Neustarts nutzbar; keine Secrets erscheinen
 in Logs oder Geräteantworten.
 
 WP-28 belegt die drei Observability-Aufgaben (Paket-Handoff und
-`OBSERVABILITY_OPERATIONS.md`). Die kombinierte Last-, Fault- und Restore-Freigabe
-bleibt WP-29; Hardwareprüfungen sind weiterhin ausdrücklich offen.
+`OBSERVABILITY_OPERATIONS.md`). WP-29 belegt kombinierte Last, Faults, Security,
+Restore/Upgrade und Browserlauf im `FOUNDATION_ACCEPTANCE.md`. Hardwareprüfungen
+sind weiterhin ausdrücklich offen.
 
 ## 11. Teststrategie
 
@@ -647,17 +697,24 @@ Die Foundation ist abgeschlossen, wenn:
   Netzbetrieb zuverlässig unterstützt.
 - Entscheiden, ob internes LAN-HTTP zunächst erlaubt bleibt oder lokales HTTPS
   von Anfang an Pflicht ist.
-- Entscheiden, ob Remote-Server nur fertige Publications oder später auch
-  normalisierte Daten-Snapshots teilen dürfen. Für die erste Version werden nur
-  Publications empfohlen.
-- Vor dem ersten echten Connector festlegen, ob Drittanbietererweiterungen nur
-  deklarativ, in Subprozessen oder in Containern laufen dürfen.
+
+Für den aktuellen Foundation-Scope inzwischen entschieden: ADR-004 und WP-26/
+WP-27 begrenzen Remote-Freigaben auf unveränderliche Publications und Artefakte;
+ein späterer Austausch normalisierter Source-Daten bleibt außerhalb des Scopes.
+ADR-010 ist seit WP-22 akzeptiert und legt QuickJS-WASM in frischen Kindprozessen
+fest. Native oder frei vernetzte Erweiterungen benötigen eine weitere
+Entscheidung; eine vollständige OS-Sandbox ist damit nicht zugesagt.
 
 ## 14. Empfohlener nächster Arbeitsschritt
 
-Nicht gleichzeitig an Widgets, Sources und Geräten weiterbauen. Als Nächstes nur
-Phase 0 und anschließend Phase 1 durchführen. Das konkrete erste Ergebnis soll ein
-sauberes Repository mit gesichertem Spike sowie ein kleines versioniertes
-`contracts`-Paket sein, das die drei vorhandenen Geräte und ein minimales
-PresentationManifest ausdrückt. Erst danach sollte das Prisma-Schema erneut
-geändert werden.
+WP-00 bis WP-29 sind abgenommen; die ursprüngliche Empfehlung, zuerst Repository,
+Verträge und belastbare Betriebsgrenzen aufzubauen, ist erledigt. Als Nächstes
+folgt ein separat priorisierter Produkt-/Widget-Backlog. Zusätzliche Widgets,
+produktive Connectoren und Firmware waren nicht Teil der Foundation und benötigen
+eigene Pakete und Abnahmegates.
+
+Die Software-Foundation ist gemäß `FOUNDATION_ACCEPTANCE.md` freigegeben. Offene
+Hardwareprüfungen und die oben benannten Restgrenzen bleiben sichtbar. Vor
+Firmware- oder Hardwareaussagen sind insbesondere ESP32-S3, Raspberry-Pi/Kiosk,
+TRMNL-BYOD-Refresh, Energie und Displaylebensdauer physisch zu prüfen. Merge und
+Deployment bleiben separate Entscheidungen.

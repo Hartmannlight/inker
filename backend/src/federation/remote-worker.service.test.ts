@@ -45,7 +45,7 @@ function setup() {
     eventId: 'remote-event-one', eventType: REMOTE_SYNC, aggregateType: 'RemoteSubscription', aggregateId: 'subscription-one',
     aggregateRevision: '1', payloadVersion: 1, payload: { subscriptionId: 'subscription-one', subscriptionVersion: 1, scheduledAt: now.getTime() },
     attempts: 1, status: 'processing', claimToken: 'claim-one', claimOwner: 'worker-one', claimUntil: new Date(now.getTime() + 30_000),
-    createdAt: now, availableAt: now, occurredAt: now, lastAttemptAt: now, processedAt: null, lastError: null,
+    createdAt: now, availableAt: now, occurredAt: now, lastAttemptAt: now, processedAt: null, lastError: null, correlationId: null,
   } as OutboxEvent;
   const job = {
     eventId: event.eventId, subscriptionId: subscription.subscriptionId, subscriptionVersion: 1,
@@ -68,7 +68,7 @@ function setup() {
     $transaction: async (operation: (value: unknown) => Promise<unknown>) => operation(tx),
   };
   const current = mock(async (_event: unknown): Promise<OutboxEvent | null> => event);
-  const claim = mock(async (_owner: string, _now: Date, _filter: unknown, _budget: unknown) => event);
+  const claim = mock(async (_owner: string, _now: Date, _filter: unknown, _budget: unknown, _leaseNow?: Date) => event);
   const importer = {
     persist: mock(async (_tx: unknown, _subscription: unknown, _feed: unknown, _artifacts: Buffer[]) => ({ publicationRevisionId: 'local-revision-one', revision: 1 })),
     verifyCached: mock(async (_subscription: unknown) => {}),
@@ -120,14 +120,19 @@ describe('RemoteWorkerService', () => {
   });
 
   test('claim budgets cover two jobs globally and one per remote/subscription', async () => {
-    const h = setup(), now = new Date();
+    const h = setup(), now = new Date(), before = Date.now();
     expect(await h.worker.claim('owner', now)).toBe(h.event);
+    const after = Date.now();
     expect(h.claim).toHaveBeenCalledWith('owner', now, { eventId: h.event.eventId }, {
       where: { eventType: REMOTE_SYNC }, limit: 2, additional: [
         { where: { eventType: REMOTE_SYNC, remoteSync: { remoteServerId: 'remote-one' } }, limit: 1 },
         { where: { eventType: REMOTE_SYNC, aggregateId: 'subscription-one' }, limit: 1 },
       ],
-    });
+    }, expect.any(Date));
+    const leaseNow = h.claim.mock.calls[0][4] as Date;
+    expect(leaseNow.getTime()).toBeGreaterThanOrEqual(before);
+    expect(leaseNow.getTime()).toBeLessThanOrEqual(after);
+    expect(leaseNow).not.toBe(now);
   });
 
   test('obsolete, disabled, completed and stale claims cannot decrypt or fetch', async () => {

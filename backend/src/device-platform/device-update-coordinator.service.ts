@@ -14,6 +14,11 @@ import { TransportAdapterRegistry } from './transport-adapter.registry';
 import { outboxCorrelation } from '../events/outbox-correlation';
 import { createCorrelationContext, currentCorrelation, runWithCorrelation } from '../observability/correlation-context';
 import { emitStructuredEvent } from '../observability/runtime-observability';
+import { sqliteWrite } from '../sources/source-writes';
+
+class ConsumerLeaseRenewalError extends Error {
+  constructor(readonly failure: unknown) { super('OUTBOX_CONSUMER_LEASE_RENEWAL_FAILED'); }
+}
 
 @Injectable()
 export class DeviceUpdateCoordinator {
@@ -37,10 +42,8 @@ export class DeviceUpdateCoordinator {
   ) {}
 
   async start() {
-    await this.store.register(this.consumerId);
+    await this.registerLease();
     this.active = true;
-    this.leaseUntil = Date.now() + POLICY.consumerLeaseMs;
-    this.renewAt = Date.now() + 5000;
     this.timer = setInterval(() => this.wake(), POLICY.pollMs);
     this.timer.unref?.();
   }
@@ -52,7 +55,7 @@ export class DeviceUpdateCoordinator {
     this.expireConnections();
     for (const abort of this.aborts) abort.abort();
     await this.running;
-    await this.store.unregister(this.consumerId);
+    await sqliteWrite(this.prisma, () => this.store.unregister(this.consumerId));
   }
 
   wake() {
@@ -76,25 +79,39 @@ export class DeviceUpdateCoordinator {
       adapter.deliveryLeaseExpired?.();
   }
 
+  private async renewLeaseIfDue() {
+    if (Date.now() < this.renewAt) return;
+    await this.registerLease();
+  }
+
+  private async registerLease() {
+    let registeredAt = new Date(Date.now());
+    await sqliteWrite(this.prisma, () => {
+      registeredAt = new Date(Date.now());
+      return this.store.register(this.consumerId, registeredAt);
+    });
+    const persistedUntil = registeredAt.getTime() + POLICY.consumerLeaseMs;
+    if (Date.now() >= persistedUntil) throw new Error('OUTBOX_CONSUMER_LEASE_EXPIRED');
+    this.leaseUntil = persistedUntil;
+    this.renewAt = registeredAt.getTime() + 5000;
+  }
+
   async poll() {
     if (Date.now() >= this.leaseUntil) this.expireConnections();
-    if (Date.now() >= this.renewAt) {
-      await this.store.register(this.consumerId);
-      this.leaseUntil = Date.now() + POLICY.consumerLeaseMs;
-      this.renewAt = Date.now() + 5000;
-    }
+    await this.renewLeaseIfDue();
     for (const target of await this.store.pendingTargets(this.consumerId)) {
       if (!this.active) break;
+      await this.renewLeaseIfDue();
       const event = await this.prisma.outboxEvent.findUnique({
         where: { eventId: target.effect.eventId },
       });
       if (!event) continue;
       await runWithCorrelation(outboxCorrelation(event), async () => {
-        if (!(await this.store.beginTarget(
+        if (!(await sqliteWrite(this.prisma, () => this.store.beginTarget(
             target.effectKey,
             this.consumerId,
             event,
-          ))) return;
+          )))) return;
         const abort = new AbortController();
         this.aborts.add(abort);
         const timer = setTimeout(
@@ -105,6 +122,8 @@ export class DeviceUpdateCoordinator {
           const parsed = parseOutboxEvent(event);
           for (const delivery of target.effect.deliveries) {
             abort.signal.throwIfAborted();
+            try { await this.renewLeaseIfDue(); }
+            catch (error) { throw new ConsumerLeaseRenewalError(error); }
             await this.refreshDevices([delivery.deviceId], {
               ...outboxCorrelation(event),
               deliveryId: delivery.deliveryId,
@@ -113,23 +132,26 @@ export class DeviceUpdateCoordinator {
             });
           }
           abort.signal.throwIfAborted();
+          try { await this.renewLeaseIfDue(); }
+          catch (error) { throw new ConsumerLeaseRenewalError(error); }
           if (
-            await this.store.finishTarget(
+            await sqliteWrite(this.prisma, () => this.store.finishTarget(
               target.effectKey,
               this.consumerId,
               event,
               true,
-            )
+            ))
           ) {
             if (parsed.notification) this.events.emit(parsed.notification);
           }
-        } catch {
-          await this.store.finishTarget(
+        } catch (error) {
+          if (error instanceof ConsumerLeaseRenewalError) throw error.failure;
+          await sqliteWrite(this.prisma, () => this.store.finishTarget(
             target.effectKey,
             this.consumerId,
             event,
             false,
-          );
+          ));
           emitStructuredEvent('DEVICE_DELIVERY_FAILED', { role: 'api', outcome: abort.signal.aborted ? 'aborted' : 'failure' });
         } finally {
           clearTimeout(timer);

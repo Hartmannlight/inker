@@ -1,8 +1,37 @@
 # Foundation-Goal – Fortsetzungsstand
 
-Stand: 2026-08-28. Verbindlicher Auftrag: WP-00 bis WP-29 und Abschnitt 12 des
+Stand: 2026-08-29. Verbindlicher Auftrag: WP-00 bis WP-29 und Abschnitt 12 des
 Architekturplans vollständig verifizieren. Paketweise fortsetzen, lokale Commits
-nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweisen.
+nach Abnahme; Push nur mit ausdrücklicher Freigabe, kein Merge oder Deployment.
+Hardwaremessungen offen ausweisen.
+
+## Abschlussstand (maßgeblich)
+
+- WP-00 bis WP-29 und die Softwarekriterien aus Architekturabschnitt 12 sind am
+  2026-08-29 abgenommen. Physische Hardwareprüfungen bleiben offen.
+- Frischer finaler Linuxlauf: **43/43 Gates bestanden**, Container
+  `inker-wp29-ci-release-hostnet`, Beleg
+  `.tmp/goal-wp29-linux-ci-release-hostnet.log`. Kandidat
+  `sha256:9b57638e189b3d9f5c34f1ba51775aa341c189dab04d2a76e3e7498ee81117b6`,
+  Harness
+  `sha256:9dcec5a7ab8f0b477819457fc55a60f185da3bf75e2af5f155e4a2d7f41f4424`.
+- Lastlauf `384725cad864707c`: 20 dauerhafte Browser-WebSockets plus Touch,
+  Batterie-/Fast-Pull und zwei Remotes; Display-p95 höchstens 55,6 ms, Maximum
+  150,0 ms; Queue-Alter höchstens 4,94 s; Speicherpeak 468.885.504 B. Drei
+  Worker-Recoveries höchstens 4,57 s, Redis 3,69 s; Renderdeduplizierung und
+  Slow-Source-/Render-Überlappung belegt, Cleanup bestanden.
+- Vollständiger gestoppter Dreivolumen-Backup-/Restore-/Vorgängerupgrade-Test
+  bestanden. Offline-Import sichert und restauriert die echten Vorgängertrigger;
+  Korrelations-IDs, Timer, Outbox, Publications, Sources, Sessions und Credentials
+  bleiben erhalten. Fehlender Instanzschlüssel wird fail-closed abgewiesen.
+- Browserprüfung gegen denselben Digest: Login, Operations ohne Consolefehler,
+  Event-Progress-Katalog und gekoppeltes Display mit vollständig geladenem
+  1920×1080-Artefakt. Eigene Tabs, Container, Volumes und Fixturezustände entfernt.
+- F29-01 bis F29-05 und F28-01 geschlossen. Nicht blockierend verbleiben der
+  dokumentierte Publication-Cleanup-Scan-Folgeschritt sowie HOST-01/HOST-02.
+  Kein offener P0/P1; alle P2 besitzen einen Folgeschritt.
+- Der Nutzer hat den Push des abgenommenen Branches an Hartmannlight ausdrücklich
+  freigegeben. Merge und Deployment bleiben außerhalb des Auftrags.
 
 ## Ausgangsstand
 
@@ -21,6 +50,113 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 
 ## Aktuell
 
+- Sechster vollständiger Linuxlauf BEENDET (Exit 1): Root-Execsession **38148**, eigener
+  Container `inker-wp29-ci-b53e61bf8a3344d0a0bca37938bdcd06`, Log
+  `.tmp/goal-wp29-linux-ci-security-full.log`, State-Metadaten daneben. Frischer
+  gehärteter Harness
+  `sha256:015fc1d9c3ac52238afacedbd0a0b098b004779010cf2696f17d2abee10e7aa1`
+  wurde mit Exit 0 gebaut; Buildbeleg
+  `.tmp/goal-wp29-linux-ci-build-security.log`. Alle 43 Gates laufen neu ab
+  Prepare. Sämtliche statischen Gates, alle 19 Integrationssuiten, Worker-
+  Startup, WebSocket- und Föderations-Container-Smoke sind grün. Der nachfolgende
+  Remote-Dreiserver-Smoke scheiterte nach 90,3 s; Operations, Last und Restore
+  wurden nicht erreicht. Exakter Kandidat
+  `sha256:ed23a79c5d9cd9ad07545b9b69da0bbd82223352281741f1b9446312cc1bf45c`.
+  Isolierte Rohdiagnose auf genau diesem Image läuft; keine Abnahme und keine
+  Fixbehauptung vor reproduzierter Ursache.
+- Isolierter Remote-Dreiserver-Smoke auf demselben Image anschließend Exit 0 in
+  155,2 s: Restart-Recovery 29,3 s, Conditional-304 A=2/B=3, Secretaudit und
+  Cleanup grün (`.tmp/goal-wp29-remote-container-diagnostic.log`). Der frühere
+  90-s-Fehler bleibt nicht reproduziert; kein Fix wird erfunden.
+- Der erstmals erreichte gezielte Operations-Smoke reproduzierte dagegen F28-01:
+  Exit 1 in Stage `worker restart, persisted correlation and actual WebSocket
+  send`; `/api/operations` HTTP 500 nach 5009 ms, gleichzeitig feste Codes
+  `OUTBOX_POLL_FAILED`/`JOB_FAILED`, eigener Cleanup vollständig. Der Admin-Guard
+  schrieb bisher bei jeder authentifizierten Diagnoseabfrage synchron
+  `lastSeenAt`. Als engste belastbare Ursache wird diese 5-s-SQLite-Writekollision
+  behandelt: gewöhnliche Session-Touches sind nun mit atomarem `lastSeenAt`-
+  Fence auf 60 s gedrosselt, Rotation/Idle-/Absolute-TTL unverändert. Unit 5/18
+  grün; vollständiger Operations-Logaudit statt `--tail 10000`. Neues Produkt-
+  Testimage `sha256:2e015acf0c925138f06a46f6e382a82dc404fae2e59490a4b6441d547ac24064`;
+  drei echte Recovery-Wiederholungen stehen vor dem nächsten Gesamtlauf an.
+- Fünfter vollständiger Linuxlauf KONTROLLIERT ABGEBROCHEN: Root-Execsession **60584**, eigener
+  Container `inker-wp29-ci-3bfd82ad1f7e460b990889a8081ada69`, Log
+  `.tmp/goal-wp29-linux-ci-retry-full.log`, State-Metadaten daneben. Harness
+  unverändert `sha256:6a035956cda8a96a8dd515f9d9c2159668b547703416d56e66ec2ca98f1c1fde`;
+  Prepare, statische Gates und die bis zum Abbruch beendeten Integrationen waren
+  grün. Abbruchgrund war ein unabhängiges Reviewfinding vor dem noch nicht
+  erreichten Restoregate, nicht ein Testfehler: der Missing-Secret-Negativtest
+  akzeptierte jeden Exit != 0 und der Audit las nur die letzten 10.000 Logzeilen.
+  Der eigene Container wurde nach Labelprüfung gestoppt; keine Resultate dieses
+  unvollständigen Laufs werden als Endabnahme gewertet.
+- Reviewhardening umgesetzt: Missing-Secret akzeptiert ausschließlich Exit 1 mit
+  der exakten festen Refusal-Ursache und ohne erzeugten Schlüssel; der Restore-
+  Audit liest den vollständigen, auf 16 MiB begrenzten Logstrom fail-closed.
+  Der CI-Runner verwendet eine Toolchain-/Proxy-Allowlist statt der gesamten
+  Hostumgebung. Die drei Third-Party-Actions sind auf die am 2026-08-29 aus den
+  offiziellen Repositories aufgelösten v4/v4/v2-Commit-SHAs gepinnt. Gezielte
+  Fixturetests 7/7, Runner-Sicherheitstests 10/74, Syntax und Diffcheck grün.
+  Frischer Harnessbuild und vollständiger sechster Lauf folgen. Keine Freigabe
+  vor Exit 0, Last-/Restore-Nachweisen, Browserprüfung und Cleanup.
+- Vierter vollständiger Linuxlauf BEENDET (Exit 1): eigener Container
+  `inker-wp29-ci-73e40e0ea5764c6a937a5101011bf3d1`, Log
+  `.tmp/goal-wp29-linux-ci-final-full.log` und sichere `-state.json`-Metadaten.
+  Sämtliche statischen Gates, alle 19 Integrationssuiten, Worker-Startup und der
+  161-sekündige WebSocket-Container-Smoke sind grün. Der anschließende
+  Föderations-Container-Smoke meldete nach 20,7 s nur den begrenzten Gatefehler;
+  Last und Restore wurden deshalb nicht erreicht. Keine Abnahme.
+- Exakter isolierter Wiederholungslauf des vollständigen Föderations-Smokes auf
+  demselben unveränderlichen Produktionskandidaten
+  `sha256:c783190a1849a7542d5936ac2fad3306cce315699c8db74cc67eb3fbf8d5b8a1`
+  ist Exit 0: CA, HTTP-Spoof-Denial, Scope/Expiry/Revocation, ETags/Hashes,
+  Read-only, Retention, Restart-Identität, Secretaudit und Cleanup bestanden.
+  Beleg `.tmp/goal-wp29-federation-container-diagnostic.log`. Der CI-Fehler ist
+  nicht reproduziert; keine Ursache oder Behebung wird behauptet.
+- Ein fünfter vollständiger 43-Gate-Lauf wird mit neuer Evidenzkennung von Prepare
+  an wiederholt. Eine Freigabe wird erst nach vollständigem Exit 0, Lastreport,
+  Restore und anschließender Browserprüfung dokumentiert. Unabhängiges Read-only-
+  Review aller WP-29-Produktänderungen findet keine neuen konkreten P0/P1/P2;
+  kein Review ersetzt die Runtimegates.
+- F29-05 gezielt korrigiert: budgetierte Source-Claims nutzen nun die bestehende
+  `sourceWrite`-Serialisierung/Retry je Prisma-Client; SQL-Budgets und der zwölf-
+  parallele Konkurrenztest bleiben unverändert. Acht WP-28-Korrelationsassertionen
+  erwarten jetzt persistierte UUID plus Event-ID. Linux-Source-Suite **36/585**,
+  Konkurrenzfall 3,00 s, Produkt-/Test-Typecheck und Lint grün. Kein Commit.
+- Dritter vollständiger Linuxlauf BEENDET (Exit 1): frühere Root-Execsession **63267**, eigener
+  Container `inker-wp29-ci-7e01ad68a6e34db185ec2a2f02212902`, Log
+  `.tmp/goal-wp29-linux-ci-reviewed-full.log`, sichere Metadaten daneben mit
+  Suffix `-state.json`. Frischer Harnessbuild Exit 0 in
+  `goal-wp29-linux-ci-build-reviewed.log`. Alle 43 Gates unverändert erforderlich;
+  kein Gesamtabschluss bis bestätigtem Exit und anschließender Browserprüfung.
+  Alle Agentdateien sind eingefroren; für die laufende Source-Diagnose besitzt
+  ausschließlich `isolation_review` das Dockerfenster.
+  Statische Gates jetzt vollständig grün: Contracts **95/2244**, Backend
+  **1134/6923**, alle Types und Builds, Frontendtests jeweils Exit 0.
+  Neuer unveränderlicher Produktionskandidat:
+  `sha256:c8eea25d5ed80bb1aa49842c3e473c78d547e42fec5bb6378dc89bdde8455784`.
+  15 Integrationsdateien einschließlich der korrigierten Render-Cache-Suite sind
+  grün. `sources.integration.ts` stoppte danach mit **27 pass / 9 fail / 510
+  Assertions**. Last, Restore und Browser wurden nicht erreicht. Der Fehlerlauf
+  bleibt unter `goal-wp29-linux-ci-reviewed-full.log` erhalten; eigener Container
+  bleibt gestoppt. `isolation_review` reproduziert die Suite im frischen Linux-
+  Harness mit Rohdiagnostik, ohne Produkt- oder Gateänderung. Keine Abnahme.
+- Render-IPC-Korrektur gezielt Linux **12/283** grün, Assertionen unverändert.
+  Die Lastfixture übernimmt nun Rollen-Cookiejar (auch expliziter Cookie beim
+  CSRF-Negativtest), striktes Startup-Loggate, getrennte initiale Timerfeed-Belege
+  auf fünf Reconnects und reguläre Acknowledgements erst nach 21 WS-Completion-
+  Beobachtungen. Keine Quota/Timeouts erhöht. Fixturetests Node/Bun **14/14**,
+  Syntax/ESLint grün; konkrete Bun-`node:test.mock`-Inkompatibilität wurde im
+  Test durch lokal injizierte Stubs gelöst, nicht durch Testausschluss.
+- Vorheriger WP-29-Lauf: `.tmp/goal-wp29-linux-ci-clean-full.log` beendet mit Exit 1.
+  Frischer Linux-Harness ohne Vorinstallation; Prepare, sämtliche statischen Gates,
+  Produktionsbuild und die ersten 14 Integrationsdateien sind grün. Die nächste
+  Suite `render-cache.integration.ts` meldet 10 bestanden / 2 fehlgeschlagen / 274
+  Assertions. Kein Gesamtabschluss, keine Laufzeitprüfung übersprungen.
+  `isolation_review` reproduziert diese Suite isoliert; Root integriert die Ursache.
+  Der eigene CI-Container `inker-wp29-ci-764985a978e24ff8914695acd524cb66` bleibt
+  gestoppt erhalten. Session 57407 ist beendet. Last/Restore/Browser noch offen.
+  Neues CI-Produktionsimage:
+  `sha256:fd67742c709053cf5d2f37981af9402d2ca8813d30824e19a27faf6dbff9a605`.
 - WP-00 bis WP-28 abgenommen. WP-11/WP-14 wurden mit ihren Handoffs abgeglichen;
   keine erneute Implementierung. Hardwareprüfungen bleiben ausdrücklich offen.
 - Branch `codex/device-platform-spike`. WP-27 ist separat in `456a343` committed,
@@ -46,18 +182,215 @@ nach Abnahme; kein Push, Merge oder Deployment. Hardwaremessungen offen ausweise
 - Windows-Bun-TLS ist ein bekannter Host-Toolchain-P2; Linux-Produktion geprüft.
   WP-29 dokumentiert Folgeschritte, Hardwaregrenzen und Abschnitt-9-Abgleich.
 - WP-28-Abschluss, Betriebsdokumentation und Architekturstatus sind aktualisiert.
-  Lokaler WP-28-Commit folgt. Testbelege unter `.tmp/goal-wp28-*.log`, die Datei
+  WP-28 lokal in `99f7747` committed; Arbeitsbaum danach sauber. Testbelege unter
+  `.tmp/goal-wp28-*.log`, die Datei
   `goal-wp28-container-final.log` ist ein alter FEHLERlauf, kein Abnahmebeleg.
 
 ## Nächste Schritte
 
-1. Verifizierten WP-28-Stand ohne Secrets/ignorierte Artefakte lokal committen.
-2. WP-29: vollständige Anforderungen, Architekturabschnitt 12 und Abschnitt 9
-   abgleichen; kombinierte Last-/Fault-/Security-/Migration-/Restore-Prüfung.
+1. WP-27 (`456a343`) und WP-28 (`99f7747`) sind getrennt lokal committed.
+2. WP-29 läuft: Anforderungen, Architekturabschnitt 12 und Abschnitt 9 gelesen;
+   kombinierte Last-/Fault-/Security-/Migration-/Restore-Prüfung in Vorbereitung.
 3. Mindestens 20 dauerhafte WS-Displays gemeinsam mit Batterie-/Fast-Pull,
    Touch, langsamen/fehlerhaften Sources und Renderlast tatsächlich betreiben.
 4. Nachweise, Grenzwerte, P0/P1/P2 und Betriebs-/Release-Checkliste versionieren.
    Keine Foundation-Freigabe vor erfüllten Gates; physische Hardware offen lassen.
+
+### WP-29 laufend (2026-08-29, nicht abgenommen)
+
+- Root besitzt `backend/test/foundation-load.cjs` und
+  `fixtures/foundation-load-runtime.cjs`: 20 Browser-WS + Touch-WS + Batterie-/
+  Fast-Pull, vier Slow-/Failure-Sources, drei Renderprofile und zwei TLS-Remotes.
+  Wiederverwendung der WP-27-TLS-Fixture: `remote-container-fixture.cjs` ist nun
+  ohne Seiteneffekt importierbar; ursprünglicher CLI-Smoke unverändert aufrufbar.
+  Fixture-Sicherheitstests 3/3, Syntax und Metrikhelper-Smoke grün.
+- Erster Entwicklungslauf auf dem bereits geprüften WP-28-Image gestartet;
+  `.tmp/goal-wp29-load-development.log`. Dies ist noch KEIN WP-29-Nachweis und
+  muss nach den gezielten Korrekturen auf dem finalen Produktionsimage wiederholt
+  werden. Ausschließlich eigene WP-27-TLS-Ressourcen mit zufälliger Run-ID.
+- Subagent `source_contract`: ausschließlich neue Backup-/Restorefixture und
+  zugehörige Runtime sowie `DATABASE_BACKUP.md`; eigene Ports 18741–18743,
+  Label `inker.wp29.backup`, vollständiger Dreivolumensatz, tatsächlicher Appstart.
+- Subagent `isolation_review`: CI, vollständiger dynamischer Integrationsrunner,
+  Runnerprüfungen und minimale Imageparametrisierung der alten Redisfixture.
+  Aktuell 19 `.integration.ts`-Dateien; kein stilles Auslassen mehr zulässig.
+- Subagent `wp19_renderer`: §9-Audit fand echte offene DaysUntil-Duplikation
+  und unbeschränkte Tagesiteration im synchronen Renderpfad. Gemeinsamer
+  Contracts-Kern mit begrenzter Arithmetik und Paritäts-/Grenztests in Arbeit;
+  dünne Frontend-/Backend-Reexports. Explizite §9/§12-Korrektur, kein neues Widget.
+- Docker-Lastläufe werden serialisiert; keine parallelen Messungen mit Builds
+  oder anderen Agenten. Grenzwerte und Prüfmatrix in `FOUNDATION_ACCEPTANCE.md`.
+
+### WP-29 Abschlussprüfung – aktueller Fortsetzungspunkt
+
+- DaysUntil-Kern implementiert: Contracts 91/1948, Backend-Brücke 7/12,
+  Frontend 122; Builds/Types/gezieltes Lint und DST-Prüfungen grün. Kein neues Widget.
+  Finales Produktionsimage `sha256:78da2522121ffd5175ffc8ec7af0ac067575e50ce94b32c1c4e79f882a9f795b`,
+  Build Exit 0 in `.tmp/goal-wp29-build-final.log`. Browserregression noch offen.
+- Vollständiger Test-Typecheck korrigiert ohne Ausschlüsse: zehn bestehende
+  Testdateien an die tatsächlichen Typen angepasst, 170/537 grün; alle Testtypen
+  Exit 0 (`goal-wp29-test-typecheck-final.log`). InteractionService erhält nur
+  einen expliziten `AllowedAction[]`-Typ für die bereits leere Liste.
+- CI-Runner mit 43 Gates, darunter alle 19 Integrationen und sieben Docker-Gates;
+  Runner-Units 9/61. Lokaler Linux-Harness wird gebaut (Node 22.22.3/Bun 1.3.14),
+  `.tmp/goal-wp29-linux-ci-build.log`. Dieser Build ist noch kein vollständiger CI-Lauf.
+- Lastfixture respektiert echtes Pairing-Limit (erster Entwicklungslauf daran
+  abgebrochen, eigene Ressourcen entfernt). Reviewkorrekturen: Live-Sockets nie
+  in JSON-State, nachgewiesener einmaliger Artefaktwechsel statt generischem Retry,
+  Touch-/Publish-Barriere, WS-ausgelöste Timerfeed-Abrufe, tatsächliche Ausführungs-
+  überlappung anhand Worker-Logs, alle sechs Queues, alle App-Zeilenschreibzähler,
+  cgroup `memory.peak`. Neue Fixture-Units 3/3 und ESLint grün; Laufzeit noch offen.
+- Backup/Restore: Hashes, kompletter Dreivolumensatz, Schlüssel und Dateirechte
+  geprüft; Start des restaurierten Datensatzes schlägt mit `API_START_FAILED`
+  fehl. Init/Migration/Seed sind vorher erfolgreich; frische Instanz desselben
+  Images am selben Port funktioniert. Konkrete Throw-Ursache noch unbekannt,
+  kein Fix behauptet. Alle Fehlversuche besitzen erfolgreichen eigenen Cleanup.
+  Diagnoseprotokoll `.tmp/goal-wp29-backup-final.log`; Agent `source_contract`
+  besitzt Fixture/Runtime/Backup-Doku und bereitet nur ephemere Catchdiagnose vor.
+- Docker-Host: Engine 28.5.1, Linux/WSL2 6.6.87.2, zehn CPUs und 27315093504 Bytes
+  Docker-VM-RAM. Home-Lastlimit bleibt zwei CPUs/1536 MiB. Keine Hardwarefreigabe.
+- Release-/Reproduktionscheckliste: `docs/operations/FOUNDATION_RELEASE.md`.
+  Architektur-Checkboxabgleich durch `wp19_renderer`; Root besitzt diesen
+  Fortschrittsstand, WORK_PACKAGES und FOUNDATION_ACCEPTANCE. Kein WP-29-Commit.
+
+Aktualisierung vor nächster Integration:
+
+- Contracts jetzt **93/1950**, Typecheck grün. Zwei zusätzliche echte Node-TZ-
+  Prozesse prüfen São Paulo/Apia. Die dokumentierte zivile Datumssemantik
+  korrigiert dort historische DST-/Datumssprungfehler bewusst. Produktionscode
+  seit Image `78da...` unverändert; nur Tests und Dokumentation ergänzt.
+- Linux-Harnessbuild beendet mit Exit 0. Hostnetwork-Probe scheitert, aber eng
+  begrenzte TCP-Relay-Nonce-Probe besteht. `.tmp/wp29-linux-ci-relay.cjs` hält
+  elf feste Loopback-Ports, max. 1024 Sockets, 5-s-Connectdeadline und unveränderte
+  Protokollbytes. Fünf TCP-/Half-Close-/Backpressuretests grün, keine Skips.
+  Wrapper-/Startplan `.tmp/wp29-ci-relay-alternative.md`. Finalen Harness wegen
+  nachträglicher Teständerungen erneut bauen; bisher kein vollständiger CI-Lauf.
+- Restore-F29-03 genauer: Vorstartdiagnose2 (`goal-wp29-backup-prestart-probe2.log`)
+  erfasste **dreimal P1008 / PrismaClientKnownRequestError**, danach Ready.
+  Bisherige Diagnosezustände wurden entfernt; kein Fix behauptet. Agent
+  `source_contract` erstellt den dritten/letzten ursprünglichen Diagnoseversuch
+  mit erlaubter Prisma-Model-/Action-/Pragma-Projektion und behält jeden Fehler-
+  zustand für direkte Integration. Root besitzt Produktionsfix/abschließende Tests.
+- Root-Lastfixture zusätzlich: WS-Timerinvalidierung löst tatsächlichen Feed-
+  Abruf aus, alle 21 WS müssen den abgeschlossenen Timer dadurch sehen; reine
+  spätere Pullchecks reichen nicht. Ein bewiesener Manifestwechsel erlaubt
+  genau einen Artefakt-Neuabruf, dessen gesamte Laufzeit mitgemessen wird.
+  Keine pauschale 404-Toleranz. Live-Socketfehler sicher im Bericht projiziert.
+- Browser neu verbunden und vollständige Anleitung gelesen. Persistente
+  Bindungen `agent`/`browser` verfügbar, noch keine Tabs/Navigation. Später nur
+  eigene Operationsfixture auf 18731 für echte DaysUntil-/Admin-/Displayprüfung.
+
+Fortsetzung nach drittem Diagnoseversuch:
+
+- Eigene Source-Instanz und State `.tmp/wp29-backup-fixture-state.json` bleiben
+  erhalten (nicht ausgeben: Zugangsdaten). Kein neuer Seed. Erster `timer.create`
+  scheiterte HTTP 400 an `$.deviceId`: vorhandene 16-stellige Base64url-ID beginnt
+  mit `_`; der Vertrag verlangte bisher erstes Zeichen alphanumerisch. Keine
+  Timer/Receipts angelegt, Publicationrevision 1; Pending-Publish nicht erreicht.
+  F29-04 ist unabhängig von F29-03, kein beobachteter Publish-503-Fehler.
+- Root korrigiert ausschließlich Geräte-ID-Validierung in Interaction/Timer mit
+  gemeinsamem `contracts/src/device-identifier.ts`: vollständiges Base64url-
+  Alphabet plus bestehende Legacy-IDs, 1–128 Zeichen. Sonstige Kennungen bleiben
+  unverändert. Deterministische Erzeugung aller 256 ersten Bytewerte und Timer-
+  Creator/Acknowledgement geprüft: gesamte Contracts **95/2244**, Types/Build Exit 0.
+  Backend-Distkopie aktualisiert und tatsächlich geladener Parser geprüft.
+- Agent `isolation_review` ergänzt nur `backend/test/timers.integration.ts` um
+  authentifizierte Create/Completion/Ack-Regressionsfälle für beide Präfixe.
+  Agent `wp19_renderer` prüft den Vertragsfix lesend. Agent `source_contract`
+  behält Dockerfenster und instrumentiert denselben Source-Start, ohne IDänderung
+  oder Neuseed, für konkrete Prisma-Operationen. Root besitzt Produktionsfixes.
+- Image `78da...` und bestehender Linux-Harness enthalten diesen neuen Fix noch
+  nicht; nach Diagnose/Fix und Testfreeze erneut bauen. WP-29 weiter offen.
+
+- Geräte-ID-Fix zusätzlich real geprüft: gesamte Timer-SQLite-Suite **15/282**,
+  beide Präfixe in authentifiziertem Create, Worker-Completion und Peer-Ack;
+  bestehende Interaktionssuite **16/396**, beide Exit 0. Root prüft den Diff,
+  vollständige Testtypen und gezieltes ESLint grün. Read-only-Review findet keine
+  weiteren betroffenen Pfade; WebSocket/Artefakt/Timerclient erlauben beide Präfixe.
+- Letzter gezielter Start des erhaltenen alten Datensatzes: 4136 ms bis Ready,
+  keine Query-/Bootstrapfehler. Vorheriger Neustart sah ein intern gefangenes
+  `OTHER/upsert/P1008`, danach Ready; das erklärt frühere ungefangene Fehler nicht.
+  Sourcecontainer gestoppt, eigene Volumes/State bleiben erhalten; Dockerfenster
+  jetzt Root. Log `goal-wp29-retained-bootstrap-operation.log`.
+- Separate reale Prisma-Probe belegt: Plugin.findUnique nur SELECT, leeres
+  upsert dagegen BEGIN IMMEDIATE/SELECT/COMMIT. Unter eigenem gehaltenem Writer
+  scheitert nur upsert mit P1008; keine Produktdaten. Root entfernt deshalb
+  unnötige Startupwrites: vorhandene FederationIdentity/Pluginvorlagen zuerst
+  lesen, DaysUntil nur bei geänderten fünf verwalteten Feldern aktualisieren.
+  Missing-Seeds und notwendige Consumerregistrierung bleiben unverändert.
+  Produktions-Typecheck/ESLint grün; gezielte Agenttests laufen noch. F29-03
+  bleibt bis zum vollständigen aktuellen Restore-/Recovery-Gate offen.
+- Neues Produktionsimage wird gebaut: `goal-wp29-build-startup-id-fix.log`.
+  Noch kein erfolgreicher neuer Build/Runtime-Nachweis behauptet. Agent
+  `source_contract` bereitet die eng begrenzte Übernahme des behaltenen eigenen
+  Datensatzes auf das neue Image vor, keine umgeschriebene ID und kein Neuseed.
+
+Aktuellster Laufpunkt:
+
+- Produktionsbuild jetzt Exit 0: Image
+  `sha256:8e1d51fb89dd962900aba9a1d3cab077101d8a00ff6e80092096092225694c4b`,
+  Log `goal-wp29-build-startup-id-fix.log`. Enthält Geräte-ID- und Startupguards.
+- Startup-Seed-Suite durch Root wiederholt **12/142**, Federation-SQLite durch
+  Agent **16/305**; alle Testtypen einschließlich neuer Widgettemplate-Datei und
+  gezieltes ESLint grün. Read-only-Review ohne neue belegte P1/P2. Alle Dateien
+  eingefroren. Lastfixture-Units **3/3**, CI-Runner-Units **9/61** erneut Exit 0.
+- Linux-Harnessbuild ebenfalls Exit 0, Image `5bdf7a4562c05b3e8298622b74ab9f6b0ff71ec3e75bba258ea9a41764cdd968`,
+  Log `goal-wp29-linux-ci-build-current.log`; ABER nachträgliche Backup-Audit-
+  Verschärfung fehlt darin noch. Vor Voll-CI erneut bauen, keine Testdatei im
+  Container ersetzen. Gesamtlauf bisher nicht gestartet.
+- Backup-Audit prüft jetzt zusätzlich API_START_FAILED/WORKER_START_FAILED/P1008:
+  späteres Ready darf frühere Startfehler nicht maskieren. Syntax/Lint grün.
+- Agent `source_contract` besitzt ab jetzt exklusives Dockerfenster für
+  `.tmp/wp29-retained-production-verify.cjs` auf Image `8e1d...`. Root hat Helper
+  gelesen: ausschließlich gestoppten gelabelten Sourcecontainer ersetzen, alle
+  drei vorhandenen Volumes/underscore-ID erhalten, echte Auth/Timer/Replay und
+  API+Workerrestart, striktes Loggate, eigener Cleanup bei Erfolg. Fehlerzustand
+  bleibt sonst gestoppt erhalten. Kein vollständiger Backupnachweis daraus ableiten.
+
+- Retained-Nachweis jetzt **Exit 0**, `goal-wp29-retained-production-recovery.log`,
+  von Root gelesen: unverändertes Image `8e1d...`, ursprüngliche underscore-ID
+  und Gerätecredentials, Timeranlage/Feed, API+Workerrestart, genau ein Timer/v1
+  mit unveränderter Deadline und exaktes Event als Duplicate. Keine Startupcodes
+  und Secret-Audit grün. Neustart samt Nachprüfung 6520 ms. Eigene Container/
+  Volumes nach Labels leer und State gelöscht; Root bestätigt State-Abwesenheit.
+- Ein vorheriger Retained-Versuch scheiterte nach zunächst erfolgreichem Admin-
+  GET an HTTP 401: Fixture ignorierte reguläres Set-Cookie nach 15-min-Rotation.
+  Read-only-Beleg: Session vorhanden, weder abgelaufen noch widerrufen, Tokenhash
+  rotiert beim ersten GET. Keine Produktkorrektur/TTLverlängerung; Backup- und
+  Lastclient übernehmen jetzt nur den konkreten Sessioncookie. Recovery nutzt
+  ausdrücklich neuen Login, kein Fortbestand des verworfenen Cookies behauptet.
+  Last-Units jetzt **4/4**, ESLint grün. Kein HTTP-Fehler wird durch Retry toleriert.
+- Dockerfenster frei, sämtliche Agentdateien eingefroren. Harness `5bdf...` muss
+  wegen endgültiger Cookie-/Auditfixtureänderungen noch einmal gebaut werden;
+  danach unveränderter vollständiger Linux-CI-Runner über geprüften TCP-Relay.
+
+Voll-CI, erster Versuch und erneuter Lauf:
+
+- Erster Lauf im vorinstallierten Harness `1e023...` beendet mit Exit 1 beim
+  Backend-Typecheck. `goal-wp29-linux-ci-full.log`; Container/Metadaten unter
+  `.tmp/wp29-linux-ci-state.json` erhalten. Noch keine Dockerfixtures gestartet.
+  Nur eigener gestoppter Container als lokales Diagnoseimage gesichert, keine
+  Produktdaten/Zugangsdaten darin. Konkreter Fehler TS2307 für `@inker/contracts`.
+- Exakter Snapshot reproduziert den Fehler; frisches vorbereitetes Harness
+  besteht denselben Typecheck. Metadatenvergleich beweist nach erneutem prepare
+  fehlende Typ-/CJS-Dateien in Backend- und Frontend-Paketkopien; Original-Contracts
+  enthalten beide weiter. HOST-02 dokumentiert, keine Produktions-/TS-Korrektur.
+- Ignorierter Harnessgenerator startet jetzt ohne Vorinstallation, wie frische
+  GitHub-CI. Vollrunner installiert genau einmal und behält sämtliche 43 Gates.
+  Build Exit 0, Image `92d0c81a451ff05da1c400609f239d43582d15a5d5bf8af3718818564edb4931`.
+- Zweiter Gesamtlauf BEENDET (Exit 1): frühere Root-Execsession **57407**, Log
+  `.tmp/goal-wp29-linux-ci-clean-full.log`, sichere Container-Metadaten
+  `.tmp/wp29-linux-ci-clean-state.json`. Contracts **95/2244**, Backend-Units
+  **1127/6923**, alle statischen Gates und die ersten 14 Integrationen grün.
+  Render-Cache-Suite **10 pass / 2 fail / 274 Assertions**: unabhängiger Node-
+  Testprozess mischt seit Observability Nest-Logs in sein JSON-IPC auf stdout.
+  `isolation_review` besitzt ausschließlich `test/fixtures/render-process.cjs`
+  für Umleitung der Fixturelogs nach stderr und anschließende Suite-Wiederholung;
+  Produktionslogging und Integrationsassertionen bleiben unverändert.
+- `wp19_renderer` korrigiert vier belegte Betriebsdoku-Widersprüche (Seeds bei
+  APIrestart, fehlender Instanzschlüssel, begrenzte Operationslisten und explizite
+  Legacy-Key-Initialisierung). `source_contract` reviewt die Lastfixture nur lesend.
+  Alle Dockerläufe bleiben serialisiert. Kein WP-29-Commit oder Gesamtabschluss.
 
 ### Historisches Nachweis-Audit WP-27 (jetzt durch 18/228 geschlossen)
 

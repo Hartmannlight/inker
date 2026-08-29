@@ -138,6 +138,39 @@ describe('WP-26 persisted publication sharing', () => {
     expect(writes).toEqual([]);
   });
 
+  test('existing identity initializes with only reads while another client holds the SQLite writer lock', async () => {
+    expect(await p.federationIdentity.findUnique({ where: { id: 1 } })).toBeNull();
+    await identity.onModuleInit();
+    const before = await p.federationIdentity.findUniqueOrThrow({ where: { id: 1 } });
+    // A regression to empty upsert must fail promptly rather than waiting for
+    // the held writer's transaction timeout. This changes only this test DB.
+    await p.$queryRawUnsafe('PRAGMA busy_timeout = 200');
+    const queries: string[] = [];
+    p.$on('query' as never, (event: { query: string }) => { queries.push(event.query); });
+    let acquired!: () => void, release!: () => void;
+    const ready = new Promise<void>(resolve => { acquired = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const writer = other.$transaction(async tx => {
+      await tx.$executeRawUnsafe('UPDATE admin_accounts SET display_name = display_name WHERE admin_id = ?', 'fixture-admin');
+      acquired();
+      await held;
+    }, { timeout: 5000, maxWait: 2000 });
+    try {
+      await Promise.race([ready, writer]);
+      writes.length = 0; queries.length = 0;
+      await identity.onModuleInit();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(queries.length).toBeGreaterThan(0);
+      expect(queries.every(sql => /^\s*SELECT\b/i.test(sql))).toBe(true);
+      expect(queries.some(sql => /^\s*BEGIN\s+(?:IMMEDIATE|EXCLUSIVE)\b/i.test(sql))).toBe(false);
+      expect(writes).toEqual([]);
+      expect(await p.federationIdentity.findUniqueOrThrow({ where: { id: 1 } })).toEqual(before);
+    } finally {
+      release();
+      await writer;
+    }
+  });
+
   test('scope, missing, malformed, legacy, device and revoked credentials have one constant authentication error', async () => {
     const created = await shares.create(publicationId, {}, 'fixture-admin');
     const deviceToken = generateToken(48);

@@ -326,4 +326,5 @@ async function main() {
     }
   }
 }
-void main();
+if (require.main === module) void main();
+module.exports = { prepare, createDevice, rendered, views, sync, waitView, browserCopy, adminBoundaries };

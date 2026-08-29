@@ -128,7 +128,7 @@ describe('SetupService', () => {
       const result = await service.provisionDevice('AA:BB:CC:DD:EE:FF', undefined, undefined, 'http://localhost:3002');
 
       expect(result.api_key).toBe('new-key-789');
-      expect(result.reset_firmware).toBeUndefined();
+      expect(Reflect.get(result, 'reset_firmware')).toBeUndefined();
       expect(mockPrisma.blockedDevice.deleteMany.calls).toHaveLength(1);
     });
 

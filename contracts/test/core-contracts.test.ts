@@ -69,6 +69,27 @@ describe('device profile fixtures', () => {
 });
 
 describe('core contract fixtures', () => {
+  it('accepts the complete generated device ID alphabet without widening other identifiers', async () => {
+    const fixture = await loadFixture('interaction-event.json') as Record<string, unknown>;
+    for (let first = 0; first < 256; first++) {
+      const bytes = Buffer.alloc(12); bytes[0] = first;
+      const deviceId = bytes.toString('base64url');
+      expect(unwrap(parseInteractionEvent({ ...fixture, deviceId })).deviceId).toBe(deviceId);
+    }
+    for (const deviceId of ['display:browser-1', '_'.repeat(128), '-'.repeat(128)]) {
+      expect(parseInteractionEvent({ ...fixture, deviceId }).success).toBe(true);
+    }
+    for (const deviceId of ['', '_'.repeat(129), '../device', ':device', '.device', 'a/b', 'a+b',
+      'a=b', 'a b', 'a\n', '_\n', 'ä', null]) {
+      expect(parseInteractionEvent({ ...fixture, deviceId }).success).toBe(false);
+    }
+    for (const key of ['eventId', 'credentialId', 'publicationId', 'targetId']) {
+      for (const value of ['_device', '-device']) {
+        expect(parseInteractionEvent({ ...fixture, [key]: value }).success).toBe(false);
+      }
+    }
+  });
+
   it('bounds interaction identity, sequence and UTF-8 payloads and projects minor metadata', async () => {
     const fixture = await loadFixture('interaction-event.json') as Record<string, unknown>;
     const projected = unwrap(parseInteractionEvent({ ...fixture, futureMetadata: 'must not enter commands' }));

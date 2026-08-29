@@ -34,13 +34,13 @@ export class SourceWorkerService {
       orderBy: { scheduledAt: 'asc' }, take: 64 });
     const global = { eventType: SOURCE_REFRESH };
     for (const candidate of candidates) {
-      const event = await this.store.claim(owner, now, { eventId: candidate.eventId }, {
+      const event = await sourceWrite(this.prisma, () => this.store.claim(owner, now, { eventId: candidate.eventId }, {
         where: global, limit: SOURCE_LIMITS.global, additional: [
           { where: { ...global, sourceRefresh: { concurrencyGroup: candidate.concurrencyGroup } }, limit: SOURCE_LIMITS.provider },
           { where: { ...global, sourceRefresh: { connectorType: candidate.connectorType } }, limit: SOURCE_LIMITS.connector },
           { where: { ...global, aggregateId: candidate.sourceDefinitionId }, limit: SOURCE_LIMITS.source },
         ],
-      });
+      }, new Date()));
       if (event) return event;
     }
     return null;

@@ -365,8 +365,9 @@ describe('WP-28 isolated operations metadata and HTTP boundaries', () => {
     for (const secret of [marker, session.token, session.csrfToken, deviceToken, untrusted]) {
       expect(stringify(response.body).includes(secret)).toBe(false); expect(metrics.text.includes(secret)).toBe(false); expect(stringify(logs).includes(secret)).toBe(false);
     }
-    // Existing session authentication updates technical lastSeenAt; domain tables never change.
-    expect(writes.every(sql => /^\s*UPDATE\s+[`"]?(?:main[`"]?\.)?[`"]?admin_sessions\b/i.test(sql))).toBe(true);
+    // A fresh session stays read-only; deferred technical touches are covered by
+    // the separate contended two-client test above.
+    expect(writes).toEqual([]);
     expect(await digest(true)).toBe(before);
     await sessions.revoke(session.sessionId, 'operations-admin');
     expect((await request(app.getHttpServer()).get('/api/operations').set('Cookie', `${ADMIN_SESSION_COOKIE}=${session.token}`)).status).toBe(401);

@@ -410,6 +410,8 @@ export class PluginsService {
   async seedBuiltinPlugins(): Promise<void> {
     const builtins = [this.grafanaPluginDefinition()];
     for (const def of builtins) {
+      // Preserve installed configuration and avoid a needless startup writer lock.
+      if (await this.prisma.plugin.findUnique({ where: { slug: def.slug }, select: { id: true } })) continue;
       await this.prisma.plugin.upsert({
         where: { slug: def.slug },
         create: def,

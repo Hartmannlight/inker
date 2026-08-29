@@ -8,8 +8,9 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { OutboxStore } from '../src/events/outbox.store';
 import { MAINTENANCE_DUE, MaintenanceService } from '../src/jobs/maintenance.service';
-import { LogCleanupService } from '../src/jobs/services/log-cleanup.service';
+import { LogCleanupService, MAINTENANCE_BATCH_SIZE } from '../src/jobs/services/log-cleanup.service';
 import { PublicationCleanupService } from '../src/publications/publication-cleanup.service';
+import { sqliteWrite } from '../src/sources/source-writes';
 
 const root = resolve(import.meta.dir, '..');
 const HOUR = 3_600_000;
@@ -163,6 +164,101 @@ describe('WP-20 durable, fenced maintenance', () => {
     expect(await prisma.outboxEvent.count({ where: { eventId: { in: ['retention-pending', 'retention-processing'] } } })).toBe(2);
   });
 
+  test('drains retention in bounded transactions before completing its receipt', async () => {
+    const event = await claim();
+    const old = new Date(now.getTime() - 100 * DAY);
+    await prisma.deviceLog.createMany({ data: Array.from({ length: MAINTENANCE_BATCH_SIZE + 1 }, () => ({
+      deviceId, level: 'info', message: 'bounded-maintenance-fixture', createdAt: old,
+    })) });
+    await prisma.outboxEvent.createMany({ data: Array.from({ length: MAINTENANCE_BATCH_SIZE + 1 }, (_, index) => ({
+      eventId: `bounded-delivered-${index}`, eventType: 'test.retention', aggregateType: 'Test',
+      aggregateId: String(index), payload: {}, status: 'delivered', occurredAt: old, processedAt: old,
+    })) });
+    let logBatches = 0, publicationBatches = 0, firstBatch!: () => void;
+    const firstBatchStarted = new Promise<void>(resolve => { firstBatch = resolve; });
+    class CountingLogs extends LogCleanupService {
+      override async cleanupBatch(at: Date, transaction: Prisma.TransactionClient) {
+        logBatches++;
+        const result = await super.cleanupBatch(at, transaction);
+        if (logBatches === 1) firstBatch();
+        return result;
+      }
+    }
+    class CountingPublications extends PublicationCleanupService {
+      override async cleanupBatch(at: Date, transaction: Prisma.TransactionClient, cursor?: string) {
+        publicationBatches++;
+        return super.cleanupBatch(at, transaction, cursor);
+      }
+    }
+    const bounded = new MaintenanceService(prisma as PrismaService,
+      new CountingLogs(prisma as PrismaService), new CountingPublications(prisma as PrismaService));
+    const execution = bounded.execute(event);
+    await firstBatchStarted;
+    await sqliteWrite(prisma, () => prisma.setting.upsert({ where: { key: 'maintenance-interleave' },
+      create: { key: 'maintenance-interleave', value: 'committed-between-batches' },
+      update: { value: 'committed-between-batches' } }));
+    expect(await execution).toEqual({
+      duplicate: false, deviceLogs: MAINTENANCE_BATCH_SIZE + 1,
+      deliveredOutboxEvents: MAINTENANCE_BATCH_SIZE + 1,
+      deadLetterOutboxEvents: 0, publicationRevisions: 0,
+    });
+    expect(logBatches).toBeGreaterThanOrEqual(2);
+    expect(publicationBatches).toBeGreaterThanOrEqual(2);
+    expect((await prisma.setting.findUniqueOrThrow({ where: { key: 'maintenance-interleave' } })).value)
+      .toBe('committed-between-batches');
+    expect((await prisma.outboxEffect.findUniqueOrThrow({ where: { eventId: event.eventId } })).completedAt)
+      .not.toBeNull();
+  });
+
+  test('persists its revision checkpoint and probes stragglers behind it before the receipt', async () => {
+    const event = await claim(), old = new Date(now.getTime() - 100 * DAY);
+    await prisma.publication.create({ data: {
+      publicationId: 'checkpoint-publication', publicationKey: 'checkpoint',
+    } });
+    for (let index = 0; index < MAINTENANCE_BATCH_SIZE + 2; index++)
+      await prisma.publicationRevision.create({ data: {
+        publicationRevisionId: `checkpoint-${String(index).padStart(3, '0')}`,
+        publicationId: 'checkpoint-publication', revision: index + 1,
+        protocolVersion: '1.0', content: {}, contentHash: `checkpoint-hash-${index}`,
+        publishedAt: old,
+      } });
+    let batches = 0;
+    class InterruptedPublications extends PublicationCleanupService {
+      override async cleanupBatch(at: Date, transaction: Prisma.TransactionClient, cursor?: string) {
+        if (++batches === 2) throw new Error('CONTROLLED_CHECKPOINT_CRASH');
+        return super.cleanupBatch(at, transaction, cursor);
+      }
+    }
+    const interrupted = new MaintenanceService(prisma as PrismaService,
+      new LogCleanupService(prisma as PrismaService), new InterruptedPublications(prisma as PrismaService));
+    await expect(interrupted.execute(event)).rejects.toThrow('CONTROLLED_CHECKPOINT_CRASH');
+    const checkpoint = await prisma.outboxEffect.findUniqueOrThrow({ where: { eventId: event.eventId } });
+    expect(checkpoint.progressCursor).toBe(`checkpoint-${String(MAINTENANCE_BATCH_SIZE - 1).padStart(3, '0')}`);
+    expect(checkpoint.completedAt).toBeNull();
+    await other.publication.create({ data: {
+      publicationId: '000-checkpoint-late-publication', publicationKey: 'checkpoint-late',
+    } });
+    await other.publicationRevision.createMany({ data: [{
+      publicationRevisionId: '000-checkpoint-straggler', publicationId: '000-checkpoint-late-publication',
+      revision: 1, protocolVersion: '1.0', content: {}, contentHash: 'checkpoint-straggler-hash', publishedAt: old,
+    }, {
+      publicationRevisionId: '000-checkpoint-latest', publicationId: '000-checkpoint-late-publication',
+      revision: 2, protocolVersion: '1.0', content: {}, contentHash: 'checkpoint-latest-hash', publishedAt: old,
+    }] });
+    expect(await prisma.publicationRevision.count()).toBe(4);
+
+    await prisma.$disconnect(); await prisma.$connect();
+    await createService(prisma).execute(event);
+    expect((await prisma.publicationRevision.findMany({
+      select: { publicationRevisionId: true }, orderBy: { publicationRevisionId: 'asc' },
+    }))).toEqual([
+      { publicationRevisionId: '000-checkpoint-latest' },
+      { publicationRevisionId: `checkpoint-${String(MAINTENANCE_BATCH_SIZE + 1).padStart(3, '0')}` },
+    ]);
+    expect(await prisma.outboxEffect.findUniqueOrThrow({ where: { eventId: event.eventId } }))
+      .toMatchObject({ completedAt: expect.any(Date), progressCursor: null });
+  });
+
   test('rolls back logs, retention and receipt together when a later delete fails', async () => {
     const event = await claim();
     await log();
@@ -211,8 +307,8 @@ describe('WP-20 durable, fenced maintenance', () => {
     expect(await prisma.outboxEffect.count()).toBe(0);
     const midWork = new AbortController();
     class AbortingLogs extends LogCleanupService {
-      override async cleanup(at: Date, transaction?: Prisma.TransactionClient) {
-        const result = await super.cleanup(at, transaction);
+      override async cleanupBatch(at: Date, transaction: Prisma.TransactionClient) {
+        const result = await super.cleanupBatch(at, transaction);
         midWork.abort('sensitive-abort-reason');
         return result;
       }
@@ -227,9 +323,9 @@ describe('WP-20 durable, fenced maintenance', () => {
     const event = await claim();
     await log();
     class ExpiringLogs extends LogCleanupService {
-      override async cleanup(at: Date, transaction?: Prisma.TransactionClient) {
-        const result = await super.cleanup(at, transaction);
-        await transaction!.outboxEvent.update({ where: { eventId: event.eventId }, data: { claimUntil: new Date(0) } });
+      override async cleanupBatch(at: Date, transaction: Prisma.TransactionClient) {
+        const result = await super.cleanupBatch(at, transaction);
+        await transaction.outboxEvent.update({ where: { eventId: event.eventId }, data: { claimUntil: new Date(0) } });
         return result;
       }
     }

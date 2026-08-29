@@ -2,6 +2,15 @@
 const fs = require('node:fs');
 const ts = require('typescript');
 require('reflect-metadata');
+const { ConsoleLogger, Logger } = require('@nestjs/common');
+// This process reserves stdout for its single IPC response. Keep every Nest
+// diagnostic and its original level/context, but send it to the separate pipe.
+class StderrLogger extends ConsoleLogger {
+  printMessages(messages, context, logLevel) {
+    super.printMessages(messages, context, logLevel, 'stderr');
+  }
+}
+Logger.overrideLogger(new StderrLogger());
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021, experimentalDecorators: true, emitDecoratorMetadata: true, esModuleInterop: true },
 }).outputText, filename);

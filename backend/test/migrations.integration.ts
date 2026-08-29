@@ -567,6 +567,28 @@ describe("Prisma migration baseline", () => {
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
+  test('WP-29 upgrades existing effects to frozen snapshots and adds empty checkpoints', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'wp29-checkpoints-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
+    const latest = '20260907000000_foundation_batch_checkpoints';
+    applySql(databasePath, readdirSync(migrations).filter(name => name < latest && name.startsWith('20'))
+      .sort().map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath, { strict: true });
+    try {
+      database.exec(`INSERT INTO outbox_effects(key,event_id) VALUES('legacy-prepared','legacy-event');
+        INSERT INTO outbox_effects(key,event_id,completed_at)
+          VALUES('legacy-completed','legacy-completed-event',1724889600000);`);
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+      expect(database.query(`SELECT key, prepared_at IS NOT NULL AS prepared,
+        progress_cursor AS progressCursor FROM outbox_effects ORDER BY key`).all()).toEqual([
+        { key: 'legacy-completed', prepared: 1, progressCursor: null },
+        { key: 'legacy-prepared', prepared: 1, progressCursor: null },
+      ]);
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
   test("installs a fresh database and is idempotent on restart", async () => {
     const databasePath = join(createTemporaryDirectory(), "fresh.db");
 
@@ -604,6 +626,7 @@ describe("Prisma migration baseline", () => {
         "20260904000000_federation_shares",
         "20260905000000_remote_subscriptions",
         "20260906000000_observability",
+        "20260907000000_foundation_batch_checkpoints",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

@@ -62,12 +62,12 @@ export class RemoteWorkerService {
     } }, orderBy: { scheduledAt: 'asc' }, take: 32 });
     for (const candidate of candidates) {
       const scope = { eventType: REMOTE_SYNC };
-      const event = await this.store.claim(owner, now, { eventId: candidate.eventId }, {
+      const event = await sourceWrite(this.prisma, () => this.store.claim(owner, now, { eventId: candidate.eventId }, {
         where: scope, limit: REMOTE_LIMITS.global, additional: [
           { where: { ...scope, remoteSync: { remoteServerId: candidate.remoteServerId } }, limit: REMOTE_LIMITS.remote },
           { where: { ...scope, aggregateId: candidate.subscriptionId }, limit: REMOTE_LIMITS.subscription },
         ],
-      });
+      }, new Date()));
       if (event) return event;
     }
     return null;

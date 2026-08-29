@@ -1,4 +1,5 @@
 import { isJsonValue, utf8ByteLength, type JsonObject, type JsonValue } from './json-value';
+import { isDeviceIdentifier } from './device-identifier';
 import { validateProtocolVersion, type ProtocolVersion } from './protocol';
 import {
   addIssue,
@@ -89,7 +90,10 @@ function validateInteractionEvent(
   }
   validateIsoTimestamp(record, 'occurredAt', context, path);
   optionalInteger(record, 'clientSequence', context, path, { minimum: 0 });
-  for (const key of ['eventId', 'deviceId', 'credentialId', 'publicationId', 'targetId']) {
+  if (!isDeviceIdentifier(record.deviceId)) {
+    addIssue(context, 'error', 'invalid_identifier', `${path}.deviceId`, 'Expected a bounded device identifier.');
+  }
+  for (const key of ['eventId', 'credentialId', 'publicationId', 'targetId']) {
     const text = record[key];
     if (text !== undefined && (typeof text !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text))) {
       addIssue(context, 'error', 'invalid_identifier', `${path}.${key}`, 'Expected a bounded identifier.');

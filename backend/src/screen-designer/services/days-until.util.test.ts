@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { calculateDaysUntil as sharedCalculation } from '@inker/contracts';
 import {
   addCountedDays,
   calculateDaysUntil,
@@ -8,6 +9,11 @@ import {
 } from './days-until.util';
 
 describe('days-until utilities', () => {
+  it('uses the shared domain function and rejects oversized editor durations', () => {
+    expect(calculateDaysUntil).toBe(sharedCalculation);
+    expect(calculateDaysUntil({ inputMode: 'duration', startDate: '2026-08-03', durationDays: Number.MAX_VALUE }).error)
+      .toBe('Number of days exceeds the supported date range');
+  });
   it('parses date-only values without UTC conversion', () => {
     const date = parseLocalDate('2026-08-03');
     expect(date).not.toBeNull();

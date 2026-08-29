@@ -24,9 +24,14 @@ The production image keeps the existing single-container deployment. Its s6
 initializer prepares private storage, validates/initializes secrets, applies
 versioned migrations and seeds reference data **once before either process**.
 Failure aborts initialization; neither service may start without the volatile,
-root-owned success marker. A service restart does not repeat migrations or seed.
-Existing profile, policy and template configuration is never overwritten by seed.
-Reference changes that require upgrades belong in tested migrations.
+root-owned success marker. A service restart does not repeat migrations or the
+initializer's `prisma/seed.ts`. API module initialization still checks built-in
+plugin and widget-template seeds: missing entries are created; unchanged entries
+are not written. Existing profile and policy configuration is preserved. For the
+DaysUntil template, changed managed fields (`label`, `description`, `defaultConfig`,
+`minWidth`, `minHeight`) are updated to the bundled defaults; other existing template
+configuration is preserved. Schema/reference upgrades outside these managed
+template defaults belong in tested migrations.
 
 ## Readiness and degradation
 
@@ -125,12 +130,16 @@ combined load and recovery limits must be established by WP-29.
 
 ## Repeat the process checks
 
+For the complete current acceptance pipeline, including every integration,
+combined load/faults and full restore, follow [Foundation verification](FOUNDATION_RELEASE.md).
+The commands below are the narrower historical process checks, not the WP-29 gate.
+
 After building a local `inker:wp25-test` image, run from `backend/`:
 
 ```text
 INKER_SMOKE_IMAGE=inker:wp25-test node test/websocket-container-smoke.cjs
 INKER_SMOKE_IMAGE=inker:wp25-test node test/worker-startup-container.cjs
-bun test ./test/outbox-redis.integration.ts
+INKER_SMOKE_IMAGE=inker:wp25-test bun test ./test/outbox-redis.integration.ts
 ```
 
 These tests create and remove their own disposable containers. The negative

@@ -173,6 +173,53 @@ describe('WP-19 persistent render cache', () => {
     expect(readdirSync(files.root)).toEqual([stored.artifactHash!]);
   }, 30_000);
 
+  test('a lease replacement resumes bounded promotion batches without rerendering', async () => {
+    const key = await cache.request(device.id);
+    const revisionId = device.publicationState!.desiredRevision!.publicationRevisionId;
+    const baseBinding = await prisma.renderBinding.findFirstOrThrow({ where: { deviceId: device.id, desiredKey: key! } });
+    const externalIds = Array.from({ length: 64 }, () => randomUUID());
+    await prisma.$transaction(async tx => {
+      await tx.device.createMany({ data: externalIds.map((externalId, index) => ({
+        name: `render-batch-peer-${index}`, externalId, profileId: 'browser-hd-1920x1080',
+        deliveryPolicyId: 'reference-connected-browser', lastSeenAt: new Date(),
+      })) });
+      const peers = await tx.device.findMany({ where: { externalId: { in: externalIds } }, select: { id: true } });
+      await tx.devicePublicationState.createMany({ data: peers.map(peer => ({
+        deviceId: peer.id, desiredPublicationRevisionId: revisionId, desiredSequence: 1, desiredAt: new Date(),
+      })) });
+      await tx.renderBinding.createMany({ data: peers.map(peer => ({
+        deviceId: peer.id, variant: baseBinding.variant, desiredKey: key!,
+      })) });
+    });
+    const event = await claimRender(key!);
+    const persist = (cache as any).persistRenderBatch.bind(cache);
+    let batches = 0;
+    (cache as any).persistRenderBatch = async (...args: unknown[]) => {
+      if (batches++ === 1) throw new Error('controlled batch crash');
+      return persist(...args);
+    };
+    await expect(cache.render(event)).rejects.toThrow('controlled batch crash');
+    (cache as any).persistRenderBatch = persist;
+    expect(await prisma.renderBinding.count({ where: { desiredKey: key!, readyKey: key! } })).toBe(64);
+    await prisma.outboxEvent.update({
+      where: { eventId: event.eventId }, data: { claimUntil: new Date(Date.now() - 1) },
+    });
+    const recovered = await claimRender(key!, 'render-batch-recovery');
+    let rerenders = 0;
+    await cache.render(recovered, async (...args) => { rerenders++; return renderSnapshot(...args); });
+    expect(rerenders).toBe(0);
+    expect(await outbox.ack(recovered)).toBe(true);
+    expect(await prisma.renderBinding.count({ where: { desiredKey: key!, readyKey: key! } })).toBe(65);
+    const ready = await prisma.outboxEvent.findMany({ where: { eventType: RENDER_READY }, orderBy: { eventId: 'asc' } });
+    expect(ready).toHaveLength(2);
+    const readyDeviceIds = ready.flatMap(row => (row.payload as { deviceIds: number[] }).deviceIds);
+    expect(ready.map(row => (row.payload as { deviceIds: number[] }).deviceIds.length).sort((a, b) => a - b))
+      .toEqual([1, 64]);
+    expect(new Set(readyDeviceIds).size).toBe(65);
+    expect((await prisma.device.findMany({ where: { id: { in: readyDeviceIds } }, select: { renderRevision: true } }))
+      .every(row => row.renderRevision === 1)).toBe(true);
+  }, 30_000);
+
   test('WP-21 pinned persisted snapshots determine real pixels and later source failure cannot mutate a publication', async () => {
     const sources = new SourcesService(prisma as PrismaService, {} as EncryptionService);
     const reader = new SourceReadService(prisma as PrismaService);
@@ -340,15 +387,20 @@ describe('WP-19 persistent render cache', () => {
   }, 30_000);
 
   test('completed duplicate delivery never invokes the renderer or changes artifact metadata', async () => {
-    const { key, event } = await requestAndRender();
+    const key = (await cache.request(device.id))!;
+    const event = await claimRender(key);
+    await cache.render(event);
     const stored = await prisma.renderRequest.findUniqueOrThrow({ where: { key } });
+    const metrics = cache.metrics();
     writes.length = 0;
     await cache.render(event, async () => { throw new Error('completed work must not rerender'); });
     expect(writes).toEqual([]);
+    expect(cache.metrics()).toEqual(metrics);
     expect(await prisma.renderRequest.findUniqueOrThrow({ where: { key } })).toEqual(stored);
     expect(await prisma.outboxEvent.count({ where: { eventType: RENDER_READY } })).toBe(1);
     expect(await cache.request(device.id)).toBe(key);
     expect(await prisma.outboxEvent.count({ where: { eventType: RENDER_REQUESTED } })).toBe(1);
+    expect(await outbox.ack(event)).toBe(true);
   });
 
   test('reactivation promotes a render completed while inactive and preserves it as the next fallback', async () => {

@@ -3,6 +3,8 @@ import { Logger } from '@nestjs/common';
 import { DisplayService } from './display.service';
 import { createMockPrisma } from '../../test/mocks/prisma.mock';
 import { createMock } from '../../test/mocks/helpers';
+import type { PluginsService } from '../../plugins/plugins.service';
+import type { SetupService } from '../setup/setup.service';
 
 describe('DisplayService', () => {
   let service: DisplayService;
@@ -52,6 +54,8 @@ describe('DisplayService', () => {
       mockDefaultScreenService,
       mockSleepScreenService,
       mockScreenRendererService,
+      { renderInstance: createMock().mockImplementation(() => { throw new Error('Unexpected plugin render'); }) } as unknown as PluginsService,
+      { provisionDevice: createMock().mockImplementation(() => { throw new Error('Unexpected provisioning'); }) } as unknown as SetupService,
     );
   });
 

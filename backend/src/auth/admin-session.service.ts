@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
 export const ADMIN_SESSION_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000;
 export const ADMIN_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 export const ADMIN_SESSION_ROTATION_MS = 15 * 60 * 1000;
+export const ADMIN_SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
 
 export interface SessionClient {
   userAgent?: string;
@@ -47,7 +49,20 @@ function sanitizeUserAgent(value: string | undefined): string | null {
 
 @Injectable()
 export class AdminSessionService {
+  private readonly pendingTouches = new Set<string>();
   constructor(private readonly prisma: PrismaService) {}
+
+  private touch(session: { sessionId: string; tokenHash: string; lastSeenAt: Date }, now: Date): void {
+    if (this.pendingTouches.has(session.sessionId)) return;
+    this.pendingTouches.add(session.sessionId);
+    // Presence persistence is technical metadata. It must never hold an
+    // authenticated request behind SQLite's single writer; idle validity was
+    // already decided from the durable timestamp above.
+    void Promise.resolve().then(() => this.prisma.adminSession.updateMany({
+      where: { sessionId: session.sessionId, tokenHash: session.tokenHash, revokedAt: null, lastSeenAt: session.lastSeenAt },
+      data: { lastSeenAt: now },
+    })).catch(() => undefined).finally(() => this.pendingTouches.delete(session.sessionId));
+  }
 
   async create(adminId: string, client: SessionClient): Promise<CreatedAdminSession> {
     const now = new Date();
@@ -89,20 +104,32 @@ export class AdminSessionService {
 
     let rotatedToken: string | undefined;
     let rotationCandidate: string | undefined;
-    const data: Record<string, unknown> = { lastSeenAt: now };
-    if (session.issuedAt.getTime() + ADMIN_SESSION_ROTATION_MS <= now.getTime()) {
-      rotationCandidate = opaqueToken();
-      data.tokenHash = hashSecret(rotationCandidate);
-      data.issuedAt = now;
+    const rotationDue = session.issuedAt.getTime() + ADMIN_SESSION_ROTATION_MS <= now.getTime();
+    const touchDue = session.lastSeenAt.getTime() + ADMIN_SESSION_TOUCH_INTERVAL_MS <= now.getTime();
+    const validated = {
+      sessionId: session.sessionId,
+      adminId: session.adminId,
+      expiresAt: session.expiresAt,
+    };
+    if (!rotationDue) {
+      if (touchDue) this.touch(session, now);
+      return validated;
     }
-    const update = await this.prisma.adminSession.updateMany({
-      where: {
-        sessionId: session.sessionId,
-        tokenHash: session.tokenHash,
-        revokedAt: null,
-      },
-      data,
-    });
+    const data: Record<string, unknown> = { lastSeenAt: now };
+    rotationCandidate = opaqueToken();
+    data.tokenHash = hashSecret(rotationCandidate);
+    data.issuedAt = now;
+    let update: { count: number };
+    try {
+      update = await this.prisma.adminSession.updateMany({
+        where: { sessionId: session.sessionId, tokenHash: session.tokenHash, revokedAt: null, lastSeenAt: session.lastSeenAt },
+        data,
+      });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError
+        && ['P1008', 'P2028', 'P2034'].includes(error.code))) throw error;
+      return validated;
+    }
     if (rotationCandidate && update.count === 1) rotatedToken = rotationCandidate;
     return {
       sessionId: session.sessionId,

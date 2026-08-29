@@ -111,3 +111,14 @@ export {
   type RemoteSubscriptionView,
 } from './remote-subscription';
 export * from './observability';
+export {
+  addCountedDays,
+  calculateDaysUntil,
+  countDays,
+  formatLocalDate,
+  parseLocalDate,
+  type DaysUntilInputMode,
+  type DaysUntilDayMode,
+  type DaysUntilCalculationConfig,
+  type DaysUntilCalculation,
+} from './days-until';

@@ -81,8 +81,10 @@ Histogrammgrenzen in Sekunden: 0,005; 0,01; 0,025; 0,05; 0,1; 0,25; 0,5;
 1; 2; 5; 10; 20; +Inf. Zusammen mit Summe und Count ergeben sich höchstens
 **1357 Zeitreihen** am API-Endpunkt. Keine Geräte-IDs, Source-Namen, URLs,
 Fehlertexte, Correlation-IDs oder Worker-IDs werden als Metriklabels verwendet.
-Die letzten 100 Sources, Geräte und Dead Letters sowie 32 Remotes werden
-begrenzt ausgegeben; Gesamtzahl und Trunkierung bleiben sichtbar. Geräte-Gauges
+Ausgegeben werden höchstens 100 Sources und Geräte sowie 32 Remotes, jeweils
+nach ihrer ID aufsteigend, und die 100 zuletzt abgeschlossenen Dead Letters.
+Die Auswahl der Sources, Geräte und Remotes folgt nicht ihrer letzten Aktivität;
+Gesamtzahl und Trunkierung bleiben sichtbar. Geräte-Gauges
 zählen auch Zeilen jenseits der sichtbaren 100. Bei mehr als 100 Policies wird
 diese Messfamilie ausdrücklich unbekannt.
 

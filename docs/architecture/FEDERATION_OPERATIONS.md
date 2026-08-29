@@ -184,8 +184,13 @@ andere Vertrauensbeziehung erfordert ein neues Abonnement; das alte kann deaktiv
 werden. Löschen und automatischer Identitätswechsel sind nicht Bestandteil dieser
 Foundation-Oberfläche. Backup/Restore umfasst SQLite **und** den passenden
 Instanzschlüssel. Die Remote-Bytes liegen in SQLite, lokale Renderdateien weiterhin
-im vorhandenen privaten Render-Volume. Ohne Schlüssel bleiben gecachte Bilder
-lesbar, neue Syncs melden `REMOTE_SECRET_UNAVAILABLE`.
+im vorhandenen privaten Render-Volume. Fehlt die Instanzschlüsseldatei beim
+Restore oder ist sie ungültig, starten API und Worker nicht; auch gecachte Bilder
+sind dann nicht über die Anwendung erreichbar. `REMOTE_SECRET_UNAVAILABLE`
+bezeichnet dagegen einen nicht entschlüsselbaren Subscription-Token bei bereits
+gültig geladenem Instanzschlüssel. In diesem Fall bleiben vorhandene lokale
+Cachebilder lesbar, während neue Syncs fehlschlagen. Den passenden Schlüssel
+wiederherstellen; keinen Ersatzschlüssel für eine bestehende Installation erzeugen.
 
 ## Reproduzierbare Prüfung
 

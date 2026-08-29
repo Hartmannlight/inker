@@ -301,7 +301,9 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     const failed = await prisma.outboxEvent.findUniqueOrThrow({ where: { eventId: event.eventId } });
     expect(failed.status).toBe('dead-letter');
     expect(failed.claimToken).toBeNull();
-    expect(failed.lastError).toBe(JSON.stringify({ code: 'SOURCE_SECRET_UNAVAILABLE', correlationId: event.eventId }));
+    expect(failed.lastError).toBe(JSON.stringify({
+      code: 'SOURCE_SECRET_UNAVAILABLE', correlationId: event.correlationId, eventId: event.eventId,
+    }));
     expect(await prisma.sourceRefreshJob.findUnique({ where: { eventId: event.eventId } })).not.toMatchObject({ completedAt: null });
     const output = JSON.stringify([await reads.read(created.definition.sourceDefinitionId), failed.payload, failed.lastError]);
     expect(output.includes(secret)).toBe(false);
@@ -448,7 +450,9 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
       const pending = await prisma.outboxEvent.findUniqueOrThrow({ where: { eventId: event.eventId } });
       expect(pending.status).toBe('pending');
       expect(pending.claimToken).toBeNull();
-      expect(pending.lastError).toBe(JSON.stringify({ code: 'SOURCE_REFRESH_FAILED', correlationId: event.eventId }));
+      expect(pending.lastError).toBe(JSON.stringify({
+        code: 'SOURCE_REFRESH_FAILED', correlationId: event.correlationId, eventId: event.eventId,
+      }));
       due = pending.availableAt;
       if (attempt < 3) expect(saved.circuitOpenUntil).toBeNull();
       else {
@@ -690,7 +694,8 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     expect(await prisma.sourceSnapshot.findUnique({ where: { snapshotId: row.snapshotId } })).toEqual(row);
     expect((await prisma.sourceDefinition.findUniqueOrThrow({ where: { sourceDefinitionId: id } })).latestValidSnapshotId).toBe(row.snapshotId);
     expect(await prisma.outboxEvent.findUnique({ where: { eventId: event.eventId } })).toMatchObject({
-      status: 'pending', lastError: JSON.stringify({ code: errorCode, correlationId: event.eventId }),
+      status: 'pending', lastError: JSON.stringify({ code: errorCode,
+        correlationId: event.correlationId, eventId: event.eventId }),
     });
     expect(await prisma.outboxEffect.count({ where: { eventId: event.eventId } })).toBe(0);
     expect(isolationDiagnostics()).toMatchObject({ active: 0, pending: 0, pids: [] });
@@ -722,7 +727,9 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
       expect(await worker.execute(event, signal())).toBe('failed');
       const saved = await prisma.outboxEvent.findUniqueOrThrow({ where: { eventId: event.eventId } });
       expect(saved.status).toBe(attempt < 5 ? 'pending' : 'dead-letter');
-      expect(saved.lastError).toBe(JSON.stringify({ code: 'SOURCE_TRANSFORM_FAILED', correlationId: event.eventId }));
+      expect(saved.lastError).toBe(JSON.stringify({
+        code: 'SOURCE_TRANSFORM_FAILED', correlationId: event.correlationId, eventId: event.eventId,
+      }));
       due = saved.availableAt;
       const state = await reads.read(id);
       expect(state.snapshot).toMatchObject({ data: row.data, freshness: { state: 'stale' },

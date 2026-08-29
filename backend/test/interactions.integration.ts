@@ -222,6 +222,34 @@ describe('WP-23 authenticated persistent interactions', () => {
     expect((await p.interactionRate.findUniqueOrThrow({ where: { deviceId } })).minuteCount).toBe(1);
   });
 
+  test('one process serializes publish with identical interactions on its shared SQLite writer', async () => {
+    const input = await event();
+    const before = { commands: await p.publicationCommand.count(), revisions: await p.publicationRevision.count() };
+    const database = p as unknown as { $transaction: (...args: unknown[]) => Promise<unknown> };
+    const transaction = database.$transaction.bind(p);
+    let active = 0, maximum = 0, values: unknown[] = [];
+    database.$transaction = async (...args: unknown[]) => {
+      active++; maximum = Math.max(maximum, active);
+      try { await Bun.sleep(20); return await transaction(...args); }
+      finally { active--; }
+    };
+    try {
+      values = await Promise.all([
+        publisher.publish(randomUUID(), { idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: [warmDeviceId], allowedActions: actions,
+          draft: { fixtureArtifacts: ['mono-800x480-white-png'] } }),
+        service.execute(headers, input), service.execute(headers, input),
+      ]);
+    } finally { database.$transaction = transaction; }
+    const interactions = values.slice(1) as CommandResult[];
+    expect(maximum).toBe(1);
+    expect(interactions.map(result => result.status).sort()).toEqual(['accepted', 'duplicate']);
+    expect(interactions[0].commandId).toBe(interactions[1].commandId);
+    expect(await p.interactionReceipt.count({ where: { eventId: input.eventId } })).toBe(1);
+    expect((await p.interactionRate.findUniqueOrThrow({ where: { deviceId } })).minuteCount).toBe(1);
+    expect(await p.publicationCommand.count()).toBe(before.commands + 1);
+    expect(await p.publicationRevision.count()).toBe(before.revisions + 1);
+  }, 30_000);
+
   test('event-id collision cannot replay or change the original receipt', async () => {
     const input = await event();
     const result = await service.execute(headers, input);

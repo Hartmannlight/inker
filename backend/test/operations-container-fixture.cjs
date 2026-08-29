@@ -32,7 +32,8 @@ function httpFailure(response, surface) {
 function diagnosticLogs(rows) {
   const codes = ['REQUEST_COMPLETED', 'REQUEST_FAILED', 'JOB_STARTED', 'JOB_COMPLETED', 'JOB_FAILED', 'JOB_STALE',
     'DEVICE_CONNECTED', 'DEVICE_DISCONNECTED', 'DEVICE_DELIVERED', 'DEVICE_DELIVERY_FAILED',
-    'DEPENDENCY_DEGRADED', 'DEPENDENCY_RECOVERED', 'WORKER_STARTED', 'OUTBOX_POLL_FAILED', 'OUTBOX_REDIS_UNAVAILABLE'];
+    'DEPENDENCY_DEGRADED', 'DEPENDENCY_RECOVERED', 'WORKER_STARTED', 'OUTBOX_POLL_FAILED', 'OUTBOX_CONSUMER_FAILED',
+    'OUTBOX_REDIS_UNAVAILABLE'];
   return rows.filter(row => codes.includes(row.code) && ['api', 'worker'].includes(row.role))
     .sort((a, b) => (Date.parse(a.timestamp) || 0) - (Date.parse(b.timestamp) || 0)).slice(-24).map(row => ({
       code: row.code, role: row.role,

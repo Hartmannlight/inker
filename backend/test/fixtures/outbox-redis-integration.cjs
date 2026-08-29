@@ -13,7 +13,20 @@ let logs = '', redisLogs = '', stage = 'start', monitor;
 const progress = value => { stage = value; fs.writeFileSync(require('node:path').join(require('node:path').dirname(process.argv[2]), 'progress.txt'), value); };
 const fs = require('node:fs');
 const secret = randomBytes(32).toString('hex');
+const image = process.env.INKER_SMOKE_IMAGE;
+if (typeof image !== 'string' || image.length > 255 || !/^(?:sha256:[a-f0-9]{64}|[a-z0-9][a-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]*)$/.test(image))
+  throw new Error('OUTBOX_FIXTURE_IMAGE_REQUIRED');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function tcpReady(targetPort) {
+  return new Promise(resolve => {
+    const socket = require('node:net').createConnection({ host: '127.0.0.1', port: targetPort });
+    let settled = false;
+    const finish = ready => { if (settled) return; settled = true; socket.destroy(); resolve(ready); };
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+    socket.setTimeout(500, () => finish(false));
+  });
+}
 async function until(predicate, ms = 15_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (await predicate()) return; await sleep(25); }
@@ -89,7 +102,8 @@ async function main() {
   try {
     // Only this disposable fixture is reachable through Docker's bridge; the
     // published port is restricted to host loopback. Production stays protected.
-    docker('run', '-d', '--name', name, '-p', `127.0.0.1:${port}:6379`, '--entrypoint', 'redis-server', 'inker:wp15-test', '--bind', '0.0.0.0', '--requirepass', 'inker_redis', '--save', '', '--appendonly', 'no');
+    docker('run', '-d', '--name', name, '-p', `127.0.0.1:${port}:6379`, '--entrypoint', 'redis-server', image, '--bind', '0.0.0.0', '--requirepass', 'inker_redis', '--save', '', '--appendonly', 'no');
+    progress('Redis readiness'); await until(() => tcpReady(port));
     progress('Redis monitor');
     const redis = new Redis({ host: '127.0.0.1', port, password: 'inker_redis', maxRetriesPerRequest: 1, connectTimeout: 1000 }); redis.on('error', () => {});
     monitor = await redis.monitor(); monitor.on('monitor', (_time, args) => { redisLogs += JSON.stringify(args); });

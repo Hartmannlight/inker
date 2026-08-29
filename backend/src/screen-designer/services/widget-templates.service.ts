@@ -4,6 +4,7 @@ import {
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
+import { isDeepStrictEqual } from 'node:util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CustomWidgetsService } from '../../custom-widgets/custom-widgets.service';
 import { PluginsService } from '../../plugins/plugins.service';
@@ -443,16 +444,16 @@ export class WidgetTemplatesService implements OnModuleInit {
         // Keep built-in templates current without touching any configured
         // widget instances, which store their own config snapshots.
         if (template.name === 'daysuntil') {
-          await this.prisma.widgetTemplate.update({
-            where: { name: template.name },
-            data: {
-              label: template.label,
-              description: template.description,
-              defaultConfig: template.defaultConfig,
-              minWidth: template.minWidth,
-              minHeight: template.minHeight,
-            },
-          });
+          const data = {
+            label: template.label,
+            description: template.description,
+            defaultConfig: template.defaultConfig,
+            minWidth: template.minWidth,
+            minHeight: template.minHeight,
+          };
+          const changed = (Object.keys(data) as Array<keyof typeof data>)
+            .some(key => !isDeepStrictEqual(existing[key], data[key]));
+          if (changed) await this.prisma.widgetTemplate.update({ where: { name: template.name }, data });
         }
         skipped++;
       }

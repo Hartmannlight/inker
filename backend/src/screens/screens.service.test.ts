@@ -3,6 +3,12 @@ import { NotFoundException } from '@nestjs/common';
 import { ScreensService } from './screens.service';
 import { createMockPrisma, MockPrisma } from '../test/mocks/prisma.mock';
 import { createMock, MockFn } from '../test/mocks/helpers';
+import type { Screen } from '@prisma/client';
+
+const screenFixture = (values: Partial<Screen> = {}): Screen => ({
+  id: 1, name: 'Screen', description: null, imageUrl: '/uploads/fixture.png', thumbnailUrl: null,
+  modelId: null, isPublic: false, createdAt: new Date(0), updatedAt: new Date(0), ...values,
+});
 
 describe('ScreensService', () => {
   let service: ScreensService;
@@ -39,7 +45,7 @@ describe('ScreensService', () => {
   describe('create()', () => {
     it('should create a screen and return it', async () => {
       const dto = { name: 'Test Screen', description: 'desc', width: 800, height: 480 };
-      const created = { id: 1, ...dto };
+      const created = { ...screenFixture(), ...dto };
       mockPrisma.screen.create.mockResolvedValue(created);
 
       const result = await service.create(dto as any);
@@ -52,7 +58,7 @@ describe('ScreensService', () => {
 
   describe('findOne()', () => {
     it('should return screen when found', async () => {
-      const screen = { id: 1, name: 'Screen', playlistItems: [] };
+      const screen = { ...screenFixture(), playlistItems: [] };
       mockPrisma.screen.findUnique.mockResolvedValue(screen);
 
       const result = await service.findOne(1);
@@ -77,7 +83,7 @@ describe('ScreensService', () => {
 
     it('should update screen and notify', async () => {
       mockPrisma.screen.findUnique.mockResolvedValue({ id: 1 });
-      const updated = { id: 1, name: 'Updated' };
+      const updated = screenFixture({ name: 'Updated' });
       mockPrisma.screen.update.mockResolvedValue(updated);
 
       const result = await service.update(1, { name: 'Updated' } as any);

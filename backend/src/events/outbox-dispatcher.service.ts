@@ -26,6 +26,7 @@ import { TimerWorkerService } from '../timers/timer-worker.service';
 import { TIMER_DUE } from '../timers/timer-scheduling';
 import { RemoteWorkerService } from '../federation/remote-worker.service';
 import { REMOTE_SYNC } from '../federation/remote-job';
+import { sqliteWrite } from '../sources/source-writes';
 
 @Injectable()
 export class OutboxDispatcher
@@ -107,8 +108,8 @@ export class OutboxDispatcher
         const filter = this.queueFilter(name);
         const event = name === 'source-refresh' ? await this.sources.claim(this.owner)
           : name === 'remote-sync' ? await this.remotes.claim(this.owner)
-          : await this.store.claim(this.owner, new Date(), filter,
-            { where: filter, limit: QUEUE_POLICIES[name].globalConcurrency });
+          : await sqliteWrite(this.prisma, () => this.store.claim(this.owner, new Date(), filter,
+            { where: filter, limit: QUEUE_POLICIES[name].globalConcurrency }));
         if (!event) break;
         this.counts.claimed++;
         try {
@@ -118,7 +119,7 @@ export class OutboxDispatcher
             claimToken: event.claimToken!,
           }, name);
         } catch {
-          await this.store.fail(event, 'OUTBOX_TRANSPORT_FAILED');
+          await sqliteWrite(this.prisma, () => this.store.fail(event, 'OUTBOX_TRANSPORT_FAILED'));
           this.logFailure(outboxCorrelation(event).correlationId, 'OUTBOX_REDIS_UNAVAILABLE');
           break; // Do not hot-loop through the entire backlog during an outage.
         }
@@ -168,40 +169,42 @@ export class OutboxDispatcher
         if (event.eventType === REMOTE_SYNC) {
           const remoteOutcome = await this.remotes.execute(event, signal);
           if (remoteOutcome === 'failed') { this.counts.failed++; return; }
-          outcome = await this.acknowledge(event);
+          outcome = await this.acknowledge(event, signal);
           return;
         }
         if (event.eventType === TIMER_DUE) {
           await this.timers.completeDue(event, signal);
           signal.throwIfAborted();
-          outcome = await this.acknowledge(event);
+          outcome = await this.acknowledge(event, signal);
           return;
         }
         if (event.eventType === SOURCE_REFRESH) {
           const sourceOutcome = await this.sources.execute(event, signal);
           if (sourceOutcome === 'failed') { this.counts.failed++; return; }
-          outcome = await this.acknowledge(event);
+          outcome = await this.acknowledge(event, signal);
           return;
         }
         if (event.eventType === RENDER_REQUESTED) {
           await this.renderCache.render(event, undefined, signal);
           signal.throwIfAborted();
-          outcome = await this.acknowledge(event);
+          outcome = await this.acknowledge(event, signal);
           return;
         }
         if (event.eventType === MAINTENANCE_DUE) {
           await this.maintenance.execute(event, signal);
           signal.throwIfAborted();
-          outcome = await this.acknowledge(event);
+          outcome = await this.acknowledge(event, signal);
           return;
         }
         if (event.eventType === PLAYBACK_DUE) {
           await this.playback.advanceDue(event, signal);
           signal.throwIfAborted();
-          outcome = await this.acknowledge(event);
+          outcome = await this.acknowledge(event, signal);
           return;
         }
-        const prepared = await this.store.prepare(event);
+        signal.throwIfAborted();
+        const prepared = await this.store.prepare(event, signal);
+        signal.throwIfAborted();
         if (!prepared.duplicate) {
           await this.redis.publish();
           const deadline = Date.now() + POLICY.dispatchTimeoutMs;
@@ -215,7 +218,7 @@ export class OutboxDispatcher
             await new Promise((resolve) => setTimeout(resolve, 25));
           }
         }
-        outcome = await this.acknowledge(event);
+        outcome = await this.acknowledge(event, signal);
       } catch (error) {
         if (event.eventType === TIMER_DUE && error instanceof Error && error.message === 'TIMER_NOT_DUE') {
           if (!await this.timers.deferEarly(event)) { this.counts.stale++; outcome = 'stale'; }
@@ -226,7 +229,7 @@ export class OutboxDispatcher
           error instanceof Error && error.message === 'OUTBOX_INVALID_PAYLOAD'
             ? 'OUTBOX_INVALID_PAYLOAD'
             : 'OUTBOX_TRANSPORT_FAILED';
-        if (!await this.store.fail(event, code)) outcome = 'stale';
+        if (!await sqliteWrite(this.prisma, () => this.store.fail(event, code))) outcome = 'stale';
         this.counts.failed++;
       } finally {
         const durationMs = Math.min(86_400_000, Math.max(0, performance.now() - started));
@@ -240,8 +243,11 @@ export class OutboxDispatcher
       }
     });
   }
-  private async acknowledge(event: OutboxEvent): Promise<JobOutcome> {
-    if (await this.store.ack(event)) { this.counts.delivered++; return 'success'; }
+  private async acknowledge(event: OutboxEvent, signal: AbortSignal): Promise<JobOutcome> {
+    if (await sqliteWrite(this.prisma, async () => {
+      signal.throwIfAborted();
+      return this.store.ack(event);
+    })) { this.counts.delivered++; return 'success'; }
     this.counts.stale++;
     return 'stale';
   }

@@ -175,7 +175,7 @@ describe("WP-18 persistent playback", () => {
         attempts: { increment: 1 },
         claimOwner: "playback-test",
         claimToken: randomUUID(),
-        claimUntil: new Date(now + 30_000),
+        claimUntil: new Date(Date.now() + 30_000),
       },
     });
   }
@@ -372,7 +372,7 @@ describe("WP-18 persistent playback", () => {
         status: "processing",
         claimOwner: "duplicate",
         claimToken: randomUUID(),
-        claimUntil: new Date(now + 30_000),
+        claimUntil: new Date(Date.now() + 30_000),
       },
     });
     await playback.advanceDue(duplicate);
@@ -468,7 +468,35 @@ describe("WP-18 persistent playback", () => {
       finally { clearTimeout(timer); }
     } finally { release(); }
     expect(await snapshot()).toEqual(before);
+    await p.outboxEvent.update({ where: { eventId: event.eventId }, data: {
+      claimUntil: new Date(Date.now() + 25),
+    } });
+    const beforeLease = await snapshot();
+    let leaseEntered!: () => void, leaseRelease!: () => void;
+    const leaseInside = new Promise<void>(resolve => { leaseEntered = resolve; });
+    const leaseHeld = new Promise<void>(resolve => { leaseRelease = resolve; });
+    class LeaseHeldPublicationPersistence extends PublicationPersistenceService {
+      override async setDesiredRevision(...args: Parameters<PublicationPersistenceService['setDesiredRevision']>) {
+        const result = await super.setDesiredRevision(...args);
+        leaseEntered();
+        await leaseHeld;
+        return result;
+      }
+    }
+    const leaseDelayed = new PlaybackService(p as PrismaService,
+      new LeaseHeldPublicationPersistence(p as PrismaService), { now: () => now });
+    const leasePending = leaseDelayed.advanceDue(event);
+    try {
+      await leaseInside;
+      await new Promise(resolve => setTimeout(resolve, 35));
+      leaseRelease();
+      await expect(leasePending).rejects.toThrow('OUTBOX_CLAIM_EXPIRED');
+    } finally { leaseRelease(); }
+    expect(await snapshot()).toEqual(beforeLease);
     // The durable claim remains retryable after rollback.
+    await p.outboxEvent.update({ where: { eventId: event.eventId }, data: {
+      claimUntil: new Date(Date.now() + 30_000),
+    } });
     await playback.advanceDue(event);
     expect((await playback.read(deviceId)).version).toBe(2);
   });
@@ -478,12 +506,12 @@ describe("WP-18 persistent playback", () => {
     const event = await due();
     const store = new OutboxStore(p as PrismaService);
     // Domain state survives before dispatch; only the lease expires.
-    now += 30_001;
+    await p.outboxEvent.update({ where: { eventId: event.eventId }, data: { claimUntil: new Date(0) } });
     await p.outboxEvent.updateMany({
       where: { eventId: { not: event.eventId }, status: "pending" },
-      data: { availableAt: new Date(now + 100_000) },
+      data: { availableAt: new Date(Date.now() + 100_000) },
     });
-    const recovered = await store.claim("restarted", new Date(now));
+    const recovered = await store.claim("restarted");
     expect(recovered?.eventId).toBe(event.eventId);
     await expect(playback.advanceDue(event)).rejects.toThrow(
       "OUTBOX_CLAIM_EXPIRED",
@@ -492,8 +520,8 @@ describe("WP-18 persistent playback", () => {
     const state = await playback.read(deviceId);
     await playback.advanceDue(recovered!); // lost ack
     expect((await playback.read(deviceId)).state).toEqual(state.state);
-    expect(await store.ack(event, new Date(now))).toBe(false);
-    expect(await store.ack(recovered!, new Date(now))).toBe(true);
+    expect(await store.ack(event)).toBe(false);
+    expect(await store.ack(recovered!)).toBe(true);
   });
   test("A to B to A is monotonic, while playback version and publication revision remain distinct", async () => {
     const a = await execute();
