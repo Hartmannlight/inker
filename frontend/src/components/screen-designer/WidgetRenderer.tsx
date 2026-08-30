@@ -759,15 +759,12 @@ function QRCodeWidget({ config }: { config: Record<string, unknown> }) {
 }
 
 /**
- * BatteryWidget - Displays battery level preview
+ * BatteryWidget - Preview without inventing device telemetry
  */
 function BatteryWidget({ config }: { config: Record<string, unknown> }) {
   const showPercentage = config.showPercentage as boolean;
   const showIcon = config.showIcon as boolean;
   const fontSize = (config.fontSize as number) || 16;
-
-  // Preview value
-  const batteryLevel = 85;
 
   return (
     <div
@@ -783,17 +780,9 @@ function BatteryWidget({ config }: { config: Record<string, unknown> }) {
         >
           <rect x="1" y="6" width="18" height="12" rx="2" strokeWidth="2" />
           <rect x="19" y="9" width="4" height="6" rx="1" strokeWidth="2" />
-          <rect
-            x="3"
-            y="8"
-            width={`${(batteryLevel / 100) * 14}`}
-            height="8"
-            fill="currentColor"
-            rx="1"
-          />
         </svg>
       )}
-      {showPercentage && <span>{batteryLevel}%</span>}
+      {showPercentage && <span>External power</span>}
     </div>
   );
 }

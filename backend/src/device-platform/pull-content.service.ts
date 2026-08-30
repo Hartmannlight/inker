@@ -11,6 +11,7 @@ import { PullLastSeenService } from './pull-last-seen.service';
 import { RenderCacheService } from '../render-cache/render-cache.service';
 import { TimerService } from '../timers/timer.service';
 import { timerFeedResult } from '../timers/timer-feed';
+import { DynamicDesignArtifactService } from './dynamic-design-artifact.service';
 
 type PullDevice = Prisma.DeviceGetPayload<{ include: { profile: true; deliveryPolicy: true } }>;
 
@@ -24,6 +25,7 @@ export class PullContentService {
     private readonly lastSeen: PullLastSeenService,
     @Optional() private readonly cache?: RenderCacheService,
     @Optional() private readonly timers?: TimerService,
+    @Optional() private readonly dynamicDesigns?: DynamicDesignArtifactService,
   ) {}
 
   async read(device: PullDevice, includeTimers = true) {
@@ -38,9 +40,10 @@ export class PullContentService {
     if (!desired) throw new NotFoundException('No published device content');
     const cached = await this.cache?.read(device, desired);
     const revision = cached?.revision ?? desired;
-    // Do not serialize arbitrary snapshot fields, DB entities, URLs or parser diagnostics.
-    const artifacts = cached ? [cached.artifact] : publicationArtifacts(revision);
     const display = configuration.capabilities.display;
+    // Do not serialize arbitrary snapshot fields, DB entities, URLs or parser diagnostics.
+    const dynamicArtifact = await this.dynamicDesigns?.render(device, desired, display);
+    const artifacts = dynamicArtifact ? [dynamicArtifact] : cached ? [cached.artifact] : publicationArtifacts(revision);
     const candidates = artifacts.filter((artifact) =>
       display.mimeTypes.includes(artifact.mimeType) && display.width === artifact.width && display.height === artifact.height &&
       display.colorSpace === artifact.colorSpace && display.bitDepth === artifact.bitDepth && display.rotation === artifact.rotation);

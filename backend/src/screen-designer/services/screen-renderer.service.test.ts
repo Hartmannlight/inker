@@ -105,16 +105,30 @@ describe('legacy renderer persisted-input boundary', () => {
     }
   });
 
-  it('never fetches weather or GitHub data, including both widget render paths', async () => {
-    const fetch = spyOn(globalThis, 'fetch');
+  it('fetches weather and GitHub only from their fixed public capture connectors', async () => {
+    const fetch = spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('https://api.open-meteo.com/v1/forecast?')) return new Response(JSON.stringify({
+        current: { temperature_2m: 21, weather_code: 1, relative_humidity_2m: 55, wind_speed_10m: 8 },
+        daily: { time: ['2026-08-30'], temperature_2m_max: [23], weather_code: [1] },
+      }), { status: 200 });
+      if (url.startsWith('https://api.github.com/repos/')) return new Response(JSON.stringify({
+        stargazers_count: 42, full_name: 'private-owner/private-repo',
+      }), { status: 200 });
+      throw new Error(`Unexpected connector URL: ${url}`);
+    });
     try {
       for (const name of ['weather', 'github']) {
-        await unavailable(internal.renderWidget(widget(name, {})));
-        await unavailable(internal.generateWidgetHtml(widget(name, {})));
-        await unavailable(service.renderDesignAsHtml(design([widget(name, {})])));
+        expect((await internal.renderWidget(widget(name, {}))).length).toBeGreaterThan(0);
+        expect(await internal.generateWidgetHtml(widget(name, {}))).toContain(name === 'weather' ? '21' : '42');
+        expect((await service.renderDesignAsHtml(design([widget(name, {})]))).length).toBeGreaterThan(0);
       }
-      await unavailable(service.getGitHubStars('private-owner', 'private-repo'));
-      expect(fetch).not.toHaveBeenCalled();
+      expect(await service.getGitHubStars('private-owner', 'private-repo')).toEqual({ stars: 42, name: 'private-owner/private-repo' });
+      expect(fetch).toHaveBeenCalled();
+      for (const [input] of fetch.mock.calls) {
+        expect(String(input).startsWith('https://api.open-meteo.com/v1/forecast?') ||
+          String(input).startsWith('https://api.github.com/repos/')).toBe(true);
+      }
     } finally { fetch.mockRestore(); }
   });
 

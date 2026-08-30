@@ -29,7 +29,35 @@ export type PublicationContent = (
   | { schemaVersion: 1; fixtureArtifacts: string[] }
   | { schemaVersion: 1; image: { png: string; width: number; height: number; sha256: string } }
   | { schemaVersion: 2; feed: FederationPublicationFeed; artifactBytes: string[] }
-) & { sourceSnapshot?: PublishedSourceReference; allowedActions?: AllowedAction[] };
+) & {
+  sourceSnapshot?: PublishedSourceReference;
+  allowedActions?: AllowedAction[];
+  clientOverlay?: { kind: 'clock'; timezone: string }; // read compatibility for the short-lived ESP overlay revision
+  dynamicDesign?: { screenDesignId: number; expectedUpdatedAt: string; refreshSeconds: number };
+};
+
+export function publicationDynamicDesign(revision: PublicationRevision): PublicationContent['dynamicDesign'] {
+  const content = revision.content;
+  if (!content || typeof content !== 'object' || Array.isArray(content) ||
+    sha256(canonicalJson(content)) !== revision.contentHash) return undefined;
+  const value = content.dynamicDesign;
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    Object.keys(value).some(key => !['screenDesignId', 'expectedUpdatedAt', 'refreshSeconds'].includes(key)) ||
+    !Number.isSafeInteger(value.screenDesignId) || Number(value.screenDesignId) < 1 || value.refreshSeconds !== 60 ||
+    typeof value.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value.expectedUpdatedAt)) return undefined;
+  return { screenDesignId: Number(value.screenDesignId), expectedUpdatedAt: value.expectedUpdatedAt, refreshSeconds: 60 };
+}
+
+export function publicationClientOverlay(revision: PublicationRevision): { kind: 'clock'; timezone: string } | undefined {
+  const content = revision.content;
+  if (!content || typeof content !== 'object' || Array.isArray(content) ||
+    sha256(canonicalJson(content)) !== revision.contentHash) return undefined;
+  const overlay = content.clientOverlay;
+  if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay) ||
+    Object.keys(overlay).some(key => !['kind', 'timezone'].includes(key)) || overlay.kind !== 'clock' ||
+    typeof overlay.timezone !== 'string' || !/^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(overlay.timezone)) return undefined;
+  return { kind: 'clock', timezone: overlay.timezone };
+}
 
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 

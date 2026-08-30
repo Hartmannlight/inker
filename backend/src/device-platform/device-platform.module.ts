@@ -21,14 +21,21 @@ import { WebSocketTelemetryService } from './websocket-telemetry.service';
 import { RenderCacheModule } from '../render-cache/render-cache.module';
 import { TimerCoreModule } from '../timers/timer-core.module';
 import { TimersController } from './timers.controller';
+import { PullTelemetryService } from './pull-telemetry.service';
+import { PullArtifactLeaseService } from './pull-artifact-lease.service';
+import { ScreenDesignerModule } from '../screen-designer/screen-designer.module';
+import { DynamicDesignArtifactService } from './dynamic-design-artifact.service';
 
 @Module({
-  imports: [PrismaModule, DiscoveryModule, RenderCacheModule, TimerCoreModule],
+  imports: [PrismaModule, DiscoveryModule, RenderCacheModule, TimerCoreModule, ScreenDesignerModule],
   controllers: [WebDisplaysController, PullContentController, TimersController],
   providers: [
     PullContentService,
     PullDeviceAuthService,
     PullLastSeenService,
+    PullTelemetryService,
+    PullArtifactLeaseService,
+    DynamicDesignArtifactService,
     WebSocketTelemetryService,
     PresentationService,
     WebDisplayAuthService,

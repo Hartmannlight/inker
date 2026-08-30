@@ -213,7 +213,9 @@ export const BUILTIN_DELIVERY_POLICIES: readonly DeliveryPolicy[] = [
     protocolVersion: '1.0',
     policyId: BUILTIN_POLICY_IDS.CONNECTED_EMBEDDED,
     mode: 'connected',
-    pollIntervalSeconds: 30,
+    // The ESP32 reference client currently uses HTTP pull as its delivery path.
+    // Keep this aligned with the shortest supported hardware-test playlist slot.
+    pollIntervalSeconds: 5,
     heartbeatSeconds: 30,
     reconnectBackoffSeconds: 5,
     telemetryIntervalSeconds: 60,

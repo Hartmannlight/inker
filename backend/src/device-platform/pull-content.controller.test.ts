@@ -25,6 +25,8 @@ import { PullLastSeenService } from './pull-last-seen.service';
 import { RegisterTransportAdapter } from './device-extension.contracts';
 import { TimersController } from './timers.controller';
 import { TimerService } from '../timers/timer.service';
+import { PullTelemetryService } from './pull-telemetry.service';
+import { PullArtifactLeaseService } from './pull-artifact-lease.service';
 
 @Injectable()
 @RegisterTransportAdapter()
@@ -73,6 +75,7 @@ describe('versioned device pull HTTP boundary', () => {
       deviceCredential: { findUnique: mock(async ({ where }: any) => where.tokenHash === credential?.tokenHash ? credential : null) },
       device: {
         findUnique: mock(async ({ where }: any) => where.apiKey === apiKey ? device : null),
+        update: mock(async ({ data }: any) => Object.assign(device, data)),
         updateMany: mock(async ({ data }: any) => { device.lastSeenAt = data.lastSeenAt; return { count: 1 }; }),
       },
       devicePublicationState: { findUnique: mock(async () => revision ? { desiredRevision: revision } : null) },
@@ -83,7 +86,7 @@ describe('versioned device pull HTTP boundary', () => {
     log = spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const module = await Test.createTestingModule({
       imports: [DiscoveryModule], controllers: [PullContentController, TimersController],
-      providers: [PullContentService, PullDeviceAuthService, PullLastSeenService, ProfileResolverService,
+      providers: [PullContentService, PullDeviceAuthService, PullLastSeenService, PullTelemetryService, PullArtifactLeaseService, ProfileResolverService,
         DeviceConfigurationService, HttpPullTransportAdapter, FixturePullAdapter, TransportAdapterRegistry,
         { provide: PrismaService, useValue: prisma },
         { provide: TimerService, useValue: timers },

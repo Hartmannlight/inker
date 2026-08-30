@@ -241,7 +241,7 @@ export function PlaylistForm() {
     // With touch advance, a duration of 0 is valid and means "stay until the next tap".
     const parsedDuration = formData.advanceOnTap
       ? Math.max(0, Number(durationInput) || 0)
-      : Math.max(60, Number(durationInput) || 60);
+      : Math.max(1, Number(durationInput) || 60);
     const newScreen: PlaylistScreen = {
       screenId: selectedScreenId,
       duration: parsedDuration,
@@ -303,10 +303,10 @@ export function PlaylistForm() {
         i === index
           ? {
               ...screen,
-              // Touch playlists allow 0 (= stay until tap); others enforce a 60s minimum.
+              // Touch playlists allow 0 (= stay until tap); timed playlists allow 1 second or more.
               duration: prev.advanceOnTap
                 ? Math.max(0, Number(screen.duration) || 0)
-                : Math.max(60, screen.duration || 60),
+                : Math.max(1, screen.duration || 60),
             }
           : screen
       ),
@@ -485,8 +485,8 @@ export function PlaylistForm() {
                       type="number"
                       value={durationInput}
                       onChange={(e) => setDurationInput(e.target.value)}
-                      onBlur={() => setDurationInput(String(formData.advanceOnTap ? Math.max(0, Number(durationInput) || 0) : Math.max(60, Number(durationInput) || 60)))}
-                      min={60}
+                      onBlur={() => setDurationInput(String(formData.advanceOnTap ? Math.max(0, Number(durationInput) || 0) : Math.max(1, Number(durationInput) || 60)))}
+                      min={formData.advanceOnTap ? 0 : 1}
                     />
                   </div>
                   <div className="flex items-end">

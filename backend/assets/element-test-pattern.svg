@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="320" viewBox="0 0 400 320">
+  <rect width="400" height="320" fill="white"/>
+  <rect x="4" y="4" width="392" height="312" rx="20" fill="none" stroke="black" stroke-width="8"/>
+  <circle cx="100" cy="110" r="58" fill="black"/>
+  <circle cx="100" cy="110" r="30" fill="white"/>
+  <path d="M200 52h145v32H200zm0 58h110v24H200zm0 48h145v24H200z" fill="black"/>
+  <path d="M52 230h296" stroke="black" stroke-width="6"/>
+  <text x="200" y="281" text-anchor="middle" font-family="sans-serif" font-size="31" font-weight="700">INKER IMAGE TEST</text>
+</svg>

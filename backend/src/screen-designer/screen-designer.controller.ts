@@ -57,6 +57,7 @@ import { ScreenDesignerService } from './screen-designer.service';
 import { WidgetTemplatesService } from './services/widget-templates.service';
 import { ScreenRendererService } from './services/screen-renderer.service';
 import { matchesIfNoneMatch } from '../device-platform/pull-content.controller';
+import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateScreenDesignDto,
   UpdateScreenDesignDto,
@@ -74,6 +75,7 @@ export class ScreenDesignerController {
     private readonly screenDesignerService: ScreenDesignerService,
     private readonly widgetTemplatesService: WidgetTemplatesService,
     private readonly screenRendererService: ScreenRendererService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // ========================
@@ -304,15 +306,30 @@ export class ScreenDesignerController {
   @ApiParam({ name: 'id', description: 'Screen design ID' })
   @ApiResponse({ status: 201, description: 'Capture rendered and saved' })
   @ApiResponse({ status: 404, description: 'Screen design not found' })
-  async captureForDevice(@Param('id', ParseIntPipe) id: number) {
+  @ApiQuery({ name: 'deviceId', required: false, type: Number, description: 'Use current telemetry and identity from this target device' })
+  async captureForDevice(@Param('id', ParseIntPipe) id: number, @Query('deviceId') deviceId?: string) {
     // Verify the screen design exists
     await this.screenDesignerService.getScreenDesign(id);
 
     // Render the design using Puppeteer with full e-ink processing
     // 'device' mode applies: dithering + inversion for TRMNL
+    let deviceContext;
+    if (deviceId !== undefined) {
+      const parsedDeviceId = Number(deviceId);
+      if (!Number.isSafeInteger(parsedDeviceId) || parsedDeviceId < 1) throw new BadRequestException('Invalid deviceId');
+      const device = await this.prisma.device.findUnique({ where: { id: parsedDeviceId } });
+      if (!device?.isActive) throw new BadRequestException('Target device is unavailable');
+      deviceContext = {
+        ...(device.battery !== null ? { battery: device.battery } : {}),
+        ...(device.wifi !== null ? { wifi: device.wifi } : {}),
+        deviceName: device.name,
+        ...(device.firmwareVersion ? { firmwareVersion: device.firmwareVersion } : {}),
+        ...(device.macAddress ? { macAddress: device.macAddress } : {}),
+      };
+    }
     const imageBuffer = await this.screenRendererService.renderScreenDesign(
       id,
-      undefined, // No device context needed for capture
+      deviceContext,
       'device',  // Full e-ink processing
     );
 

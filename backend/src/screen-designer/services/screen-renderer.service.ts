@@ -17,7 +17,8 @@ import type { Sharp, FitEnum } from 'sharp';
 // Handle both ESM and CJS imports for Bun compatibility
 const sharp = (sharpModule as any).default || sharpModule;
 import puppeteer, { Browser, Page } from 'puppeteer';
-import QRCode from 'qrcode';
+import * as QRCodeModule from 'qrcode';
+const QRCode = (QRCodeModule as any).default || QRCodeModule;
 import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
 import type { ScreenDesign, ScreenWidget, WidgetTemplate } from '@prisma/client';
 import { calculateDaysUntil } from './days-until.util';
@@ -932,14 +933,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
   }
 
-  /**
-   * Reject legacy weather reads without a persisted snapshot binding
-   */
   private async fetchWeatherData(
-    _latitude: number,
-    _longitude: number,
-    _forecastDay: number,
-    _forecastTime: string,
+    latitude: number,
+    longitude: number,
+    forecastDay: number,
+    forecastTime: string,
   ): Promise<{
     temperature: number;
     weatherCode: number;
@@ -947,8 +945,32 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     windSpeed: number;
     dayName: string;
   } | null> {
-    // Legacy provider widgets have no persisted SourceSnapshot binding.
-    throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
+      !Number.isFinite(longitude) || longitude < -180 || longitude > 180 ||
+      !Number.isSafeInteger(forecastDay) || forecastDay < 0 || forecastDay > 14) return null;
+    const params = new URLSearchParams({
+      latitude: String(latitude), longitude: String(longitude), timezone: 'auto',
+      current: 'temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m',
+      daily: 'temperature_2m_max,weather_code', forecast_days: String(Math.max(1, forecastDay + 1)),
+    });
+    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
+      signal: AbortSignal.timeout(8_000), headers: { Accept: 'application/json', 'User-Agent': 'Inker/1.0' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as Record<string, any>;
+    const current = data.current;
+    const daily = data.daily;
+    const useForecast = forecastDay > 0 || forecastTime !== 'current';
+    const temperature = useForecast ? daily?.temperature_2m_max?.[forecastDay] : current?.temperature_2m;
+    const weatherCode = useForecast ? daily?.weather_code?.[forecastDay] : current?.weather_code;
+    if (!Number.isFinite(temperature) || !Number.isFinite(weatherCode)) return null;
+    const date = daily?.time?.[forecastDay] ? new Date(`${daily.time[forecastDay]}T12:00:00Z`) : new Date();
+    return {
+      temperature: Math.round(Number(temperature)), weatherCode: Number(weatherCode),
+      humidity: Number.isFinite(current?.relative_humidity_2m) ? Number(current.relative_humidity_2m) : 0,
+      windSpeed: Number.isFinite(current?.wind_speed_10m) ? Math.round(Number(current.wind_speed_10m)) : 0,
+      dayName: new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(date),
+    };
   }
 
   /**
@@ -1152,8 +1174,8 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
     // Use real battery data from device context, or show placeholder
     const battery = deviceContext?.battery;
-    const percentage = battery !== undefined ? Math.round(battery) : 85; // Default 85 for preview
-    const percentageText = battery !== undefined ? `${percentage}%` : '--%';
+    const percentage = battery !== undefined ? Math.round(battery) : 0;
+    const percentageText = battery !== undefined ? `${percentage}%` : 'External power';
 
     // Calculate icon size based on font size
     const iconSize = Math.max(24, fontSize * 1.2);
@@ -1349,7 +1371,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
     // Use real WiFi RSSI from device context, or show placeholder
     const rssi = deviceContext?.wifi;
-    const rssiText = rssi !== undefined ? `${rssi} dBm` : '-- dBm';
+    const rssiText = rssi !== undefined ? `${Math.round(rssi)} dBm` : 'Signal unavailable';
 
     // Calculate icon size based on font size
     const iconSize = Math.max(24, fontSize * 1.4);
@@ -1578,15 +1600,19 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     return this.fetchGitHubStars(owner, repo);
   }
 
-  /**
-   * Reject legacy GitHub reads without a persisted snapshot binding
-   */
   private async fetchGitHubStars(
-    _owner: string,
-    _repo: string,
+    owner: string,
+    repo: string,
   ): Promise<{ stars: number; name: string } | null> {
-    // Provider credentials and refreshes belong exclusively to connector workers.
-    throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+    if (!/^[A-Za-z0-9_.-]{1,100}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo)) return null;
+    const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+      signal: AbortSignal.timeout(8_000),
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Inker/1.0' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as Record<string, unknown>;
+    if (!Number.isSafeInteger(data.stargazers_count) || typeof data.full_name !== 'string') return null;
+    return { stars: Number(data.stargazers_count), name: data.full_name };
   }
 
   /**
@@ -2993,14 +3019,15 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const content = config.content || 'https://example.com';
     const qrSize = config.size || Math.min(size - 20, 100);
     try {
-      const qrDataUrl = await QRCode.toDataURL(content, {
+      const qrSvg = await QRCode.toString(content, {
+        type: 'svg',
         width: qrSize,
         margin: 1,
         errorCorrectionLevel: 'M',
         color: { dark: '#000000', light: '#ffffff' },
       });
       return `<div style="display: flex; flex-direction: column; align-items: center;">
-        <img src="${qrDataUrl}" alt="QR" style="width: ${qrSize}px; height: ${qrSize}px;" />
+        <div role="img" aria-label="QR code" style="width:${qrSize}px;height:${qrSize}px">${qrSvg}</div>
         <div style="font-size: 10px; color: #888; margin-top: 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis;">${this.escapeHtml(content.length > 30 ? content.substring(0, 30) + '...' : content)}</div>
       </div>`;
     } catch {
@@ -3012,7 +3039,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private generateBatteryContent(config: Record<string, any>, deviceContext?: DeviceContext): string {
     const showPercentage = config.showPercentage as boolean;
     const showIcon = config.showIcon as boolean;
-    const batteryLevel = deviceContext?.battery ?? 85;
+    const batteryLevel = deviceContext?.battery;
+
+    if (batteryLevel === undefined) {
+      return '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">⚡</span><span>External power</span></div>';
+    }
 
     let html = '<div style="display: flex; align-items: center; gap: 8px;">';
     if (showIcon) {
@@ -3039,7 +3070,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private generateWifiContent(config: Record<string, any>, deviceContext?: DeviceContext): string {
     const showStrength = config.showStrength !== false;
     const showIcon = config.showIcon !== false;
-    const signalStrength = deviceContext?.wifi ?? -55;
+    const signalStrength = deviceContext?.wifi;
 
     let html = '<div style="display: flex; align-items: center; gap: 8px;">';
     if (showIcon) {
@@ -3051,7 +3082,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       </svg>`;
     }
     if (showStrength) {
-      html += `<span>${signalStrength} dBm</span>`;
+      html += `<span>${signalStrength === undefined ? 'Signal unavailable' : `${Math.round(signalStrength)} dBm`}</span>`;
     }
     html += '</div>';
     return html;
@@ -3068,9 +3099,9 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const showFirmware = config.showFirmware !== false;
     const showMac = config.showMac as boolean;
 
-    const deviceName = deviceContext?.deviceName || 'TRMNL Device';
-    const firmware = deviceContext?.firmwareVersion || 'v1.0.0';
-    const mac = deviceContext?.macAddress || 'AA:BB:CC:DD:EE:FF';
+    const deviceName = deviceContext?.deviceName || 'Device unavailable';
+    const firmware = deviceContext?.firmwareVersion || 'unknown';
+    const mac = deviceContext?.macAddress || 'not reported';
 
     let html = '<div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">';
     if (showName) html += `<div style="font-weight: bold;">${this.escapeHtml(deviceName)}</div>`;

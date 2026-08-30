@@ -212,7 +212,7 @@ export class PublishService {
     const id = isDesign ? draft.screenDesignId : draft.screenId;
     const expectedUpdatedAt = draft.expectedUpdatedAt;
     const design = isDesign
-      ? await this.prisma.screenDesign.findUnique({ where: { id }, select: { updatedAt: true } })
+      ? await this.prisma.screenDesign.findUnique({ where: { id }, select: { updatedAt: true, widgets: { include: { template: true } } } })
       : null;
     const uploaded = isDesign
       ? null
@@ -232,7 +232,11 @@ export class PublishService {
       // Decode and strip metadata; store bounded, self-contained image pixels.
       const { data, info } = await sharp(bytes, { limitInputPixels: 16_777_216, animated: false }).rotate().toColourspace('srgb').png().toBuffer({ resolveWithObject: true });
       if (data.length > 2 * 1024 * 1024) throw new Error();
-      return { ...(imageUrl ? { imageUrl } : {}), content: { schemaVersion: 1, image: { png: data.toString('base64'), width: info.width, height: info.height, sha256: sha256(data) } } };
+      const containsClock = design?.widgets.some(widget => widget.template.name === 'clock') ?? false;
+      const dynamicDesign = containsClock ? { dynamicDesign: {
+        screenDesignId: id, expectedUpdatedAt, refreshSeconds: 60,
+      } } : {};
+      return { ...(imageUrl ? { imageUrl } : {}), content: { schemaVersion: 1, image: { png: data.toString('base64'), width: info.width, height: info.height, sha256: sha256(data) }, ...dynamicDesign } };
     } catch { throw new BadRequestException(isDesign ? 'Design capture unavailable or unsupported' : 'Draft image unavailable or unsupported'); }
   }
 }

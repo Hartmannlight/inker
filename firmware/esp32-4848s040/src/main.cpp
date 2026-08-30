@@ -15,6 +15,7 @@
 
 namespace {
 constexpr char kProfileId[] = "esp32-touch-reference-480x480";
+constexpr char kFirmwareVersion[] = "0.2.0";
 constexpr char kManifestPath[] = "/api/v1/device-content";
 constexpr char kPairingPath[] = "/api/device-enrollments/exchange";
 constexpr char kCachePath[] = "/last-good.png";
@@ -56,7 +57,6 @@ uint32_t refreshSeconds = kDefaultRefreshSeconds;
 uint32_t nextPollAt = 0;
 uint32_t touchStartedAt = 0;
 bool setupTriggered = false;
-
 void showStatus(const String &title, const String &detail = "") {
   display.fillScreen(BLACK);
   display.setTextColor(WHITE);
@@ -254,19 +254,28 @@ int pngDraw(PNGDRAW *line) {
 }
 
 bool displayPng(uint8_t *data, size_t size) {
-  if (png.openRAM(data, size, pngDraw) != PNG_SUCCESS) return false;
+  const int openResult = png.openRAM(data, size, pngDraw);
+  if (openResult != PNG_SUCCESS) {
+    Serial.printf("[inker] PNG open failed: %d\n", openResult);
+    return false;
+  }
   pngWidth = png.getWidth();
   pngHeight = png.getHeight();
+  Serial.printf("[inker] PNG dimensions=%dx%d display=%dx%d\n",
+                pngWidth, pngHeight, display.width(), display.height());
   if (pngWidth != display.width() || pngHeight != display.height()) {
     png.close();
     return false;
   }
   pngFrame = static_cast<uint16_t *>(ps_malloc(static_cast<size_t>(pngWidth) * pngHeight * sizeof(uint16_t)));
   if (!pngFrame) {
+    Serial.printf("[inker] PNG frame allocation failed: free-heap=%u free-psram=%u\n",
+                  ESP.getFreeHeap(), ESP.getFreePsram());
     png.close();
     return false;
   }
   const int result = png.decode(nullptr, 0);
+  Serial.printf("[inker] PNG decoder result=%d\n", result);
   png.close();
   if (result == PNG_SUCCESS) display.draw16bitRGBBitmap(0, 0, pngFrame, pngWidth, pngHeight);
   free(pngFrame);
@@ -297,23 +306,35 @@ String sha256Hex(const uint8_t *data, size_t size) {
 }
 
 bool downloadAndDisplay(const String &artifactUrl, const String &expectedHash, size_t expectedSize) {
-  if (expectedSize == 0 || expectedSize > kMaxImageBytes) return false;
+  if (expectedSize == 0 || expectedSize > kMaxImageBytes) {
+    Serial.printf("[inker] artifact rejected: expected-size=%u\n", static_cast<unsigned>(expectedSize));
+    return false;
+  }
   const String url = artifactUrl.startsWith("http://") || artifactUrl.startsWith("https://")
       ? artifactUrl : config.baseUrl + artifactUrl;
   InkerHttp request;
-  if (!request.begin(url)) return false;
+  if (!request.begin(url)) {
+    Serial.println("[inker] artifact request begin failed");
+    return false;
+  }
   request.http().addHeader("Authorization", "Bearer " + config.credential);
   const int status = request.http().GET();
-  if (status != HTTP_CODE_OK || request.http().getSize() != static_cast<int>(expectedSize)) return false;
+  const int contentLength = request.http().getSize();
+  Serial.printf("[inker] artifact response: HTTP %d length=%d expected=%u\n",
+                status, contentLength, static_cast<unsigned>(expectedSize));
+  if (status != HTTP_CODE_OK || (contentLength >= 0 && contentLength != static_cast<int>(expectedSize))) return false;
 
   auto *buffer = static_cast<uint8_t *>(ps_malloc(expectedSize));
   if (!buffer) return false;
   WiFiClient *stream = request.http().getStreamPtr();
   const size_t received = stream->readBytes(buffer, expectedSize);
   const bool valid = received == expectedSize && sha256Hex(buffer, expectedSize).equalsIgnoreCase(expectedHash);
+  Serial.printf("[inker] artifact received=%u hash-valid=%s\n",
+                static_cast<unsigned>(received), valid ? "yes" : "no");
   bool displayed = false;
   if (valid) {
     displayed = displayPng(buffer, expectedSize);
+    Serial.printf("[inker] PNG decode=%s\n", displayed ? "ok" : "failed");
     if (displayed) {
       File cache = LittleFS.open(kCachePath, "w");
       if (cache) {
@@ -340,8 +361,11 @@ void pollContent() {
   const char *responseHeaders[] = {"ETag", "X-Refresh-After-Seconds"};
   request.http().collectHeaders(responseHeaders, 2);
   request.http().addHeader("Authorization", "Bearer " + config.credential);
+  request.http().addHeader("X-Inker-Wifi-Rssi", String(WiFi.RSSI()));
+  request.http().addHeader("X-Inker-Firmware-Version", kFirmwareVersion);
   if (!config.manifestEtag.isEmpty()) request.http().addHeader("If-None-Match", config.manifestEtag);
   const int status = request.http().GET();
+  Serial.printf("[inker] manifest response: HTTP %d\n", status);
   const String refreshHeader = request.http().header("X-Refresh-After-Seconds");
   uint32_t nextRefresh = refreshHeader.toInt();
   if (nextRefresh == 0) nextRefresh = kDefaultRefreshSeconds;
