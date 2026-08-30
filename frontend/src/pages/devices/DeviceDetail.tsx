@@ -564,12 +564,12 @@ export function DeviceDetail() {
               <h3 className="font-semibold text-text-primary">Single screen</h3>
               <p className="mt-1 text-sm text-text-muted">Select one screen. Inker publishes the current immutable revision and assigns it in one operation.</p>
               <div className="mt-3 space-y-2">
-                {contentChoices.screens.map(screen => <button key={screen.id} type="button" disabled={isAssigningContent} onClick={() => screen.compatibility.kind === 'risky' ? setRiskyScreen(screen) : assignContent({ kind: 'screen', screenId: screen.id, expectedUpdatedAt: screen.updatedAt })} className="block w-full rounded-lg border border-border-light p-3 text-left hover:border-accent disabled:opacity-50">
+                {contentChoices.screens.map(screen => <button key={`${screen.source}-${screen.id}`} type="button" disabled={isAssigningContent} onClick={() => screen.compatibility.kind === 'risky' ? setRiskyScreen(screen) : assignContent({ kind: 'screen', ...(screen.source === 'design' ? { screenDesignId: screen.id } : { screenId: screen.id }), expectedUpdatedAt: screen.updatedAt })} className="block w-full rounded-lg border border-border-light p-3 text-left hover:border-accent disabled:opacity-50">
                   <span className="flex items-center justify-between gap-3"><span className="font-medium text-text-primary">{screen.name}</span><CompatibilityBadge screen={screen} /></span>
                   <span className="mt-1 block text-xs text-text-muted">{screen.width && screen.height ? `${screen.width}×${screen.height} · ` : ''}{screen.compatibility.reason}</span>
                   <span className="sr-only">Single screen</span>
                 </button>)}
-                {contentChoices.screens.length === 0 && <p className="text-sm text-text-muted">No uploaded screens are available.</p>}
+                {contentChoices.screens.length === 0 && <p className="text-sm text-text-muted">No screens are available.</p>}
               </div>
             </section>
             <section>
@@ -594,7 +594,7 @@ export function DeviceDetail() {
           <TargetPreview screen={riskyScreen} target={contentChoices.target} />
           <div className="flex justify-end gap-3">
             <Button variant="outline" onClick={() => setRiskyScreen(null)}>Cancel</Button>
-            <Button isLoading={isAssigningContent} onClick={() => assignContent({ kind: 'screen', screenId: riskyScreen.id, expectedUpdatedAt: riskyScreen.updatedAt })}>Assign after review</Button>
+            <Button isLoading={isAssigningContent} onClick={() => assignContent({ kind: 'screen', ...(riskyScreen.source === 'design' ? { screenDesignId: riskyScreen.id } : { screenId: riskyScreen.id }), expectedUpdatedAt: riskyScreen.updatedAt })}>Assign after review</Button>
           </div>
         </div>}
       </Modal>

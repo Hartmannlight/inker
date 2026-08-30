@@ -47,6 +47,7 @@ frontend/package-lock.json
 # Test coverage
 coverage/
 .nyc_output/
+frontend/test-results/
 
 # Local reference checkouts and temporary recovery artifacts
 /upstream/

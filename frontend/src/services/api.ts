@@ -170,6 +170,7 @@ export interface DeviceEnrollment {
 export type ContentAssignment =
   | { kind: 'none' }
   | { kind: 'screen'; screenId: number; expectedUpdatedAt: string }
+  | { kind: 'screen'; screenDesignId: number; expectedUpdatedAt: string }
   | { kind: 'screen'; publicationRevisionId: string }
   | { kind: 'playlist'; playlistRevisionId: string };
 
@@ -180,7 +181,7 @@ export interface ContentAssignmentChoices {
     playlistRevisionId: string | null;
   };
   target?: { width: number; height: number; renderFormats: Array<'html' | 'png' | 'jpeg' | 'bmp1'>; backgroundColor: string };
-  screens: Array<{ id: number; name: string; updatedAt: string; width: number | null; height: number | null; compatibility: { kind: 'exact' | 'adaptable' | 'risky' | 'unknown'; reason: string } }>;
+  screens: Array<{ id: number; name: string; source: 'upload' | 'design'; updatedAt: string; width: number | null; height: number | null; compatibility: { kind: 'exact' | 'adaptable' | 'risky' | 'unknown'; reason: string } }>;
   playlists: Array<{ playlistRevisionId: string; playlistId: number; name: string; revision: number; publishedAt: string }>;
 }
 

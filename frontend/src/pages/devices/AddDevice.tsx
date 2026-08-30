@@ -11,7 +11,7 @@ type DeviceType = 'trmnl' | 'web-display';
 
 const DEVICE_PROFILES = {
   'browser-hd-1920x1080': { label: 'Browser kiosk HD', type: 'web-display' as const, width: 1920, height: 1080 },
-  'esp32-touch-reference-480x480': { label: 'ESP32 touch reference (unverified hardware mapping)', type: 'web-display' as const, width: 480, height: 480 },
+  'esp32-touch-reference-480x480': { label: 'JCZN ESP32-4848S040 4-inch touch', type: 'web-display' as const, width: 480, height: 480 },
   'trmnl-byod-7.5-mono': { label: 'TRMNL BYOD 7.5 monochrome', type: 'trmnl' as const, width: 800, height: 480 },
 };
 
@@ -163,7 +163,7 @@ export function AddDevice() {
                     .map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}
                 </select>
                 {profileId === 'esp32-touch-reference-480x480' && (
-                  <p className="mt-2 text-xs text-status-warning-text">Hardware mapping is a reference assumption until verified on a real device.</p>
+                  <p className="mt-2 text-xs text-text-muted">480×480 RGB565, ST7701 display, GT911 touch, ESP32-S3 N16R8.</p>
                 )}
               </div>
               {deviceType === 'trmnl' && <Input label="MAC address" value={macAddress} onChange={(event) => setMacAddress(event.target.value)} placeholder="AA:BB:CC:DD:EE:FF" required />}

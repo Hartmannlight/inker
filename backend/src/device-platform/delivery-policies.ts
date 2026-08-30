@@ -46,4 +46,21 @@ export class ConnectedDeliveryPolicy extends BaseDeliveryPolicy {
   readonly mode = 'connected' as const;
   readonly dispatchOnRefresh = true;
   protected readonly requiredTransport = 'websocket';
+
+  /**
+   * Connected devices use WebSocket for immediate invalidation but may fall
+   * back to the canonical pull manifest while the socket is unavailable.
+   */
+  pullHints(capabilities: DeviceCapabilities, policy: PolicyContract) {
+    if (!capabilities.transport.modes.includes('http-pull')) {
+      throw new BadRequestException('Connected pull fallback requires http-pull capability');
+    }
+    if (!policy.pollIntervalSeconds) {
+      throw new BadRequestException('Connected pull fallback interval is required');
+    }
+    return {
+      refreshAfterSeconds: Math.max(policy.pollIntervalSeconds, capabilities.energy.recommendedMinRefreshSeconds ?? 1),
+      telemetryIntervalSeconds: Math.max(60, policy.telemetryIntervalSeconds),
+    };
+  }
 }

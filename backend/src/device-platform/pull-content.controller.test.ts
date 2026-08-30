@@ -204,18 +204,17 @@ describe('versioned device pull HTTP boundary', () => {
     expect(png.headers.etag).not.toBe(bmp.headers.etag);
   });
 
-  it('uses the policy-selected discovered adapter and rejects an unavailable pull implementation', async () => {
-    const policy = new SleepyDeliveryPolicy();
-    const select = spyOn(policy, 'selectTransport').mockReturnValue('fixture-transport');
-    const registry = spyOn(app.get(DeliveryPolicyRegistry), 'get').mockReturnValue(policy);
+  it('uses the discovered HTTP pull adapter and rejects an unavailable pull implementation', async () => {
+    const fixture = app.get(FixturePullAdapter);
+    const getAdapter = spyOn(app.get(TransportAdapterRegistry), 'get').mockImplementation((mode) => {
+      expect(mode).toBe('http-pull');
+      return fixture as any;
+    });
     try {
       await get().expect(200);
-      select.mockReturnValue('missing-transport');
+      fixture.pullProtocolVersion = undefined;
       await get().expect(406);
-      select.mockReturnValue('fixture-transport');
-      app.get(FixturePullAdapter).pullProtocolVersion = undefined;
-      await get().expect(406);
-    } finally { registry.mockRestore(); select.mockRestore(); }
+    } finally { getAdapter.mockRestore(); }
   });
 
   it('rejects unsupported format, MIME, dimensions, rotation and transport combinations', async () => {
@@ -307,6 +306,9 @@ describe('versioned device pull HTTP boundary', () => {
   it('does not produce or mutate publications on GET, and has no unpublished fallback', async () => {
     revision = null;
     await get().set('If-None-Match', '*').expect(404);
+    await new Promise(setImmediate);
+    expect(prisma.device.updateMany).toHaveBeenCalledTimes(1);
+    expect(device.lastSeenAt).toBeInstanceOf(Date);
   });
 
   it('rejects unknown fixtures and incompatible publication versions with constant errors', async () => {

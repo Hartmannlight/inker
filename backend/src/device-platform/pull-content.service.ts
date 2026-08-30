@@ -28,6 +28,9 @@ export class PullContentService {
 
   async read(device: PullDevice, includeTimers = true) {
     const { configuration, hints } = this.resolve(device);
+    // A successfully authenticated pull is presence, even while the device has
+    // no content assigned yet (that request intentionally ends in a 404).
+    this.lastSeen.observe(device, hints.telemetryIntervalSeconds);
     const state = await this.prisma.devicePublicationState.findUnique({
       where: { deviceId: device.id }, include: { desiredRevision: true },
     });
@@ -75,7 +78,6 @@ export class PullContentService {
         ...(display.eInk ? { eInk: { fullRefreshRequired: true,
           ...(display.eInk.fullRefreshAfterUpdates ? { fullRefreshAfterUpdates: display.eInk.fullRefreshAfterUpdates } : {}) } } : {}) },
     };
-    this.lastSeen.observe(device, hints.telemetryIntervalSeconds);
     // A weak content validator deliberately excludes out-of-band delivery hints.
     return { manifest, etag: `W/"${contentTag}"`, artifact, artifactEtag,
       deliveryMode: configuration.deliveryPolicy.mode, hints };
@@ -85,7 +87,10 @@ export class PullContentService {
     try {
       const configuration = this.profiles.resolvePersisted(device);
       const policy = this.policies.get(configuration.deliveryPolicy.mode);
-      const adapter = this.transports.get(policy.selectTransport(configuration.capabilities));
+      // Pull is an explicit fallback transport. The policy's primary transport
+      // may still be WebSocket for immediate invalidation.
+      if (!configuration.capabilities.transport.modes.includes('http-pull')) throw new Error();
+      const adapter = this.transports.get('http-pull');
       if (adapter.pullProtocolVersion !== '1.0' || !policy.pullHints) throw new Error();
       return { configuration, hints: policy.pullHints(configuration.capabilities, configuration.deliveryPolicy) };
     } catch {

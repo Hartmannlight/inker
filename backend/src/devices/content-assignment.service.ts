@@ -14,6 +14,7 @@ type Assignment =
   | { kind: 'none' }
   | { kind: 'screen'; publicationRevisionId: string }
   | { kind: 'screen'; screenId: number; expectedUpdatedAt: string }
+  | { kind: 'screen'; screenDesignId: number; expectedUpdatedAt: string }
   | { kind: 'playlist'; playlistRevisionId: string };
 
 function input(value: unknown): { expectedDesiredRevisionId: string | null; expectedPlaybackVersion: number; assignment: Assignment } {
@@ -30,6 +31,9 @@ function input(value: unknown): { expectedDesiredRevisionId: string | null; expe
   if (assignment.kind === 'screen' && Object.keys(assignment).length === 3 && Number.isSafeInteger(assignment.screenId) && Number(assignment.screenId) > 0 &&
     typeof assignment.expectedUpdatedAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(assignment.expectedUpdatedAt) && Number.isFinite(Date.parse(assignment.expectedUpdatedAt)))
     return { expectedDesiredRevisionId: body.expectedDesiredRevisionId, expectedPlaybackVersion: Number(body.expectedPlaybackVersion), assignment: { kind: 'screen', screenId: Number(assignment.screenId), expectedUpdatedAt: assignment.expectedUpdatedAt } };
+  if (assignment.kind === 'screen' && Object.keys(assignment).length === 3 && Number.isSafeInteger(assignment.screenDesignId) && Number(assignment.screenDesignId) > 0 &&
+    typeof assignment.expectedUpdatedAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(assignment.expectedUpdatedAt) && Number.isFinite(Date.parse(assignment.expectedUpdatedAt)))
+    return { expectedDesiredRevisionId: body.expectedDesiredRevisionId, expectedPlaybackVersion: Number(body.expectedPlaybackVersion), assignment: { kind: 'screen', screenDesignId: Number(assignment.screenDesignId), expectedUpdatedAt: assignment.expectedUpdatedAt } };
   if (assignment.kind === 'playlist' && Object.keys(assignment).length === 2 && typeof assignment.playlistRevisionId === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(assignment.playlistRevisionId))
     return { expectedDesiredRevisionId: body.expectedDesiredRevisionId, expectedPlaybackVersion: Number(body.expectedPlaybackVersion), assignment: { kind: 'playlist', playlistRevisionId: assignment.playlistRevisionId } };
   throw new BadRequestException('Invalid content assignment');
@@ -47,7 +51,7 @@ export class ContentAssignmentService {
   async assign(deviceId: number, body: unknown) {
     const command = input(body);
     if (!Number.isSafeInteger(deviceId) || deviceId < 1) throw new BadRequestException('Invalid device');
-    const preparedScreen = command.assignment.kind === 'screen' && 'screenId' in command.assignment
+    const preparedScreen = command.assignment.kind === 'screen' && ('screenId' in command.assignment || 'screenDesignId' in command.assignment)
       ? await this.publisher.snapshotDraft(command.assignment)
       : null;
     return sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
@@ -83,7 +87,7 @@ export class ContentAssignmentService {
       if (command.assignment.kind === 'screen') {
         const revision = 'publicationRevisionId' in command.assignment
           ? await tx.publicationRevision.findUnique({ where: { publicationRevisionId: command.assignment.publicationRevisionId } })
-          : await this.publishScreenDraft(tx, command.assignment.screenId, command.assignment.expectedUpdatedAt, preparedScreen!);
+          : await this.publishScreenDraft(tx, command.assignment, preparedScreen!);
         if (!revision) throw new NotFoundException('Publication revision not found');
         publicationArtifacts(revision);
         await this.publications.setDesiredRevision(deviceId, revision.publicationRevisionId, tx);
@@ -109,8 +113,13 @@ export class ContentAssignmentService {
     if (!device) throw new NotFoundException('Target device not found');
     const targetDisplay = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride).capabilities.display;
     const target = { width: targetDisplay.width, height: targetDisplay.height, renderFormats: targetDisplay.renderFormats, backgroundColor: targetDisplay.backgroundColor ?? '#ffffff' };
-    const [screens, publishedPlaylists] = await Promise.all([
+    const [screens, screenDesigns, publishedPlaylists] = await Promise.all([
       this.prisma.screen.findMany({
+        orderBy: { updatedAt: 'desc' },
+        take: 100,
+        select: { id: true, name: true, updatedAt: true, width: true, height: true },
+      }),
+      this.prisma.screenDesign.findMany({
         orderBy: { updatedAt: 'desc' },
         take: 100,
         select: { id: true, name: true, updatedAt: true, width: true, height: true },
@@ -134,7 +143,8 @@ export class ContentAssignmentService {
           : null,
       },
       target: { width: target.width, height: target.height, renderFormats: target.renderFormats, backgroundColor: target.backgroundColor },
-      screens: screens.map(screen => {
+      screens: [...screens.map(screen => ({ ...screen, source: 'upload' as const })),
+        ...screenDesigns.map(screen => ({ ...screen, source: 'design' as const }))].map(screen => {
         const compatibility = assessScreenCompatibility({ width: screen.width, height: screen.height, format: screen.width && screen.height ? 'png' : null }, target);
         return { ...screen, updatedAt: screen.updatedAt.toISOString(), compatibility };
       }).sort((left, right) => {
@@ -154,10 +164,13 @@ export class ContentAssignmentService {
     };
   }
 
-  private async publishScreenDraft(tx: Prisma.TransactionClient, screenId: number, expectedUpdatedAt: string, prepared: NonNullable<Awaited<ReturnType<PublishService['snapshotDraft']>>>) {
-    const screen = await tx.screen.findUnique({ where: { id: screenId }, select: { updatedAt: true, imageUrl: true } });
-    if (!screen) throw new NotFoundException('Draft screen not found');
-    if (screen.updatedAt.toISOString() !== expectedUpdatedAt || screen.imageUrl !== prepared.imageUrl)
+  private async publishScreenDraft(tx: Prisma.TransactionClient, draft: { screenId: number; expectedUpdatedAt: string } | { screenDesignId: number; expectedUpdatedAt: string }, prepared: NonNullable<Awaited<ReturnType<PublishService['snapshotDraft']>>>) {
+    const isDesign = 'screenDesignId' in draft;
+    const screen = isDesign
+      ? await tx.screenDesign.findUnique({ where: { id: draft.screenDesignId }, select: { updatedAt: true } })
+      : await tx.screen.findUnique({ where: { id: draft.screenId }, select: { updatedAt: true, imageUrl: true } });
+    if (!screen) throw new NotFoundException(isDesign ? 'Draft screen design not found' : 'Draft screen not found');
+    if (screen.updatedAt.toISOString() !== draft.expectedUpdatedAt || (!isDesign && 'imageUrl' in screen && screen.imageUrl !== prepared.imageUrl))
       throw new ConflictException('Draft changed; reload before assigning');
     const contentHash = sha256(canonicalJson(prepared.content));
     const reusable = await tx.publicationRevision.findFirst({ where: { contentHash }, orderBy: { publishedAt: 'desc' } });

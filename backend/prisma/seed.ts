@@ -280,7 +280,12 @@ async function main() {
   for (const { profile, defaultCapabilities } of BUILTIN_DEVICE_PROFILES) {
     await prisma.deviceProfile.upsert({
       where: { profileId: profile.profileId },
-      update: {},
+      update: {
+        protocolVersion: profile.protocolVersion,
+        label: profile.label,
+        definition: profile as unknown as Prisma.InputJsonValue,
+        defaultCapabilities: defaultCapabilities as unknown as Prisma.InputJsonValue,
+      },
       create: {
         profileId: profile.profileId,
         protocolVersion: profile.protocolVersion,
@@ -294,7 +299,11 @@ async function main() {
   for (const policy of BUILTIN_DELIVERY_POLICIES) {
     await prisma.deliveryPolicy.upsert({
       where: { policyId: policy.policyId },
-      update: {},
+      update: {
+        protocolVersion: policy.protocolVersion,
+        mode: policy.mode,
+        definition: policy as unknown as Prisma.InputJsonValue,
+      },
       create: {
         policyId: policy.policyId,
         protocolVersion: policy.protocolVersion,
