@@ -4,10 +4,11 @@ import { randomUUID } from 'node:crypto';
 import { assessScreenCompatibility } from '@inker/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { PublicationPersistenceService } from '../publications/publication-persistence.service';
-import { canonicalJson, publicationArtifacts, sha256 } from '../publications/publication-content';
+import { publicationArtifacts } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 import { PublishService } from '../publications/publish.service';
 import { PlaybackService } from '../playback/playback.service';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 import { resolveDeviceConfiguration } from '../device-platform/device-configuration';
 
 type Assignment =
@@ -113,7 +114,7 @@ export class ContentAssignmentService {
     if (!device) throw new NotFoundException('Target device not found');
     const targetDisplay = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride).capabilities.display;
     const target = { width: targetDisplay.width, height: targetDisplay.height, renderFormats: targetDisplay.renderFormats, backgroundColor: targetDisplay.backgroundColor ?? '#ffffff' };
-    const [screens, screenDesigns, publishedPlaylists] = await Promise.all([
+    const [screens, screenDesigns, publishedPlaylists, draftPlaylists] = await Promise.all([
       this.prisma.screen.findMany({
         orderBy: { updatedAt: 'desc' },
         take: 100,
@@ -127,6 +128,18 @@ export class ContentAssignmentService {
       this.prisma.publishedPlaylist.findMany({
         orderBy: { publishedAt: 'desc' },
         take: 100,
+      }),
+      this.prisma.playlist.findMany({
+        orderBy: { updatedAt: 'desc' },
+        take: 100,
+        select: {
+          id: true,
+          name: true,
+          items: {
+            orderBy: [{ order: 'asc' }, { id: 'asc' }],
+            select: { id: true, order: true, duration: true, screenId: true, screenDesignId: true, pluginInstanceId: true },
+          },
+        },
       }),
     ]);
     const playlists = await this.prisma.playlist.findMany({
@@ -161,25 +174,23 @@ export class ContentAssignmentService {
         publishedAt: playlist.publishedAt.toISOString(),
         }] : [];
       }),
+      unpublishedPlaylists: draftPlaylists.flatMap(playlist => {
+        if (publishedPlaylists.some(published => published.playlistId === playlist.id) || !playlist.items.length ||
+          playlist.items.some(item => item.pluginInstanceId || Number(Boolean(item.screenId)) + Number(Boolean(item.screenDesignId)) !== 1)) return [];
+        const items = playlist.items.map(item => ({
+          itemId: item.id,
+          order: item.order,
+          duration: item.duration,
+          screenId: item.screenId,
+          screenDesignId: item.screenDesignId,
+          pluginInstanceId: item.pluginInstanceId,
+        }));
+        return [{ playlistId: playlist.id, name: playlist.name, draftHash: sha256(canonicalJson({ playlistId: playlist.id, items })) }];
+      }),
     };
   }
 
   private async publishScreenDraft(tx: Prisma.TransactionClient, draft: { screenId: number; expectedUpdatedAt: string } | { screenDesignId: number; expectedUpdatedAt: string }, prepared: NonNullable<Awaited<ReturnType<PublishService['snapshotDraft']>>>) {
-    const isDesign = 'screenDesignId' in draft;
-    const screen = isDesign
-      ? await tx.screenDesign.findUnique({ where: { id: draft.screenDesignId }, select: { updatedAt: true } })
-      : await tx.screen.findUnique({ where: { id: draft.screenId }, select: { updatedAt: true, imageUrl: true } });
-    if (!screen) throw new NotFoundException(isDesign ? 'Draft screen design not found' : 'Draft screen not found');
-    if (screen.updatedAt.toISOString() !== draft.expectedUpdatedAt || (!isDesign && 'imageUrl' in screen && screen.imageUrl !== prepared.imageUrl))
-      throw new ConflictException('Draft changed; reload before assigning');
-    const contentHash = sha256(canonicalJson(prepared.content));
-    const reusable = await tx.publicationRevision.findFirst({ where: { contentHash }, orderBy: { publishedAt: 'desc' } });
-    if (reusable) return reusable;
-    return (await this.publications.createPublication({
-      publicationKey: `screen-assignment-${randomUUID()}`,
-      protocolVersion: '1.0',
-      content: prepared.content as unknown as Prisma.InputJsonValue,
-      contentHash,
-    }, tx)).revision;
+    return this.publisher.publishScreenDraftInTransaction(tx, draft, prepared);
   }
 }

@@ -3,6 +3,9 @@ import { createMockPrisma, MockPrisma } from '../test/mocks/prisma.mock';
 import { PresentationService } from './presentation.service';
 import { BUILTIN_DEVICE_PROFILES, BUILTIN_DELIVERY_POLICIES } from './device-configuration.catalog';
 import { canonicalJson, sha256 } from '../publications/publication-content';
+import { publicationArtifacts } from '../publications/publication-content';
+import { resolveDeviceConfiguration } from './device-configuration';
+import { PullArtifactLeaseService } from './pull-artifact-lease.service';
 
 describe('PresentationService', () => {
   let prisma: MockPrisma;
@@ -10,7 +13,11 @@ describe('PresentationService', () => {
 
   beforeEach(() => {
     prisma = createMockPrisma();
-    service = new PresentationService(prisma as any);
+    const resolver = { resolve: async (device: any, desired: any) => {
+      const configuration = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride);
+      return { configuration, target: {}, revision: desired, artifact: publicationArtifacts(desired)[0], fallback: false };
+    } };
+    service = new PresentationService(prisma as any, resolver as any, new PullArtifactLeaseService());
     const profile = BUILTIN_DEVICE_PROFILES[2];
     const policy = BUILTIN_DELIVERY_POLICIES.find(p => p.policyId === 'reference-connected-browser')!;
     prisma.device.findUnique.mockResolvedValue({ id: 3, externalId: 'browser-3', presentationRevision: 4,
@@ -38,5 +45,26 @@ describe('PresentationService', () => {
     for (let i = 0; i < 100; i++) expect(await service.getForDevice(3)).toEqual(result);
     expect(prisma.device.update.calls).toHaveLength(0);
     expect(prisma.publicationRevision.create.calls).toHaveLength(0);
+  });
+
+  it('uses the same device-themed dynamic artifact for the admin preview', async () => {
+    const device = await prisma.device.findUnique();
+    const content = { schemaVersion: 1, image: { png: Buffer.from('old').toString('base64'), width: 480, height: 480, sha256: sha256(Buffer.from('old')) } };
+    const revision = { publicationId: 'p', publicationRevisionId: 'r', revision: 1, protocolVersion: '1.0', content,
+      contentHash: sha256(canonicalJson(content)), publishedAt: new Date('2026-08-30'), createdAt: new Date('2026-08-30') };
+    prisma.device.findUnique.mockResolvedValue({ ...device, configuration: { displayControl: { backgroundColor: '#000000' } },
+      publicationState: { desiredSequence: 5, desiredRevision: revision } });
+    const themed = { format: 'png', mimeType: 'image/png', width: 480, height: 480, colorSpace: 'rgb', bitDepth: 24,
+      rotation: 0, bytes: Buffer.from('dark-preview'), sha256: sha256(Buffer.from('dark-preview')) };
+    const resolver = { resolve: async (device: any) => ({
+      configuration: resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride),
+      target: {}, revision, artifact: themed, fallback: false, rendererVersion: 'dynamic-device-design-v1',
+    }) };
+    service = new PresentationService(prisma as any, resolver as any, new PullArtifactLeaseService());
+
+    expect(await service.preview(3)).toEqual(themed);
+    const manifest = await service.getForDevice(3);
+    expect(manifest.content.url).toEndWith(`/artifacts/${themed.sha256}`);
+    expect(await service.artifact(3, themed.sha256)).toEqual(themed);
   });
 });

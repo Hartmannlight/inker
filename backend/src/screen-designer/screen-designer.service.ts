@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateScreenDesignDto,
@@ -234,7 +235,7 @@ export class ScreenDesignerService {
         this.logger.log(`Deleted drawing for screen design ${id}`);
       }
     } catch (error) {
-      this.logger.warn(`Failed to delete drawing for screen design ${id}: ${error.message}`);
+      this.logger.warn(`Failed to delete drawing for screen design ${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     await this.prisma.screenDesign.delete({
@@ -297,7 +298,7 @@ export class ScreenDesignerService {
         this.logger.log(`Invalidated capture for screen design ${id}`);
       }
     } catch (error) {
-      this.logger.warn(`Failed to invalidate capture for screen design ${id}: ${error.message}`);
+      this.logger.warn(`Failed to invalidate capture for screen design ${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -418,8 +419,8 @@ export class ScreenDesignerService {
     }
 
     // Merge default config with provided config
-    const config: Record<string, any> = {
-      ...(template.defaultConfig as object),
+    let config: Prisma.InputJsonObject = {
+      ...(template.defaultConfig as Prisma.InputJsonObject),
       ...(dto.config ?? {}),
     };
 
@@ -430,11 +431,14 @@ export class ScreenDesignerService {
       const year = today.getFullYear();
       const month = String(today.getMonth() + 1).padStart(2, '0');
       const day = String(today.getDate()).padStart(2, '0');
-      config.startDate ||= `${year}-${month}-${day}`;
-      config.inputMode ||= 'duration';
-      config.durationDays ||= 60;
-      config.dayMode ||= 'calendar';
-      config.design ||= 'progressBar';
+      config = {
+        ...config,
+        startDate: config.startDate || `${year}-${month}-${day}`,
+        inputMode: config.inputMode || 'duration',
+        durationDays: config.durationDays || 60,
+        dayMode: config.dayMode || 'calendar',
+        design: config.design || 'progressBar',
+      };
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -811,11 +815,10 @@ export class ScreenDesignerService {
    * Restores virtual template IDs for custom widgets based on customWidgetId in config
    * Adds captureUrl if a browser capture file exists
    */
-  private transformScreenDesignForResponse(screenDesign: any): any {
-    if (!screenDesign || !screenDesign.widgets) {
-      return screenDesign;
-    }
-
+  private transformScreenDesignForResponse<
+    TWidget extends { config: unknown; templateId: number },
+    TDesign extends { id: number; widgets: TWidget[] },
+  >(screenDesign: TDesign) {
     // Check if capture file exists
     const captureFilename = `capture_${screenDesign.id}.png`;
     const capturePath = path.join(process.cwd(), 'uploads', 'captures', captureFilename);
@@ -825,12 +828,15 @@ export class ScreenDesignerService {
     return {
       ...screenDesign,
       captureUrl, // Include capture URL if exists (for preview with drawings)
-      widgets: screenDesign.widgets.map((widget: any) => {
-        const config = widget.config as Record<string, unknown>;
-        const customWidgetId = config?.customWidgetId as number | undefined;
+      widgets: screenDesign.widgets.map((widget) => {
+        const config = widget.config;
+        const customWidgetId =
+          typeof config === 'object' && config !== null && !Array.isArray(config)
+            ? (config as Record<string, unknown>).customWidgetId
+            : undefined;
 
         // If this widget has a customWidgetId, restore the virtual template ID
-        if (customWidgetId !== undefined && customWidgetId !== null) {
+        if (typeof customWidgetId === 'number') {
           return {
             ...widget,
             templateId: CUSTOM_WIDGET_TEMPLATE_OFFSET + customWidgetId,

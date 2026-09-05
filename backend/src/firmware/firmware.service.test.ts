@@ -82,7 +82,7 @@ describe('FirmwareService', () => {
       // First call: find the firmware being updated
       // Second call: find firmware with the target version
       let callCount = 0;
-      mockPrisma.firmware.findUnique.mockImplementation((...args: any[]) => {
+      mockPrisma.firmware.findUnique.mockImplementation(() => {
         callCount++;
         if (callCount === 1) return Promise.resolve({ id: 1, version: '1.0.0' });
         return Promise.resolve({ id: 2, version: '2.0.0' }); // conflict

@@ -1,17 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsArray, ValidateNested, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
-
-class PlaylistScreenDto {
-  @IsString()
-  screenId: string;
-
-  @IsOptional()
-  duration?: number;
-
-  @IsOptional()
-  order?: number;
-}
+import { PlaylistScreenDto } from './playlist-screen.dto';
 
 export class CreatePlaylistDto {
   @ApiProperty({

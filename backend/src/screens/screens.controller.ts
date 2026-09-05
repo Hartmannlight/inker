@@ -12,7 +12,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Multer } from 'multer';
+import type { UploadedFile as UploadedImageFile } from '../common/uploaded-file';
 import {
   ApiTags,
   ApiOperation,
@@ -40,7 +40,7 @@ export class ScreensController {
       file.mimetype.startsWith('image/'),
     ),
   }))
-  create(@Body() createScreenDto: CreateScreenDto, @UploadedFile() file?: Multer.File) {
+  create(@Body() createScreenDto: CreateScreenDto, @UploadedFile() file?: UploadedImageFile) {
     if (file) {
       return this.screensService.createFromImage(
         file.buffer,

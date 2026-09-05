@@ -2,7 +2,7 @@ import { NotAcceptableException } from '@nestjs/common';
 import type { DeviceCapabilities, RenderFormat } from '@inker/contracts';
 import type { PublicationRevision } from '@prisma/client';
 import type { ResolvedDeviceConfiguration } from '../device-platform/device-configuration';
-import { canonicalJson, sha256 } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 
 type DisplayCapabilities = DeviceCapabilities['display'];
 

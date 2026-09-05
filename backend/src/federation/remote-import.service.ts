@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma, RemoteSubscription } from '@prisma/client';
 import { FEDERATION_LIMITS, parseFederationPublicationFeed, type FederationPublicationFeed } from '@inker/contracts';
-import * as sharpModule from 'sharp';
-import type sharpFactory from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 import { PublicationPersistenceService } from '../publications/publication-persistence.service';
-import { canonicalJson, publicationArtifacts, sha256 } from '../publications/publication-content';
+import { publicationArtifacts } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
+import { sharp } from '../common/utils/sharp.util';
 
-const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 const fail = (code: string): never => { throw new Error(code); };
 
 /** Immutable SQLite publication content is the durable, atomic remote cache. */

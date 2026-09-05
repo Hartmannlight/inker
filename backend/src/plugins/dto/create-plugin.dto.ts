@@ -1,4 +1,15 @@
-import { IsString, IsOptional, IsNumber, IsArray, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsArray } from 'class-validator';
+
+export interface PluginSettingsFieldDefinition {
+  key: string;
+  label?: string;
+  type?: string;
+  encrypted?: boolean;
+  required?: boolean;
+  options?: unknown[];
+  default?: unknown;
+  [key: string]: unknown;
+}
 
 export class CreatePluginDto {
   @IsString() name: string;
@@ -20,7 +31,7 @@ export class CreatePluginDto {
   @IsOptional() @IsString() markupHalfVertical?: string;
   @IsOptional() @IsString() markupQuadrant?: string;
 
-  @IsOptional() @IsArray() settingsSchema?: any[];
+  @IsOptional() @IsArray() settingsSchema?: PluginSettingsFieldDefinition[];
 
   @IsOptional() @IsString() source?: string;
   @IsOptional() @IsString() sourceUrl?: string;
@@ -45,17 +56,17 @@ export class UpdatePluginDto {
   @IsOptional() @IsString() markupHalfVertical?: string;
   @IsOptional() @IsString() markupQuadrant?: string;
 
-  @IsOptional() @IsArray() settingsSchema?: any[];
+  @IsOptional() @IsArray() settingsSchema?: PluginSettingsFieldDefinition[];
   @IsOptional() @IsString() version?: string;
 }
 
 export class CreatePluginInstanceDto {
   @IsNumber() pluginId: number;
   @IsOptional() @IsString() name?: string;
-  @IsOptional() settings?: Record<string, any>;
+  @IsOptional() settings?: Record<string, unknown>;
 }
 
 export class UpdatePluginInstanceDto {
   @IsOptional() @IsString() name?: string;
-  @IsOptional() settings?: Record<string, any>;
+  @IsOptional() settings?: Record<string, unknown>;
 }

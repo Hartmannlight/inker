@@ -14,12 +14,9 @@ import {
   GoneException,
   UnprocessableEntityException,
   Logger,
-  StreamableFile,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   ApiTags,
   ApiOperation,
@@ -41,7 +38,7 @@ import { ScreenRendererService } from '../screen-designer/services/screen-render
  * Compatible with Ruby Inker API
  */
 @ApiTags('device-api')
-@Controller('api')
+@Controller()
 @Public()
 @SkipThrottle()
 export class ApiController {
@@ -421,7 +418,7 @@ export class ApiController {
       this.logger.log(`Device setup: ${macAddress} (baseUrl: ${baseUrl})`);
       return result;
     } catch (error) {
-      this.logger.error(`[SETUP] Device provisioning failed: ${error.message}`);
+      this.logger.error(`[SETUP] Device provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
       throw new UnprocessableEntityException({
         type: '/problem_details#device_setup',
         status: 'not_found',
@@ -606,7 +603,7 @@ export class ApiController {
       });
       res.send(imageBuffer);
     } catch (error) {
-      this.logger.error(`Failed to render uploaded screen ${id}: ${error.message}`);
+      this.logger.error(`Failed to render uploaded screen ${id}: ${error instanceof Error ? error.message : String(error)}`);
       throw new NotFoundException('Screen not found');
     }
   }

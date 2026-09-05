@@ -5,6 +5,15 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateLogDto } from './dto/create-log.dto';
+import { Prisma } from '@prisma/client';
+import { isJsonValue } from '@inker/contracts';
+import { mergeLegacyPullTelemetry } from '../../device-platform/legacy-pull-telemetry';
+
+function logMetadata(value: unknown): Prisma.InputJsonValue {
+  return value !== null && isJsonValue(value) && typeof value === 'object' && !Array.isArray(value)
+    ? value as Prisma.InputJsonObject
+    : {};
+}
 
 @Injectable()
 export class LogService {
@@ -40,9 +49,10 @@ export class LogService {
           this.prisma.deviceLog.create({
             data: {
               deviceId: device.id,
-              level: String(logEntry.level ?? 'info'),
-              message: logEntry.message || '',
-              metadata: logEntry.metadata || {},
+              level: (typeof logEntry.level === 'string' || typeof logEntry.level === 'number')
+                ? String(logEntry.level).slice(0, 20) : 'info',
+              message: typeof logEntry.message === 'string' ? logEntry.message.slice(0, 5000) : '',
+              metadata: logMetadata(logEntry.metadata),
             },
           }),
         ),
@@ -65,7 +75,7 @@ export class LogService {
         deviceId: device.id,
         level: createLogDto.level || 'info',
         message: createLogDto.message || '',
-        metadata: createLogDto.metadata || {},
+        metadata: logMetadata(createLogDto.metadata),
       },
     });
 
@@ -75,23 +85,23 @@ export class LogService {
 
     // Update device metadata if provided
     if (createLogDto.metadata) {
-      const updates: any = {};
+      const updates: Prisma.DeviceUpdateInput = {};
 
-      if (createLogDto.metadata.battery !== undefined) {
-        updates.battery = createLogDto.metadata.battery;
+      const battery = typeof createLogDto.metadata.battery === 'number' &&
+        Number.isFinite(createLogDto.metadata.battery) ? createLogDto.metadata.battery : undefined;
+      const wifi = typeof createLogDto.metadata.wifi === 'number' &&
+        Number.isFinite(createLogDto.metadata.wifi) ? createLogDto.metadata.wifi : undefined;
+
+      if (battery !== undefined) {
+        updates.battery = battery;
       }
 
-      if (createLogDto.metadata.wifi !== undefined) {
-        updates.wifi = createLogDto.metadata.wifi;
+      if (wifi !== undefined) {
+        updates.wifi = wifi;
       }
 
-      if (createLogDto.metadata.battery !== undefined || createLogDto.metadata.wifi !== undefined) {
-        const existing = device.telemetry && typeof device.telemetry === 'object' ? device.telemetry as Record<string, unknown> : {};
-        const previous = existing.legacyPull && typeof existing.legacyPull === 'object' ? existing.legacyPull as Record<string, unknown> : {};
-        updates.telemetry = { ...existing, legacyPull: { ...previous,
-          ...(createLogDto.metadata.battery !== undefined ? { batteryPercent: createLogDto.metadata.battery } : {}),
-          ...(createLogDto.metadata.wifi !== undefined ? { rssi: createLogDto.metadata.wifi } : {}),
-        }, updatedAt: new Date().toISOString() };
+      if (battery !== undefined || wifi !== undefined) {
+        updates.telemetry = mergeLegacyPullTelemetry(device.telemetry, { battery, wifi });
       }
 
       if (Object.keys(updates).length > 0) {

@@ -6,7 +6,7 @@ import { ScreenDesignPreview } from '../../components/screen-designer/ScreenDesi
 import { useApi, useMutation } from '../../hooks/useApi';
 import { playlistService, screenService, screenDesignerService, pluginService } from '../../services/api';
 import { config } from '../../config';
-import type { Playlist, PlaylistFormData, Screen, ScreenDesign, PlaylistScreen, PaginatedResponse, WidgetTemplate } from '../../types';
+import type { Playlist, PlaylistFormData, Screen, ScreenDesign, PlaylistScreen, PaginatedResponse, PluginInstance, WidgetTemplate } from '../../types';
 
 // Combined screen option for the dropdown
 interface ScreenOption {
@@ -63,7 +63,7 @@ export function PlaylistForm() {
     () => screenDesignerService.getAll(1, 100)
   );
 
-  const { data: pluginInstancesData } = useApi<any[]>(
+  const { data: pluginInstancesData } = useApi<PluginInstance[]>(
     () => pluginService.getAllInstances()
   );
 
@@ -118,7 +118,7 @@ export function PlaylistForm() {
       id: String(screen.id),
       name: screen.name,
       isDesigned: false,
-      thumbnailUrl: screen.thumbnailUrl,
+      thumbnailUrl: screen.thumbnailUrl ?? undefined,
       width: screen.width,
       height: screen.height,
     })),
@@ -131,15 +131,15 @@ export function PlaylistForm() {
       height: design.height,
     })),
     ...(pluginInstancesData || [])
-      .filter((inst: any) => inst.settings?.dashboard_uid && inst.name !== '__preview__')
-      .map((inst: any): ScreenOption => ({
+      .filter((inst) => inst.settings.dashboard_uid && inst.name !== '__preview__')
+      .map((inst): ScreenOption => ({
         id: `plugin-${inst.id}`,
         name: `${inst.name || inst.plugin?.name || 'Plugin'} (Plugin)`,
         isDesigned: false,
         isPlugin: true,
         thumbnailUrl: pluginService.getRenderUrl(inst.id, 'einkPreview'),
-        width: Number(inst.settings?.screen_width) || 800,
-        height: Number(inst.settings?.screen_height) || 480,
+        width: Number(inst.settings.screen_width) || 800,
+        height: Number(inst.settings.screen_height) || 480,
       })),
   ];
 
@@ -187,14 +187,13 @@ export function PlaylistForm() {
   );
 
   // Track the playlist ID that was used to populate form to avoid re-populating
-  const populatedPlaylistIdRef = useRef<string | null>(null);
+  const populatedPlaylistIdRef = useRef<number | null>(null);
 
   // Populate form data when playlist is loaded (only once per playlist)
   // This is an intentional pattern for form initialization from server data
   useEffect(() => {
     if (playlist && playlist.id !== populatedPlaylistIdRef.current) {
       populatedPlaylistIdRef.current = playlist.id;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Form initialization from server data
       setFormData({
         name: playlist.name,
         description: playlist.description || '',

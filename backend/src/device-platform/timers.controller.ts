@@ -5,7 +5,7 @@ import { Public } from '../common/decorators/public.decorator';
 import { TimerService } from '../timers/timer.service';
 import { timerFeedResult } from '../timers/timer-feed';
 import { PullDeviceAuthService } from './pull-device-auth.service';
-import { matchesIfNoneMatch } from './pull-content.controller';
+import { matchesIfNoneMatch } from '../common/utils/http-cache.util';
 
 @Public()
 @Controller('timers')

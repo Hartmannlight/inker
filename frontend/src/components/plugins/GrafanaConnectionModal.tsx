@@ -13,7 +13,7 @@ const inputClasses =
   'w-full px-3 py-2.5 rounded-lg border border-border-light bg-bg-input text-text-primary placeholder-text-placeholder focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all';
 
 export function GrafanaConnectionModal({ instanceId, onSaved }: GrafanaConnectionModalProps) {
-  const notification = useNotification();
+  const { error: notifyError, success: notifySuccess } = useNotification();
   const [grafanaUrl, setGrafanaUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [editingApiKey, setEditingApiKey] = useState(false);
@@ -33,24 +33,24 @@ export function GrafanaConnectionModal({ instanceId, onSaved }: GrafanaConnectio
         setApiKey(s.api_key ?? '');
         setAllowLocalNetwork(settings.allow_local_network === 'true');
       })
-      .catch(() => notification.error('Failed to load settings'))
+      .catch(() => notifyError('Failed to load settings'))
       .finally(() => setLoading(false));
-  }, [instanceId]);
+  }, [instanceId, notifyError]);
 
   const apiKeyIsSet = apiKey === MASK;
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const settings: Record<string, any> = { grafana_url: grafanaUrl };
+      const settings: Record<string, unknown> = { grafana_url: grafanaUrl };
       if (!apiKeyIsSet) {
         settings.api_key = apiKey;
       }
       await apiClient.put(`/plugins/instances/${instanceId}`, { settings });
-      notification.success('Connection settings saved');
+      notifySuccess('Connection settings saved');
       onSaved();
     } catch {
-      notification.error('Failed to save settings');
+      notifyError('Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -95,7 +95,7 @@ export function GrafanaConnectionModal({ instanceId, onSaved }: GrafanaConnectio
               await settingsService.update('allow_local_network', String(newValue));
             } catch {
               setAllowLocalNetwork(!newValue);
-              notification.error('Failed to update setting');
+              notifyError('Failed to update setting');
             }
           }}
           className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${

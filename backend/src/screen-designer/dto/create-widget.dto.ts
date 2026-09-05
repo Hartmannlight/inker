@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import type { Prisma } from '@prisma/client';
 import {
   IsInt,
   IsOptional,
@@ -61,7 +62,7 @@ export class CreateWidgetDto {
   })
   @IsOptional()
   @IsObject()
-  config?: Record<string, any>;
+  config?: Prisma.InputJsonObject;
 
   @ApiPropertyOptional({
     example: 0,

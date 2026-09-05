@@ -1,13 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Prisma, type OutboxEvent } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxStore } from '../events/outbox.store';
 import { outboxCorrelation } from '../events/outbox-correlation';
 import { OUTBOX_POLICY, queueRetryDelay } from '../jobs/queue-policy';
 import { EncryptionService } from '../common/services/encryption.service';
-import { DEFAULT_INSTANCE_SECRET_PATH } from '../config/instance-secrets';
-import { canonicalJson, sha256 } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 import { publicationArtifacts, type PublicationContent } from '../publications/publication-content';
 import { PublicationPersistenceService } from '../publications/publication-persistence.service';
 import { runConnector, validateConnectorResult, type ConnectorType } from './connectors';
@@ -19,8 +17,12 @@ type Result = Awaited<ReturnType<typeof runConnector>>;
 
 @Injectable()
 export class SourceWorkerService {
-  constructor(private readonly prisma: PrismaService, private readonly store: OutboxStore,
-    private readonly publications?: PublicationPersistenceService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly store: OutboxStore,
+    private readonly publications: PublicationPersistenceService | undefined,
+    private readonly encryption: EncryptionService,
+  ) {}
   async schedule(now = new Date()) {
     const due = await this.prisma.sourceDefinition.findMany({ where: { enabled: true, nextRefreshAt: { lte: now },
       refreshJobs: { none: { completedAt: null, event: { status: { in: ['pending', 'processing'] } } } } },
@@ -49,9 +51,7 @@ export class SourceWorkerService {
     return null;
   }
   private decrypt(ciphertext: string) {
-    // Loaded only for an actual connector job, never in API/renderer reads.
-    const config = new ConfigService({ encryption: { secretPath: process.env.INKER_INSTANCE_SECRET_PATH || DEFAULT_INSTANCE_SECRET_PATH } });
-    return new EncryptionService(config).decrypt(ciphertext);
+    return this.encryption.decrypt(ciphertext);
   }
   async execute(event: OutboxEvent, parent: AbortSignal) {
     const job = await this.prisma.sourceRefreshJob.findUnique({ where: { eventId: event.eventId }, include: { source: { include: { secret: true } } } });

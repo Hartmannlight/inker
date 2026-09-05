@@ -40,7 +40,7 @@ export function ScreenForm() {
   );
 
   // Track which screen was used to populate form to avoid re-populating
-  const populatedScreenIdRef = useRef<string | null>(null);
+  const populatedScreenIdRef = useRef<number | null>(null);
 
   // Populate form data when screen is loaded (only once per screen)
   // This is an intentional pattern for form initialization from server data

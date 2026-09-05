@@ -1,11 +1,14 @@
 {
   "compilerOptions": {
+    "strict": true,
+    "strictPropertyInitialization": false,
     "module": "commonjs",
     "declaration": true,
     "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
     "target": "ES2021",
     "sourceMap": true,
     "outDir": "./dist",
@@ -13,10 +16,10 @@
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": true,
-    "noImplicitAny": false,
-    "strictBindCallApply": false,
-    "forceConsistentCasingInFileNames": false,
-    "noFallthroughCasesInSwitch": false,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
     "paths": {
       "@/*": ["src/*"]
     }

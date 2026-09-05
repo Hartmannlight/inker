@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Login } from './Login';
 import { useAuth } from '../../contexts/AuthContext';
@@ -34,6 +34,28 @@ export function Landing({ defaultMode = 'admin' }: { defaultMode?: LandingMode }
   const [baseUrl, setBaseUrl] = useState(window.location.origin);
   const [message, setMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const automaticPairingCode = useRef<string | null>(null);
+
+  const pairDisplay = useCallback(async (
+    pairingCode: string,
+    pairingBaseUrl: string,
+    destinationSearch = '',
+  ) => {
+    setSubmitting(true);
+    setMessage(null);
+    try {
+      const result = await exchangeDeviceEnrollment(pairingBaseUrl, pairingCode);
+      localStorage.setItem(`inker_display_${result.device.externalId}`, result.credential);
+      navigate(
+        `/display/${encodeURIComponent(result.device.externalId)}${destinationSearch}`,
+        { replace: true },
+      );
+    } catch (error) {
+      setMessage(pairingMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [navigate]);
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) navigate('/dashboard', { replace: true });
@@ -44,9 +66,26 @@ export function Landing({ defaultMode = 'admin' }: { defaultMode?: LandingMode }
     if (!suppliedCode) return;
     // A QR may carry the one-time code, but the browser history must not retain it.
     setCode(suppliedCode);
-    params.delete('code');
-    setParams(params, { replace: true });
-  }, [params, setParams]);
+    const remainingParams = new URLSearchParams(params);
+    remainingParams.delete('code');
+    setParams(remainingParams, { replace: true });
+
+    if (automaticPairingCode.current === suppliedCode) return;
+    automaticPairingCode.current = suppliedCode;
+    const normalizedCode = normalizePairingCode(suppliedCode);
+    if (!normalizedCode) {
+      setMessage('Enter a valid ten-character pairing code.');
+      return;
+    }
+    const displayParams = new URLSearchParams(remainingParams);
+    displayParams.delete('mode');
+    const query = displayParams.toString();
+    void pairDisplay(
+      normalizedCode,
+      window.location.origin,
+      query ? `?${query}` : '',
+    );
+  }, [pairDisplay, params, setParams]);
 
   const choose = (next: LandingMode) => {
     setMode(next);
@@ -68,17 +107,7 @@ export function Landing({ defaultMode = 'admin' }: { defaultMode?: LandingMode }
       setMessage(pairingMessage(error));
       return;
     }
-    setSubmitting(true);
-    setMessage(null);
-    try {
-      const result = await exchangeDeviceEnrollment(normalizedBaseUrl, normalizedCode);
-      localStorage.setItem(`inker_display_${result.device.externalId}`, result.credential);
-      navigate(`/display/${encodeURIComponent(result.device.externalId)}`, { replace: true });
-    } catch (error) {
-      setMessage(pairingMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    await pairDisplay(normalizedCode, normalizedBaseUrl);
   };
 
   if (mode === 'admin') return <Login />;

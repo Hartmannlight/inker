@@ -1,13 +1,21 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
+type PrismaLoggingOptions = {
+  log: [
+    { level: 'query'; emit: 'event' },
+    { level: 'error'; emit: 'stdout' },
+    { level: 'warn'; emit: 'stdout' },
+  ];
+};
+
 /**
  * Prisma service that manages database connection lifecycle.
  * Implements OnModuleInit to connect when the module initializes
  * and OnModuleDestroy to disconnect when the module is destroyed.
  */
 @Injectable()
-export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class PrismaService extends PrismaClient<PrismaLoggingOptions> implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
 
   constructor() {
@@ -21,7 +29,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     // Log queries in development mode
     if (process.env.NODE_ENV === 'development') {
-      this.$on('query' as never, (e: any) => {
+      this.$on('query', (e) => {
         this.logger.debug(`Query: ${e.query} | Duration: ${e.duration}ms`);
       });
     }
@@ -57,22 +65,5 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     } catch (error) {
       this.logger.error('Error disconnecting from database', error);
     }
-  }
-
-  /**
-   * Clean all database tables (used for testing)
-   */
-  async cleanDatabase() {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Cannot clean database in production');
-    }
-
-    const models = Reflect.ownKeys(this).filter(
-      (key) => key[0] !== '_' && key !== '$connect' && key !== '$disconnect',
-    );
-
-    return Promise.all(
-      models.map((modelKey) => (this as any)[modelKey].deleteMany()),
-    );
   }
 }

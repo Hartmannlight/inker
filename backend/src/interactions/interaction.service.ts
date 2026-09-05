@@ -5,10 +5,11 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
 import { PrismaService } from '../prisma/prisma.service';
 import { hashToken } from '../common/utils/crypto.util';
-import { canonicalJson, publicationAllowedActions, sha256 } from '../publications/publication-content';
+import { publicationAllowedActions } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 import { RenderCacheService } from '../render-cache/render-cache.service';
 import { cloneIsolatedJson } from '../isolation/isolation-contract';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 import { CommandRegistry, type HandlerResult } from './command-registry';
 
 type Tx = Prisma.TransactionClient;

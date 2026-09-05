@@ -1,6 +1,6 @@
 import { Controller, Get, Headers, Param, Res, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
-import { matchesIfNoneMatch } from './pull-content.controller';
+import { matchesIfNoneMatch } from '../common/utils/http-cache.util';
 import { Public } from '../common/decorators/public.decorator';
 import { PresentationService } from './presentation.service';
 import { WebDisplayAuthService } from './web-display-auth.service';

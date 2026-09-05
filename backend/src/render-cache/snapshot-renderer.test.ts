@@ -89,7 +89,17 @@ describe('snapshot-only renderer', () => {
     const bmp = await renderSnapshot(input, target({ width: 16, height: 1, colorSpace: 'monochrome', bitDepth: 1, format: 'bmp1' }));
     expect(bmp.bytes.toString('ascii', 0, 2)).toBe('BM');
     expect([bmp.bytes.readInt32LE(18), bmp.bytes.readInt32LE(22), bmp.bytes.readUInt16LE(28)]).toEqual([16, 1, 1]);
-    expect([...bmp.bytes.subarray(62)]).toEqual([0, 255, 0, 0]);
+    expect([...bmp.bytes.subarray(62)]).toEqual([2, 191, 0, 0]);
+  });
+
+  it('uses error-diffusion dithering for a monochrome E-ink target', async () => {
+    const gray = Buffer.from(Array(64).fill([128, 128, 128]).flat());
+    const output = await renderSnapshot(await snapshot(8, 8, gray), target({
+      width: 8, height: 8, colorSpace: 'monochrome', bitDepth: 1,
+    }));
+    const pixels = await rgb(output);
+    const levels = new Set(Array.from({ length: 64 }, (_, index) => pixels[index * 3]));
+    expect(levels).toEqual(new Set([0, 255]));
   });
 
   it('rotates source pixels while keeping target dimensions, and respects safe-area', async () => {

@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { type Plugin, type PluginInstance } from '@prisma/client';
+import { Prisma, type Plugin, type PluginInstance } from '@prisma/client';
 import { isJsonValue, type JsonObject } from '@inker/contracts';
 import { redactLogValue, redactSecretText } from '../config/secret-redaction';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,11 +11,20 @@ import {
   UpdatePluginDto,
   CreatePluginInstanceDto,
   UpdatePluginInstanceDto,
+  type PluginSettingsFieldDefinition,
 } from './dto/create-plugin.dto';
 
 const SETTINGS_MASK = '••••••••';
 type StoredPlugin = Plugin & { instances?: StoredInstance[]; _count?: { instances: number } };
 type StoredInstance = PluginInstance & { plugin?: Plugin };
+
+function settingsSchema(value: unknown): PluginSettingsFieldDefinition[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((field): field is PluginSettingsFieldDefinition =>
+    field !== null && typeof field === 'object' && !Array.isArray(field) &&
+    typeof (field as { key?: unknown }).key === 'string',
+  );
+}
 
 @Injectable()
 export class PluginsService {
@@ -57,11 +66,25 @@ export class PluginsService {
   }
 
   async createPlugin(dto: CreatePluginDto) {
-    return this.publicPlugin(await this.prisma.plugin.create({ data: dto }));
+    const { settingsSchema: schema, ...fields } = dto;
+    const data = {
+      ...fields,
+      ...(schema
+        ? { settingsSchema: schema as unknown as Prisma.InputJsonValue }
+        : {}),
+    };
+    return this.publicPlugin(await this.prisma.plugin.create({ data }));
   }
 
   async updatePlugin(id: number, dto: UpdatePluginDto) {
-    return this.publicPlugin(await this.prisma.plugin.update({ where: { id }, data: dto }));
+    const { settingsSchema: schema, ...fields } = dto;
+    const data = {
+      ...fields,
+      ...(schema
+        ? { settingsSchema: schema as unknown as Prisma.InputJsonValue }
+        : {}),
+    };
+    return this.publicPlugin(await this.prisma.plugin.update({ where: { id }, data }));
   }
 
   async deletePlugin(id: number) {
@@ -111,14 +134,14 @@ export class PluginsService {
     const plugin = await this.findPluginById(dto.pluginId);
     const { plain, encrypted } = this.separateEncryptedFields(
       dto.settings || {},
-      (plugin.settingsSchema as any[]) || [],
+      settingsSchema(plugin.settingsSchema),
     );
 
     return this.maskEncryptedSettings(await this.prisma.pluginInstance.create({
       data: {
         pluginId: dto.pluginId,
         name: dto.name,
-        settings: plain,
+        settings: plain as Prisma.InputJsonObject,
         settingsEncrypted: encrypted,
       },
       include: { plugin: true },
@@ -134,7 +157,7 @@ export class PluginsService {
 
     if (dto.settings) {
       const existingEncrypted = (instance.settingsEncrypted || {}) as Record<string, string>;
-      const schema = (instance.plugin.settingsSchema as any[]) || [];
+      const schema = settingsSchema(instance.plugin.settingsSchema);
       const encryptedKeys = new Set(schema.filter(f => f.encrypted).map(f => f.key));
 
       for (const key of encryptedKeys) {
@@ -149,7 +172,7 @@ export class PluginsService {
         where: { id },
         data: {
           name: dto.name,
-          settings: plain,
+          settings: plain as Prisma.InputJsonObject,
           settingsEncrypted: { ...existingEncrypted, ...encrypted },
         },
         include: { plugin: true },
@@ -169,12 +192,12 @@ export class PluginsService {
   }
 
   private separateEncryptedFields(
-    settings: Record<string, any>,
-    schema: any[],
-  ): { plain: Record<string, any>; encrypted: Record<string, string> } {
+    settings: Record<string, unknown>,
+    schema: PluginSettingsFieldDefinition[],
+  ): { plain: Record<string, unknown>; encrypted: Record<string, string> } {
     const encryptedKeys = new Set(schema.filter(f => f.encrypted).map(f => f.key));
-    const plain: Record<string, any> = {};
-    const toEncrypt: Record<string, any> = {};
+    const plain: Record<string, unknown> = {};
+    const toEncrypt: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(settings)) {
       if (encryptedKeys.has(key) && value !== undefined && value !== null && value !== '') {
@@ -191,7 +214,10 @@ export class PluginsService {
     return { plain, encrypted };
   }
 
-  private maskEncryptedSettings(instance: StoredInstance, schema = instance.plugin?.settingsSchema) {
+  private maskEncryptedSettings(
+    instance: StoredInstance,
+    schema = instance.plugin?.settingsSchema,
+  ): Record<string, unknown> {
     const encrypted = (instance.settingsEncrypted || {}) as Record<string, string>;
     const maskedSettings = { ...(redactLogValue(instance.settings) as JsonObject) };
     if (Array.isArray(schema)) {
@@ -222,7 +248,7 @@ export class PluginsService {
     };
   }
 
-  private publicPlugin(plugin: StoredPlugin) {
+  private publicPlugin(plugin: StoredPlugin): Record<string, unknown> {
     return {
       id: plugin.id, name: plugin.name, slug: plugin.slug,
       description: plugin.description, icon: plugin.icon, category: plugin.category,
@@ -275,7 +301,7 @@ export class PluginsService {
    * Preview a plugin using an existing persisted instance result.
    */
   async previewPlugin(
-    plugin: any,
+    plugin: StoredPlugin,
     layout: PluginLayout = 'full',
   ): Promise<Buffer> {
     const { width, height } = this.getDimensionsForLayout(layout);
@@ -288,10 +314,19 @@ export class PluginsService {
     return this.pluginRenderer.renderToPng(markup, this.persistedData(instance), {}, width, height, 'preview');
   }
 
+  async previewPluginById(id: number, layout: PluginLayout = 'full'): Promise<Buffer> {
+    const plugin = await this.prisma.plugin.findUnique({
+      where: { id },
+      include: { instances: true },
+    });
+    if (!plugin) throw new NotFoundException(`Plugin ${id} not found`);
+    return this.previewPlugin(plugin, layout);
+  }
+
   /**
    * Preview raw Liquid markup with explicitly provided data (no provider or mock fallback).
    */
-  async previewMarkup(markup: string, data: Record<string, any> = {}): Promise<Buffer> {
+  async previewMarkup(markup: string, data: Record<string, unknown> = {}): Promise<Buffer> {
     return this.pluginRenderer.renderToPng(markup, data, {}, 800, 480, 'preview');
   }
 
@@ -321,7 +356,7 @@ export class PluginsService {
   // Webhooks
   // ========================
 
-  async handleWebhook(slug: string, _data: Record<string, any>): Promise<{ updated: number }> {
+  async handleWebhook(slug: string, _data: Record<string, unknown>): Promise<{ updated: number }> {
     const plugin = await this.findPluginBySlug(slug);
     if (!plugin) throw new NotFoundException(`Plugin "${slug}" not found`);
 
@@ -346,19 +381,19 @@ export class PluginsService {
   // Diagnostics
   // ========================
 
-  async diagnosePlugins(): Promise<any[]> {
+  async diagnosePlugins() {
     const plugins = await this.prisma.plugin.findMany({
       orderBy: { name: 'asc' },
     });
 
     return plugins.map(plugin => {
-      const schema = (plugin.settingsSchema as any[]) || [];
+      const schema = settingsSchema(plugin.settingsSchema);
       const hasEncrypted = schema.some(f => f.encrypted);
       const hasRequired = schema.some(f => f.required);
-      const configRequirement = (plugin as any).oauthProvider
+      const configRequirement = plugin.oauthProvider
         ? 'oauth'
         : (hasEncrypted || hasRequired) ? 'api_key' : 'none';
-      const hasMarkup = !!(plugin.markupFull || (plugin as any).dataUrl);
+      const hasMarkup = !!(plugin.markupFull || plugin.dataUrl);
 
       return {
         slug: plugin.slug,
@@ -375,7 +410,7 @@ export class PluginsService {
   // Widget Templates Integration
   // ========================
 
-  async getAsWidgetTemplates(): Promise<any[]> {
+  async getAsWidgetTemplates() {
     const plugins = await this.prisma.plugin.findMany({
       where: { isInstalled: true },
     });

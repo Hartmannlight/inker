@@ -8,7 +8,7 @@ import {
   parseOutboxEvent,
   retryDelay,
 } from './outbox.types';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 const DELIVERY_PREPARE_BATCH = 64;
 

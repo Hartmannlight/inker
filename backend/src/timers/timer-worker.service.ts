@@ -5,7 +5,7 @@ import { effectKey } from '../events/outbox.types';
 import { QUEUE_POLICIES } from '../jobs/queue-policy';
 import { TimerClock, TimerService } from './timer.service';
 import { parseTimerDue, scheduleTimer, timerCompletionId } from './timer-scheduling';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 @Injectable()
 export class TimerWorkerService {

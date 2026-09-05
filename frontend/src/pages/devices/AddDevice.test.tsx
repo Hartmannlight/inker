@@ -40,7 +40,7 @@ describe('AddDevice pairing action', () => {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     });
-    getContentAssignmentChoices.mockResolvedValue({ screens: [], playlists: [] });
+    getContentAssignmentChoices.mockResolvedValue({ screens: [], playlists: [], unpublishedPlaylists: [] });
   });
 
   it('lets an admin choose a profile and creates the short-code enrollment after the device', async () => {

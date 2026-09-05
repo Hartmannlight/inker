@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { MAINTENANCE_BATCH_SIZE } from "../jobs/services/log-cleanup.service";
-import { sqliteWrite } from "../sources/source-writes";
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 

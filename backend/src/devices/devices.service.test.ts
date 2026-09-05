@@ -38,6 +38,14 @@ describe('DevicesService', () => {
         display: {
           width: selection.width ?? override?.display?.width ?? 800,
           height: selection.height ?? override?.display?.height ?? 480,
+          colorSpace: override?.display?.colorSpace ?? (profileId.startsWith('trmnl-') ? 'monochrome' : 'rgb'),
+          bitDepth: override?.display?.bitDepth ?? (profileId.startsWith('trmnl-') ? 1 : 24),
+          rotation: 0,
+          safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+          scaling: 'contain',
+          renderFormats: ['png'],
+          mimeTypes: ['image/png'],
+          ...(override?.display?.eInk ? { eInk: override.display.eInk } : {}),
         },
         transport: { modes: profileId.startsWith('browser-') ? ['websocket'] : ['http-pull'] },
         energy: { source: 'battery' },
@@ -70,6 +78,7 @@ describe('DevicesService', () => {
           },
     }),
   };
+  const mockRenderCache = { request: createMock().mockResolvedValue(undefined) };
 
   // Helper to build a device-like object that serializeDevice can process
   const makeDevice = (overrides: Record<string, any> = {}) => ({
@@ -105,6 +114,7 @@ describe('DevicesService', () => {
       mockProfileResolver as any,
       mockDeliveryPolicies as any,
       mockTransportAdapters as any,
+      mockRenderCache as any,
     );
   });
 
@@ -307,6 +317,47 @@ describe('DevicesService', () => {
       } as any)).rejects.toThrow(
         'A device profile cannot switch between legacy transport families in place',
       );
+    });
+  });
+
+  describe('updateDisplayTechnology()', () => {
+    it('lets a web-connected device opt into monochrome E-ink rendering', async () => {
+      const device = makeDevice({
+        deviceType: 'web-display',
+        profileId: 'browser-hd-1920x1080',
+        deliveryPolicyId: 'reference-connected-browser',
+      });
+      mockPrisma.device.findUnique.mockResolvedValue(device);
+      mockPrisma.device.update.mockResolvedValue(device);
+
+      await service.updateDisplayTechnology(1, 'eink');
+
+      const data = mockPrisma.device.update.calls[0][0].data;
+      expect(data.capabilitiesOverride.display).toMatchObject({
+        colorSpace: 'monochrome',
+        bitDepth: 1,
+        eInk: { partialRefreshSupported: false },
+      });
+      expect(data.capabilities.display.colorSpace).toBe('monochrome');
+      expect(mockEventsService.notifyDevicesRefresh.calls[0][0]).toEqual([1]);
+      expect(mockRenderCache.request.calls[0][0]).toBe(1);
+    });
+
+    it('restores profile color output when switching a web display back to LCD', async () => {
+      const device = makeDevice({
+        deviceType: 'web-display',
+        profileId: 'browser-hd-1920x1080',
+        deliveryPolicyId: 'reference-connected-browser',
+        capabilitiesOverride: { display: { colorSpace: 'monochrome', bitDepth: 1, eInk: { partialRefreshSupported: false } } },
+      });
+      mockPrisma.device.findUnique.mockResolvedValue(device);
+      mockPrisma.device.update.mockResolvedValue(device);
+
+      await service.updateDisplayTechnology(1, 'lcd');
+
+      const data = mockPrisma.device.update.calls[0][0].data;
+      expect(data.capabilitiesOverride).toEqual({});
+      expect(data.capabilities.display.colorSpace).toBe('rgb');
     });
   });
 

@@ -8,6 +8,7 @@ import { generateQRCodeDataUrl } from '../../utils/qrcode';
 import { calculateDaysUntil } from '../../utils/daysUntil';
 import { customWidgetService, screenDesignerService } from '../../services/api';
 import { EInkImage } from '../common';
+import { browserTimezone } from './timezone-options';
 
 /**
  * Map generic CSS font families to specific loaded font names
@@ -27,10 +28,8 @@ function mapFontFamily(fontFamily: string): string {
   }
 }
 
-// Flatten accented/special Latin letters to ASCII (ś→s, ł→l, é→e …) — matches the backend so the
-// calendar renders consistently on e-ink. Must stay identical to backend stripDiacritics().
-function stripDiacritics(s: string): string {
-  return s
+function stripDiacritics(value: string): string {
+  return value
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/ł/g, 'l')
@@ -111,9 +110,6 @@ function ClockWidget({ config }: { config: Record<string, unknown> }) {
   const configuredTimezone = (config.timezone as string) || 'local';
   const useLocalTimezone = configuredTimezone === 'local' || configuredTimezone === '';
 
-  // Get the browser's timezone for display when 'local' is selected
-  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
   useEffect(() => {
     // Update every second for reliable time display
     const intervalId = setInterval(() => {
@@ -177,9 +173,6 @@ function DateWidget({ config }: { config: Record<string, unknown> }) {
   const configuredTimezone = (config.timezone as string) || '';
   const useLocalTimezone = configuredTimezone === 'local' || configuredTimezone === '';
 
-  // Get the browser's timezone for display when 'local' is selected
-  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
   useEffect(() => {
     // Update date at midnight in the configured timezone
     const effectiveTimezone = useLocalTimezone ? browserTimezone : configuredTimezone;
@@ -213,7 +206,7 @@ function DateWidget({ config }: { config: Record<string, unknown> }) {
     }, msUntilMidnight + 1000); // Add 1 second buffer to ensure we're past midnight
 
     return () => clearTimeout(timeout);
-  }, [date, useLocalTimezone, browserTimezone, configuredTimezone]);
+  }, [date, useLocalTimezone, configuredTimezone]);
 
   const formatDate = () => {
     // Use explicit timezone (matches backend exactly)
@@ -609,10 +602,9 @@ function CalendarWidget({ config, width, height }: { config: Record<string, unkn
   const title = stripDiacritics(now.toLocaleDateString(locale, { month: 'long', year: 'numeric' }));
   const weekRows = Math.ceil((lead + daysInMonth) / 7);
 
-  // Font sizing — MUST match the backend calendarLayout() so the preview equals the device render.
   const headerH = showHeader ? Math.max(14, Math.floor(height * 0.15)) : 0;
   const cell = Math.min(width / 7, (height - headerH) / (weekRows + 1));
-  const maxLabelLen = Math.max(...labels.map((l) => l.length), 1);
+  const maxLabelLen = Math.max(...labels.map((label) => label.length), 1);
   const daySize = Math.max(8, Math.floor(cell * 0.42 * scale));
   const labelSize = Math.max(7, Math.floor(Math.min(cell * 0.34, (cell * 0.92) / (maxLabelLen * 0.62)) * scale));
   const headerSize = showHeader
@@ -966,7 +958,8 @@ function CountdownWidget({ config }: { config: Record<string, unknown> }) {
 /**
  * ImageWidget - Displays a static image from URL
  *
- * Shows image in grayscale to simulate e-ink display appearance
+ * Keeps the source image in color. Target-specific publication rendering
+ * performs the e-ink conversion when required.
  */
 function ImageWidget({ config }: { config: Record<string, unknown> }) {
   const url = (config.url as string) || (config.imageUrl as string) || '';
@@ -983,13 +976,13 @@ function ImageWidget({ config }: { config: Record<string, unknown> }) {
     );
   }
 
-  // Use EInkImage component for proper e-ink rendering and GIF freezing
   return (
-    <div className="w-full h-full flex items-center justify-center bg-white">
-      <EInkImage
+    <div className="w-full h-full flex items-center justify-center bg-transparent">
+      <img
         src={url}
         alt="Widget image"
-        fit={fit as 'contain' | 'cover' | 'fill'}
+        className="w-full h-full"
+        style={{ objectFit: fit as 'contain' | 'cover' | 'fill' }}
       />
     </div>
   );

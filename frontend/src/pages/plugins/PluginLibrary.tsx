@@ -4,21 +4,11 @@ import { MainLayout } from '../../components/layout';
 import { Button, LoadingSpinner, Modal } from '../../components/common';
 import { useApi, useMutation } from '../../hooks/useApi';
 import { pluginService } from '../../services/api';
-import { getPluginActions, type PluginAction } from '../../components/plugins/plugin-actions';
+import { getPluginActions, type PluginAction, type PluginActionInstance } from '../../components/plugins/plugin-actions';
+import type { Plugin, PluginInstance } from '../../types';
 
-interface Plugin {
-  id: number;
-  slug: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  category: string;
-  source: string;
-  isBuiltin: boolean;
-  settingsSchema?: any[];
-  _count?: { instances: number };
-  instances?: { id: number; settings: any }[];
-}
+type LibraryInstance = Pick<PluginInstance, 'id' | 'settings'>;
+type LibraryPlugin = Plugin & { instances?: LibraryInstance[] };
 
 interface ActiveModal {
   title: string;
@@ -31,9 +21,9 @@ export function PluginLibrary() {
   const [activeModal, setActiveModal] = useState<ActiveModal | null>(null);
 
   const fetchPlugins = useCallback(() => pluginService.getAll(), []);
-  const { data: plugins, isLoading, refetch } = useApi<Plugin[]>(fetchPlugins);
+  const { data: plugins, isLoading, refetch } = useApi<LibraryPlugin[]>(fetchPlugins);
 
-  const installMutation = useMutation<any, number>(
+  const installMutation = useMutation<PluginInstance, number>(
     (pluginId) => pluginService.createInstance({ pluginId }),
     {
       successMessage: 'Plugin installed',
@@ -43,10 +33,10 @@ export function PluginLibrary() {
     }
   );
 
-  const handleAction = (action: PluginAction, instance: { id: number; settings: any }, plugin: Plugin) => {
-    const instanceObj = { id: instance.id, pluginId: plugin.id, name: undefined, settings: instance.settings, plugin };
+  const handleAction = (action: PluginAction, instance: LibraryInstance, plugin: LibraryPlugin) => {
+    const instanceObj: PluginActionInstance = { id: instance.id, pluginId: plugin.id, name: undefined, settings: instance.settings, plugin };
     if (action.navigateTo) {
-      navigate(action.navigateTo(instanceObj as any));
+      navigate(action.navigateTo(instanceObj));
       return;
     }
     if (!action.renderModal) return;
@@ -54,7 +44,7 @@ export function PluginLibrary() {
     setActiveModal({
       title: action.modalTitle || action.label,
       size: action.modalSize || 'md',
-      content: action.renderModal(instanceObj as any, closeModal),
+      content: action.renderModal(instanceObj, closeModal),
     });
   };
 
@@ -85,7 +75,7 @@ export function PluginLibrary() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {plugins.map((plugin) => {
               const parentInstance = plugin.instances?.find(
-                (i: any) => !i.settings?.parentInstanceId
+                (i) => !i.settings.parentInstanceId
               );
               return (
                 <PluginCard
@@ -118,8 +108,8 @@ export function PluginLibrary() {
 }
 
 interface PluginCardProps {
-  plugin: Plugin;
-  parentInstance?: { id: number; settings: any };
+  plugin: LibraryPlugin;
+  parentInstance?: LibraryInstance;
   onInstall: () => void;
   onAction: (action: PluginAction) => void;
   installing: boolean;
@@ -128,7 +118,7 @@ interface PluginCardProps {
 function PluginCard({ plugin, parentInstance, onInstall, onAction, installing }: PluginCardProps) {
   const isInstalled = !!parentInstance;
   const actions = isInstalled
-    ? getPluginActions(plugin.slug).filter(a => a.isVisible({ id: parentInstance.id, pluginId: plugin.id, settings: parentInstance.settings, plugin } as any))
+    ? getPluginActions(plugin.slug).filter(a => a.isVisible({ id: parentInstance.id, pluginId: plugin.id, settings: parentInstance.settings, plugin }))
     : [];
 
   return (

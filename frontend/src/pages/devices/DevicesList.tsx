@@ -330,7 +330,7 @@ function DeviceCard({ device, onClick }: DeviceCardProps) {
               {device.friendlyId || device.macAddress || device.externalId}
             </p>
           </div>
-          <OnlineStatus status={device.status} lastSeen={device.lastSeenAt} size="sm" />
+          <OnlineStatus status={device.status} lastSeen={device.lastSeenAt ?? undefined} size="sm" />
         </div>
       </div>
 
@@ -347,7 +347,7 @@ function DeviceCard({ device, onClick }: DeviceCardProps) {
 
         <div className="flex items-center justify-between text-sm">
           <span className="text-text-muted">Last seen</span>
-          <span className="text-text-secondary font-medium">{formatRelativeTime(device.lastSeenAt)}</span>
+          <span className="text-text-secondary font-medium">{device.lastSeenAt ? formatRelativeTime(device.lastSeenAt) : 'Never'}</span>
         </div>
 
         {device.firmwareVersion && (
@@ -390,7 +390,7 @@ function DeviceListItem({ device, onClick }: DeviceCardProps) {
       onClick={onClick}
       className="flex items-center gap-4 px-6 py-4 hover:bg-bg-muted cursor-pointer transition-colors"
     >
-      <OnlineStatus status={device.status} lastSeen={device.lastSeenAt} showLabel={false} size="md" />
+      <OnlineStatus status={device.status} lastSeen={device.lastSeenAt ?? undefined} showLabel={false} size="md" />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-3">
@@ -398,7 +398,7 @@ function DeviceListItem({ device, onClick }: DeviceCardProps) {
           <span className="text-xs text-text-muted font-mono">{device.friendlyId || device.macAddress || device.externalId}</span>
         </div>
         <div className="flex items-center gap-4 mt-1">
-          <span className="text-sm text-text-muted">Last seen {formatRelativeTime(device.lastSeenAt)}</span>
+          <span className="text-sm text-text-muted">Last seen {device.lastSeenAt ? formatRelativeTime(device.lastSeenAt) : 'never'}</span>
           {device.playlist && <span className="text-sm text-accent">{device.playlist.name}</span>}
         </div>
       </div>

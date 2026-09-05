@@ -223,7 +223,12 @@ describe('WP-19 persistent render cache', () => {
   test('WP-21 pinned persisted snapshots determine real pixels and later source failure cannot mutate a publication', async () => {
     const sources = new SourcesService(prisma as PrismaService, {} as EncryptionService);
     const reader = new SourceReadService(prisma as PrismaService);
-    const worker = new SourceWorkerService(prisma as PrismaService, outbox);
+    const worker = new SourceWorkerService(
+      prisma as PrismaService,
+      outbox,
+      undefined,
+      {} as EncryptionService,
+    );
     const input = { protocolVersion: '1.0', name: 'snapshot-fixture', connectorType: 'fixture', schemaVersion: '1',
       configuration: { data: { fixtureArtifacts: ['mono-800x480-white-png'] } }, refreshIntervalSeconds: 60, timeoutMs: 1000, concurrencyGroup: 'render-proof' };
     const created = await sources.create(input), sourceId = created.definition.sourceDefinitionId;

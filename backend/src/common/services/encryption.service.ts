@@ -65,7 +65,7 @@ export class EncryptionService {
     }
   }
 
-  encryptObject(obj: Record<string, any>): Record<string, string> {
+  encryptObject(obj: Record<string, unknown>): Record<string, string> {
     const encrypted: Record<string, string> = {};
     for (const [key, value] of Object.entries(obj)) {
       if (value !== undefined && value !== null) {
@@ -75,7 +75,7 @@ export class EncryptionService {
     return encrypted;
   }
 
-  decryptObject(obj: Record<string, any>): Record<string, string> {
+  decryptObject(obj: Record<string, unknown>): Record<string, string> {
     const decrypted: Record<string, string> = {};
     for (const [key, value] of Object.entries(obj)) {
       try {

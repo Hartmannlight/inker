@@ -24,9 +24,11 @@ import { DevicesService } from './devices.service';
 import { ContentAssignmentService } from './content-assignment.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
+import { DisplayControlDto } from './dto/display-control.dto';
+import { DisplayTechnologyDto } from './dto/display-technology.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { PresentationService } from '../device-platform/presentation.service';
-import { matchesIfNoneMatch } from '../device-platform/pull-content.controller';
+import { matchesIfNoneMatch } from '../common/utils/http-cache.util';
 
 @ApiTags('devices')
 @Controller('devices')
@@ -66,6 +68,27 @@ export class DevicesController {
   @ApiResponse({ status: 404, description: 'Device not found' })
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.devicesService.findOne(id);
+  }
+
+  @Get(':id/display-control')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Read LCD brightness and dimming settings' })
+  getDisplayControl(@Param('id', ParseIntPipe) id: number) {
+    return this.devicesService.getDisplayControl(id);
+  }
+
+  @Put(':id/display-control')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Set LCD brightness and its time-based dimming schedule' })
+  updateDisplayControl(@Param('id', ParseIntPipe) id: number, @Body() body: DisplayControlDto) {
+    return this.devicesService.updateDisplayControl(id, body);
+  }
+
+  @Put(':id/display-technology')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Choose LCD/color or E-ink/dithered rendering for a web-connected device' })
+  updateDisplayTechnology(@Param('id', ParseIntPipe) id: number, @Body() body: DisplayTechnologyDto) {
+    return this.devicesService.updateDisplayTechnology(id, body.technology);
   }
 
   @Get(':id/preview')

@@ -1,5 +1,5 @@
 import type { Prisma, SourceDefinition } from '@prisma/client';
-import { sha256 } from '../publications/publication-content';
+import { sha256 } from '../common/utils/content-hash.util';
 import { intentCorrelationId } from '../events/outbox-correlation';
 
 export const SOURCE_REFRESH = 'source.refresh.due';

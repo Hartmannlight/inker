@@ -25,6 +25,6 @@ export class AddPlaylistItemDto {
   })
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(0)
   duration?: number;
 }

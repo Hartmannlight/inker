@@ -7,9 +7,10 @@ import { DevicePlatformModule } from '../device-platform/device-platform.module'
 import { PublicationsModule } from '../publications/publications.module';
 import { PlaybackCoreModule } from '../playback/playback-core.module';
 import { ContentAssignmentService } from './content-assignment.service';
+import { RenderCacheModule } from '../render-cache/render-cache.module';
 
 @Module({
-  imports: [PrismaModule, FirmwareModule, DevicePlatformModule, PublicationsModule, PlaybackCoreModule],
+  imports: [PrismaModule, FirmwareModule, DevicePlatformModule, PublicationsModule, PlaybackCoreModule, RenderCacheModule],
   controllers: [DevicesController],
   providers: [DevicesService, ContentAssignmentService],
   exports: [DevicesService, DevicePlatformModule],

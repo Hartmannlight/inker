@@ -287,7 +287,7 @@ export class PluginsController {
 
   @Post('preview-template')
   @ApiOperation({ summary: 'Preview a Liquid template with explicitly supplied data' })
-  async previewTemplate(@Body() body: { markup: string; data?: Record<string, any> }, @Res() res: Response) {
+  async previewTemplate(@Body() body: { markup: string; data?: Record<string, unknown> }, @Res() res: Response) {
     const imageBuffer = await this.pluginsService.previewMarkup(body.markup, body.data || {});
     res.set({
       'Content-Type': 'image/png',
@@ -304,12 +304,11 @@ export class PluginsController {
     @Query('layout') layout: string,
     @Res() res: Response,
   ) {
-    const plugin = await this.pluginsService.findPluginById(id);
     const validLayout = (['full', 'half_horizontal', 'half_vertical', 'quadrant'].includes(layout)
       ? layout
       : 'full') as 'full' | 'half_horizontal' | 'half_vertical' | 'quadrant';
 
-    const imageBuffer = await this.pluginsService.previewPlugin(plugin, validLayout);
+    const imageBuffer = await this.pluginsService.previewPluginById(id, validLayout);
 
     res.set({
       'Content-Type': 'image/png',
@@ -431,7 +430,7 @@ export class PluginsController {
     @Param('id', ParseIntPipe) id: number,
     @Query('provider') provider: string,
   ) {
-    const instance: any = await this.pluginsService.findInstanceById(id);
+    const instance = await this.pluginsService.findInstanceById(id);
     const oauthProvider = provider || instance.plugin.oauthProvider;
     if (!oauthProvider) {
       throw new NotFoundException('This plugin does not require OAuth');
@@ -469,7 +468,7 @@ export class PluginsController {
   @ApiOperation({ summary: 'Receive webhook data for a plugin' })
   async receiveWebhook(
     @Param('slug') slug: string,
-    @Body() body: any,
+    @Body() body: Record<string, unknown>,
   ) {
     return this.pluginsService.handleWebhook(slug, body);
   }

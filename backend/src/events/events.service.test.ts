@@ -70,9 +70,7 @@ describe('EventsService', () => {
     it('should filter out events targeting other devices', (done) => {
       const stream = service.getEventsForDevices([1]);
 
-      let receivedCount = 0;
       const subscription = stream.subscribe((event) => {
-        receivedCount++;
         // Only the second event should arrive (broadcast)
         expect(event.type).toBe('screen:updated');
         subscription.unsubscribe();

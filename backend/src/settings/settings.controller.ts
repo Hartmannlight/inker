@@ -3,6 +3,12 @@ import { SettingsService, SETTING_KEYS } from './settings.service';
 import { UpdateSettingDto } from './dto/update-setting.dto';
 import { WelcomeScreenConfigDto } from './dto/welcome-screen-config.dto';
 
+const allowedSettingKeys: readonly string[] = Object.values(SETTING_KEYS);
+
+function isAllowedSettingKey(key: string): boolean {
+  return allowedSettingKeys.includes(key);
+}
+
 @Controller('settings')
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
@@ -62,9 +68,8 @@ export class SettingsController {
    */
   @Put(':key')
   async update(@Param('key') key: string, @Body() body: UpdateSettingDto) {
-    const allowedKeys = Object.values(SETTING_KEYS);
-    if (!allowedKeys.includes(key as any)) {
-      throw new BadRequestException(`Invalid setting key: ${key}. Allowed keys: ${allowedKeys.join(', ')}`);
+    if (!isAllowedSettingKey(key)) {
+      throw new BadRequestException(`Invalid setting key: ${key}. Allowed keys: ${allowedSettingKeys.join(', ')}`);
     }
     await this.settingsService.set(key, body.value);
     return { success: true };
@@ -75,9 +80,8 @@ export class SettingsController {
    */
   @Delete(':key')
   async delete(@Param('key') key: string) {
-    const allowedKeys = Object.values(SETTING_KEYS);
-    if (!allowedKeys.includes(key as any)) {
-      throw new BadRequestException(`Invalid setting key: ${key}. Allowed keys: ${allowedKeys.join(', ')}`);
+    if (!isAllowedSettingKey(key)) {
+      throw new BadRequestException(`Invalid setting key: ${key}. Allowed keys: ${allowedSettingKeys.join(', ')}`);
     }
     await this.settingsService.delete(key);
     return { success: true };

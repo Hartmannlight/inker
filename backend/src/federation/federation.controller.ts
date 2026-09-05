@@ -5,7 +5,7 @@ import {
 import type { IncomingHttpHeaders } from 'node:http';
 import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator';
-import { matchesIfNoneMatch } from '../device-platform/pull-content.controller';
+import { matchesIfNoneMatch } from '../common/utils/http-cache.util';
 import { FederationFeedService } from './federation-feed.service';
 import { FederationTransportGuard } from './federation-transport.guard';
 import { ShareCredentialService } from './share-credential.service';

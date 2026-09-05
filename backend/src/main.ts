@@ -4,8 +4,8 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const compression = require('compression');
+import * as compressionModule from 'compression';
+import type compressionFactory from 'compression';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -19,6 +19,10 @@ import {
 import { resolve } from 'node:path';
 import { ApiDeliveryLifecycle } from './device-platform/api-delivery.module';
 import { OutboxRedisService } from './events/outbox-redis.service';
+
+const compression = (
+  (compressionModule as unknown as { default?: typeof compressionFactory }).default ?? compressionModule
+) as typeof compressionFactory;
 
 async function bootstrap() {
   validateAdminPin(process.env.ADMIN_PIN);
@@ -78,9 +82,10 @@ async function bootstrap() {
     });
   }
 
-  // Global prefix - exclude /api routes since they're for device communication
+  // All application APIs share one prefix. Health probes intentionally remain
+  // at the root for container orchestrators.
   app.setGlobalPrefix('api', {
-    exclude: ['live', 'health', 'ready', 'api/display', 'api/setup', 'api/setup/', 'api/log', 'api/device-images/design/:id', 'api/device-images/device/:id', 'api/device-images/screen/:id'],
+    exclude: ['live', 'health', 'ready'],
   });
 
   // Global pipes

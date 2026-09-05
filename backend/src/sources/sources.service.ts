@@ -8,7 +8,7 @@ import { validateConnectorConfiguration, type ConnectorType } from './connectors
 import { scheduleSource } from './source-job';
 import { publicDefinition } from './source-read.service';
 import { sourceWrite } from './source-writes';
-import { canonicalJson } from '../publications/publication-content';
+import { canonicalJson } from '../common/utils/content-hash.util';
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestException('SOURCE_INVALID_COMMAND');

@@ -6,29 +6,7 @@ import { useApi, useMutation } from '../../hooks/useApi';
 import { config } from '../../config';
 import apiClient from '../../services/api';
 import { getPluginActions, type PluginAction } from '../../components/plugins/plugin-actions';
-
-interface Plugin {
-  id: number;
-  slug: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  category: string;
-  source: string;
-  isBuiltin: boolean;
-  settingsSchema?: any[];
-  _count?: { instances: number };
-}
-
-interface PluginInstance {
-  id: number;
-  pluginId: number;
-  name?: string;
-  settings: Record<string, any>;
-  plugin: Plugin;
-  lastFetchedAt?: string;
-  lastError?: string;
-}
+import type { PluginInstance } from '../../types';
 
 interface ActiveModal {
   title: string;

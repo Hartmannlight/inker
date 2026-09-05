@@ -11,6 +11,7 @@ import { UpdateDataSourceDto } from './dto/update-data-source.dto';
 import { TestUrlDto } from './dto/test-url.dto';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { SettingsService } from '../settings/settings.service';
+import { Prisma } from '@prisma/client';
 
 export const SOURCE_REFRESH_REQUIRES_CONNECTOR = 'SOURCE_REFRESH_REQUIRES_CONNECTOR';
 export const SOURCE_SNAPSHOT_UNAVAILABLE = 'SOURCE_SNAPSHOT_UNAVAILABLE';
@@ -343,7 +344,7 @@ export class DataSourcesService {
         type: updateDataSourceDto.type,
         url: updateDataSourceDto.url,
         method: updateDataSourceDto.method,
-        headers: headers as any,
+        headers: headers ?? Prisma.JsonNull,
         refreshInterval: updateDataSourceDto.refreshInterval,
         jsonPath: updateDataSourceDto.jsonPath,
         isActive: updateDataSourceDto.isActive,

@@ -1,35 +1,38 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AdminAuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary, ToastContainer } from './components/common';
-
-// Auth pages
 import { Landing } from './pages/auth/Landing';
-
-// Main pages
-import { Dashboard } from './pages/Dashboard';
-import { DevicesList } from './pages/devices/DevicesList';
-import { DeviceDetail } from './pages/devices/DeviceDetail';
-import { DeviceForm } from './pages/devices/DeviceForm';
-import { AddDevice } from './pages/devices/AddDevice';
-import { ScreensList } from './pages/screens/ScreensList';
-import { ScreenDetail } from './pages/screens/ScreenDetail';
-import { ScreenForm } from './pages/screens/ScreenForm';
-import { ScreenDesigner } from './pages/screens/ScreenDesigner';
-import { PlaylistsList } from './pages/playlists/PlaylistsList';
-import { PlaylistDetail } from './pages/playlists/PlaylistDetail';
-import { PlaylistForm } from './pages/playlists/PlaylistForm';
-import { Settings } from './pages/settings/Settings';
-import { DataSourceForm } from './pages/data-sources';
-import { CustomWidgetForm, CustomWidgetPreview } from './pages/custom-widgets';
 import { Extensions } from './pages/extensions';
-import { GrafanaPanelSource, Integrations } from './pages/integrations';
-// Plugin pages
-import { PluginCreator, PluginInstanceForm, OAuthCallback } from './pages/plugins';
-import { WebDisplay } from './pages/display/WebDisplay';
-import { Remotes } from './pages/remotes/Remotes';
-import { Operations } from './pages/operations/Operations';
+import { Integrations } from './pages/integrations';
+
+// Pages are route-level boundaries. Loading them lazily keeps unrelated editors,
+// integrations and CodeMirror code out of the initial application bundle.
+const Dashboard = lazy(() => import('./pages/Dashboard').then(module => ({ default: module.Dashboard })));
+const DevicesList = lazy(() => import('./pages/devices/DevicesList').then(module => ({ default: module.DevicesList })));
+const DeviceDetail = lazy(() => import('./pages/devices/DeviceDetail').then(module => ({ default: module.DeviceDetail })));
+const DeviceForm = lazy(() => import('./pages/devices/DeviceForm').then(module => ({ default: module.DeviceForm })));
+const AddDevice = lazy(() => import('./pages/devices/AddDevice').then(module => ({ default: module.AddDevice })));
+const ScreensList = lazy(() => import('./pages/screens/ScreensList').then(module => ({ default: module.ScreensList })));
+const ScreenDetail = lazy(() => import('./pages/screens/ScreenDetail').then(module => ({ default: module.ScreenDetail })));
+const ScreenForm = lazy(() => import('./pages/screens/ScreenForm').then(module => ({ default: module.ScreenForm })));
+const ScreenDesigner = lazy(() => import('./pages/screens/ScreenDesigner').then(module => ({ default: module.ScreenDesigner })));
+const PlaylistsList = lazy(() => import('./pages/playlists/PlaylistsList').then(module => ({ default: module.PlaylistsList })));
+const PlaylistDetail = lazy(() => import('./pages/playlists/PlaylistDetail').then(module => ({ default: module.PlaylistDetail })));
+const PlaylistForm = lazy(() => import('./pages/playlists/PlaylistForm').then(module => ({ default: module.PlaylistForm })));
+const Settings = lazy(() => import('./pages/settings/Settings').then(module => ({ default: module.Settings })));
+const DataSourceForm = lazy(() => import('./pages/data-sources').then(module => ({ default: module.DataSourceForm })));
+const CustomWidgetForm = lazy(() => import('./pages/custom-widgets').then(module => ({ default: module.CustomWidgetForm })));
+const CustomWidgetPreview = lazy(() => import('./pages/custom-widgets').then(module => ({ default: module.CustomWidgetPreview })));
+const GrafanaPanelSource = lazy(() => import('./pages/integrations').then(module => ({ default: module.GrafanaPanelSource })));
+const PluginCreator = lazy(() => import('./pages/plugins').then(module => ({ default: module.PluginCreator })));
+const PluginInstanceForm = lazy(() => import('./pages/plugins').then(module => ({ default: module.PluginInstanceForm })));
+const OAuthCallback = lazy(() => import('./pages/plugins').then(module => ({ default: module.OAuthCallback })));
+const WebDisplay = lazy(() => import('./pages/display/WebDisplay').then(module => ({ default: module.WebDisplay })));
+const Remotes = lazy(() => import('./pages/remotes/Remotes').then(module => ({ default: module.Remotes })));
+const Operations = lazy(() => import('./pages/operations/Operations').then(module => ({ default: module.Operations })));
 
 /**
  * Main App component with routing
@@ -42,6 +45,7 @@ function App() {
       <AdminAuthProvider>
         <NotificationProvider>
           <Router>
+            <Suspense fallback={<div className="p-6 text-center text-gray-500" role="status">Seite wird geladen…</div>}>
             <Routes>
             {/* Public routes */}
             <Route path="/login" element={<Landing defaultMode="admin" />} />
@@ -303,6 +307,7 @@ function App() {
             {/* 404 */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
+          </Suspense>
           <ToastContainer />
         </Router>
       </NotificationProvider>

@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CustomWidgetsModule } from '../custom-widgets/custom-widgets.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -9,7 +9,7 @@ import { WidgetTemplatesService } from './services/widget-templates.service';
 import { ScreenRendererService } from './services/screen-renderer.service';
 
 @Module({
-  imports: [PrismaModule, CustomWidgetsModule, SettingsModule, forwardRef(() => PluginsModule)],
+  imports: [PrismaModule, CustomWidgetsModule, SettingsModule, PluginsModule],
   controllers: [ScreenDesignerController, WidgetTemplatesController],
   providers: [
     ScreenDesignerService,

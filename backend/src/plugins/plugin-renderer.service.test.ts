@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from 'bun:test';
+import type { ModuleRef } from '@nestjs/core';
 import * as childProcess from 'node:child_process';
 import type { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
 import { PluginRendererService } from './plugin-renderer.service';
@@ -9,7 +10,12 @@ describe('plugin template boundary', () => {
       renderHtmlToPng: mock(async () => Buffer.from('png')),
       getBrowser: mock(async () => { throw new Error('unexpected external browser access'); }),
     };
-    return { screen, renderer: new PluginRendererService(screen as unknown as ScreenRendererService) };
+    return {
+      screen,
+      renderer: new PluginRendererService({
+        get: () => screen as unknown as ScreenRendererService,
+      } as unknown as ModuleRef),
+    };
   }
 
   test('templates see normalized data but never configuration or OAuth values', async () => {

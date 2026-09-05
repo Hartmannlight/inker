@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { MainLayout } from '../../components/layout';
 import {
@@ -12,12 +12,13 @@ import {
 import { OnlineStatusBadge } from '../../components/common/OnlineStatus';
 import { presentDeviceTelemetry } from '../../utils/deviceTelemetry';
 import { useApi, useMutation } from '../../hooks/useApi';
-import { deviceService, modelService, type ContentAssignment } from '../../services/api';
+import { deviceService, modelService, playlistService, type ContentAssignment, type DisplayControlSettings, type DisplayTechnology } from '../../services/api';
 import type { Device, DeviceModel } from '../../types';
 import { DevicePairingPanel } from '../../components/devices/DevicePairingPanel';
 import { DevicePublishedPreview } from './DevicePublishedPreview';
 
 type CompatibleScreen = NonNullable<Awaited<ReturnType<typeof deviceService.getContentAssignmentChoices>>>['screens'][number];
+type ContentChoice = ContentAssignment | { kind: 'unpublishedPlaylist'; playlistId: number; draftHash: string };
 
 const compatibilityStyle = {
   exact: 'border-status-success-border bg-status-success-bg text-status-success-text',
@@ -61,6 +62,109 @@ interface DeviceLog {
   createdAt: string;
 }
 
+const defaultDisplayControl = (): DisplayControlSettings => ({
+  brightness: 100,
+  scheduleEnabled: false,
+  dimStartAt: '22:00',
+  dimStopAt: '07:00',
+  dimBrightness: 20,
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  foregroundColor: '#000000',
+  backgroundColor: '#ffffff',
+});
+
+function isRgbDevice(device: Device): boolean {
+  const display = device.capabilities?.display;
+  return Boolean(display && typeof display === 'object' && (display as Record<string, unknown>).colorSpace === 'rgb');
+}
+
+function displayTechnology(device: Device): DisplayTechnology {
+  return isRgbDevice(device) ? 'lcd' : 'eink';
+}
+
+function DisplayTechnologyCard({ deviceId, technology, onSaved }: {
+  deviceId: string;
+  technology: DisplayTechnology;
+  onSaved: () => void;
+}) {
+  const { mutate: save, isLoading } = useMutation<unknown, DisplayTechnology>(
+    (value) => deviceService.updateDisplayTechnology(deviceId, value),
+    { successMessage: 'Display type saved', onSuccess: onSaved },
+  );
+  const optionClass = (value: DisplayTechnology) => `flex-1 rounded-lg border px-4 py-3 text-left transition-colors disabled:opacity-50 ${
+    technology === value ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-light text-text-secondary hover:border-accent'
+  }`;
+
+  return <div className="bg-bg-card rounded-xl shadow-theme-sm border border-border-light overflow-hidden">
+    <div className="px-6 py-4 border-b border-border-light bg-bg-muted">
+      <h2 className="text-lg font-semibold text-text-primary">Display type</h2>
+      <p className="mt-1 text-xs text-text-muted">Selected per device, independently of whether it connects through a browser or embedded firmware.</p>
+    </div>
+    <div className="p-6">
+      <div className="flex gap-3" role="group" aria-label="Display type">
+        <button type="button" aria-pressed={technology === 'lcd'} disabled={isLoading} onClick={() => save('lcd')} className={optionClass('lcd')}>
+          <span className="block font-medium">LCD / color</span>
+          <span className="mt-1 block text-xs text-text-muted">Keeps images in color and enables themes and dimming.</span>
+        </button>
+        <button type="button" aria-pressed={technology === 'eink'} disabled={isLoading} onClick={() => save('eink')} className={optionClass('eink')}>
+          <span className="block font-medium">E-ink</span>
+          <span className="mt-1 block text-xs text-text-muted">Automatically converts and dithers output to monochrome.</span>
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
+function LcdDisplayControlCard({ deviceId, initial, onSaved }: {
+  deviceId: string;
+  initial?: DisplayControlSettings;
+  onSaved: () => void;
+}) {
+  const [settings, setSettings] = useState<DisplayControlSettings>({ ...defaultDisplayControl(), ...initial });
+  const { mutate: save, isLoading } = useMutation<DisplayControlSettings, DisplayControlSettings>(
+    (value) => deviceService.updateDisplayControl(deviceId, value),
+    { successMessage: 'LCD display settings saved', onSuccess: onSaved },
+  );
+  const set = <K extends keyof DisplayControlSettings>(key: K, value: DisplayControlSettings[K]) => {
+    setSettings(current => ({ ...current, [key]: value }));
+  };
+
+  return <div className="bg-bg-card rounded-xl shadow-theme-sm border border-border-light overflow-hidden">
+    <div className="px-6 py-4 border-b border-border-light bg-bg-muted">
+      <h2 className="text-lg font-semibold text-text-primary">LCD display</h2>
+      <p className="mt-1 text-xs text-text-muted">Applied on the next device poll. The same settings are available through the device display-control API.</p>
+    </div>
+    <div className="space-y-5 p-6">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-xs text-text-muted">Background color<div className="mt-1 flex items-center gap-2"><input aria-label="LCD background color" type="color" value={settings.backgroundColor} onChange={event => set('backgroundColor', event.target.value)} className="h-9 w-10 cursor-pointer rounded border border-border-light p-0.5" /><span className="font-mono text-text-secondary">{settings.backgroundColor}</span></div></label>
+        <label className="text-xs text-text-muted">Icons and text<div className="mt-1 flex items-center gap-2"><input aria-label="LCD foreground color" type="color" value={settings.foregroundColor} onChange={event => set('foregroundColor', event.target.value)} className="h-9 w-10 cursor-pointer rounded border border-border-light p-0.5" /><span className="font-mono text-text-secondary">{settings.foregroundColor}</span></div></label>
+      </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={() => setSettings(current => ({ ...current, backgroundColor: '#ffffff', foregroundColor: '#000000' }))} className="rounded-lg border border-border-light px-3 py-1.5 text-xs text-text-secondary hover:border-accent">Light preset</button>
+        <button type="button" onClick={() => setSettings(current => ({ ...current, backgroundColor: '#000000', foregroundColor: '#ffffff' }))} className="rounded-lg border border-border-light bg-black px-3 py-1.5 text-xs text-white hover:border-accent">Dark preset</button>
+      </div>
+      <label className="block">
+        <span className="flex justify-between text-sm font-medium text-text-secondary"><span>Normal brightness</span><span>{settings.brightness}%</span></span>
+        <input className="mt-2 w-full accent-accent" type="range" min="0" max="100" value={settings.brightness} onChange={event => set('brightness', Number(event.target.value))} />
+      </label>
+      <label className="flex items-center justify-between gap-4 text-sm text-text-secondary">
+        <span><span className="block font-medium">Scheduled dimming</span><span className="text-xs text-text-muted">Use the display's local time zone</span></span>
+        <input type="checkbox" checked={settings.scheduleEnabled} onChange={event => set('scheduleEnabled', event.target.checked)} className="h-5 w-5 accent-accent" />
+      </label>
+      {settings.scheduleEnabled && <div className="grid grid-cols-2 gap-3">
+        <label className="text-xs text-text-muted">Dim from<input className="mt-1 w-full rounded-lg border border-border-light bg-bg-card px-2 py-2 text-text-primary" type="time" value={settings.dimStartAt} onChange={event => set('dimStartAt', event.target.value)} /></label>
+        <label className="text-xs text-text-muted">Until<input className="mt-1 w-full rounded-lg border border-border-light bg-bg-card px-2 py-2 text-text-primary" type="time" value={settings.dimStopAt} onChange={event => set('dimStopAt', event.target.value)} /></label>
+        <label className="col-span-2 block">
+          <span className="flex justify-between text-sm text-text-secondary"><span>Dimmed brightness</span><span>{settings.dimBrightness}%</span></span>
+          <input className="mt-2 w-full accent-accent" type="range" min="0" max="100" value={settings.dimBrightness} onChange={event => set('dimBrightness', Number(event.target.value))} />
+        </label>
+        <label className="col-span-2 text-xs text-text-muted">Time zone<input className="mt-1 w-full rounded-lg border border-border-light bg-bg-card px-3 py-2 text-sm text-text-primary" value={settings.timezone} onChange={event => set('timezone', event.target.value)} placeholder="Europe/Berlin" /></label>
+      </div>}
+      <Button onClick={() => save(settings)} isLoading={isLoading}>Save display settings</Button>
+    </div>
+  </div>;
+}
+
 /**
  * Device detail page with monochrome theme
  * Uses CSS variables for easy theme customization
@@ -76,6 +180,7 @@ export function DeviceDetail() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [showContentModal, setShowContentModal] = useState(false);
   const [riskyScreen, setRiskyScreen] = useState<CompatibleScreen | null>(null);
+  const playlistPublishKeys = useRef(new Map<number, string>());
 
   // Logs state
   const [logs, setLogs] = useState<DeviceLog[]>([]);
@@ -162,19 +267,30 @@ export function DeviceDetail() {
     }
   );
 
-  const { mutate: assignContent, isLoading: isAssigningContent } = useMutation<unknown, ContentAssignment>(
-    (assignment) => {
+  const { mutate: assignContent, isLoading: isAssigningContent } = useMutation<unknown, ContentChoice>(
+    async (assignment) => {
       if (!contentChoices) throw new Error('Content choices are still loading');
+      let resolved: ContentAssignment;
+      if (assignment.kind === 'unpublishedPlaylist') {
+        let key = playlistPublishKeys.current.get(assignment.playlistId);
+        if (!key) {
+          key = crypto.randomUUID();
+          playlistPublishKeys.current.set(assignment.playlistId, key);
+        }
+        const published = await playlistService.publishFromDraft(String(assignment.playlistId), key, assignment.draftHash);
+        resolved = { kind: 'playlist', playlistRevisionId: published.playlistRevisionId };
+      } else resolved = assignment;
       return deviceService.assignContent(
         id!,
         contentChoices.current.desiredPublicationRevisionId,
         contentChoices.current.playbackVersion,
-        assignment,
+        resolved,
       );
     },
     {
       successMessage: 'Content assignment saved',
       onSuccess: () => {
+        playlistPublishKeys.current.clear();
         setRiskyScreen(null);
         setShowContentModal(false);
         setPreviewRevision(revision => revision + 1);
@@ -287,7 +403,7 @@ export function DeviceDetail() {
                   </span>
                   <OnlineStatusBadge
                     status={device.status}
-                    lastSeen={device.lastSeenAt}
+                    lastSeen={device.lastSeenAt ?? undefined}
                     className="!bg-white/20 !border-white/30"
                   />
                 </div>
@@ -365,7 +481,7 @@ export function DeviceDetail() {
                 value={
                   <OnlineStatus
                     status={device.status}
-                    lastSeen={device.lastSeenAt}
+                    lastSeen={device.lastSeenAt ?? undefined}
                     size="md"
                   />
                 }
@@ -434,7 +550,8 @@ export function DeviceDetail() {
                     mono
                   />}
                   {device.externalId && <InfoItem label="Display ID" value={device.externalId} mono />}
-                  <InfoItem label="Device Type" value={device.deviceType === 'web-display' ? 'Web Display' : 'TRMNL'} />
+                  <InfoItem label="Device Type" value={device.deviceType === 'web-display' ? 'Web-connected device' : 'TRMNL'} />
+                  <InfoItem label="Display" value={displayTechnology(device) === 'lcd' ? 'LCD / color' : 'E-ink'} />
                   <InfoItem label="Transport" value={device.transport === 'websocket' ? 'WebSocket push' : 'HTTP pull'} />
                   {device.friendlyId && (
                     <InfoItem
@@ -445,7 +562,7 @@ export function DeviceDetail() {
                   )}
                   <InfoItem
                     label="Last Seen"
-                    value={new Date(device.lastSeenAt).toLocaleString()}
+                    value={device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : 'Never'}
                   />
                   {device.firmwareVersion && (
                     <InfoItem
@@ -546,6 +663,18 @@ export function DeviceDetail() {
               </div>
             </div>
 
+            {device.deviceType === 'web-display' && <DisplayTechnologyCard
+              deviceId={id!}
+              technology={displayTechnology(device)}
+              onSaved={() => { refetch(); setPreviewRevision(revision => revision + 1); }}
+            />}
+
+            {isRgbDevice(device) && <LcdDisplayControlCard
+              deviceId={id!}
+              initial={device.configuration?.displayControl}
+              onSaved={() => { refetch(); setPreviewRevision(revision => revision + 1); }}
+            />}
+
           </div>
         </div>
       </div>
@@ -580,7 +709,11 @@ export function DeviceDetail() {
                   <span className="block font-medium text-text-primary">{playlist.name}</span>
                   <span className="block text-xs text-text-muted">Rotating playlist · published revision {playlist.revision}</span>
                 </button>)}
-                {contentChoices.playlists.length === 0 && <p className="text-sm text-text-muted">No published playlists are available yet.</p>}
+                {contentChoices.unpublishedPlaylists.map(playlist => <button key={`draft-${playlist.playlistId}`} type="button" disabled={isAssigningContent} onClick={() => assignContent({ kind: 'unpublishedPlaylist', playlistId: playlist.playlistId, draftHash: playlist.draftHash })} className="block w-full rounded-lg border border-border-light p-3 text-left hover:border-accent disabled:opacity-50">
+                  <span className="block font-medium text-text-primary">{playlist.name}</span>
+                  <span className="block text-xs text-text-muted">Publish current draft and assign</span>
+                </button>)}
+                {contentChoices.playlists.length === 0 && contentChoices.unpublishedPlaylists.length === 0 && <p className="text-sm text-text-muted">No publishable playlists are available yet.</p>}
               </div>
             </section>
             <Button variant="outline" disabled={isAssigningContent} onClick={() => assignContent({ kind: 'none' })}>Choose later</Button>

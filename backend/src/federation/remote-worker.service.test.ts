@@ -8,6 +8,7 @@ import { RemoteWorkerService } from './remote-worker.service';
 import type { RemoteImportService } from './remote-import.service';
 import type { RemoteTransport } from './remote-transport';
 import { REMOTE_SYNC } from './remote-job';
+import type { EncryptionService } from '../common/services/encryption.service';
 
 const SERVER = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const TOKEN = 'sp_share_' + 'a'.repeat(64);
@@ -90,7 +91,12 @@ function setup() {
       return TOKEN;
     }
   }
-  const worker = new Worker(prisma as unknown as PrismaService, { current, claim } as unknown as OutboxStore, importer as unknown as RemoteImportService);
+  const worker = new Worker(
+    prisma as unknown as PrismaService,
+    { current, claim } as unknown as OutboxStore,
+    importer as unknown as RemoteImportService,
+    {} as EncryptionService,
+  );
   return {
     worker, event, job, subscription, updates, outboxUpdates, updateMany, complete, effect, current, claim, importer, transport,
     decrypted: () => decrypted, createdTransport: () => createdTransport, failSecret: () => { unavailableSecret = true; },

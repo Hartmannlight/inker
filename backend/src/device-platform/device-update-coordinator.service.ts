@@ -14,7 +14,7 @@ import { TransportAdapterRegistry } from './transport-adapter.registry';
 import { outboxCorrelation } from '../events/outbox-correlation';
 import { createCorrelationContext, currentCorrelation, runWithCorrelation } from '../observability/correlation-context';
 import { emitStructuredEvent } from '../observability/runtime-observability';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 class ConsumerLeaseRenewalError extends Error {
   constructor(readonly failure: unknown) { super('OUTBOX_CONSUMER_LEASE_RENEWAL_FAILED'); }

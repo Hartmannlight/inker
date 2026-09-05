@@ -21,7 +21,7 @@ export class ModelPollerProcessor extends WorkerHost {
     super();
   }
 
-  async process(job: Job) {
+  async process(_job: Job) {
     this.logger.log('Processing model poll job...');
 
     try {

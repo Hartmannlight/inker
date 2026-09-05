@@ -12,6 +12,33 @@ import { SleepScreenService } from './sleep-screen.service';
 import { ScreenRendererService } from '../../screen-designer/services/screen-renderer.service';
 import { PluginsService } from '../../plugins/plugins.service';
 import { SetupService } from '../setup/setup.service';
+import { Prisma } from '@prisma/client';
+import { mergeLegacyPullTelemetry } from '../../device-platform/legacy-pull-telemetry';
+
+const DISPLAY_ITEM_INCLUDE = {
+  screen: true,
+  screenDesign: { include: { widgets: { include: { template: true } } } },
+  pluginInstance: { include: { plugin: true } },
+} satisfies Prisma.PlaylistItemInclude;
+
+type DisplayPlaylistItem = Prisma.PlaylistItemGetPayload<{ include: typeof DISPLAY_ITEM_INCLUDE }>;
+
+interface SelectedPlaylistItem {
+  item: DisplayPlaylistItem;
+  screenChanged: boolean;
+  idealStartTime?: Date;
+}
+
+function itemScreenId(item: DisplayPlaylistItem): string | null {
+  if (item.screenDesign) return `design-${item.screenDesign.id}`;
+  if (item.screen) return `screen-${item.screen.id}`;
+  if (item.pluginInstance?.plugin) return `plugin-${item.pluginInstance.id}`;
+  return null;
+}
+
+function isTimedItem(item: DisplayPlaylistItem): boolean {
+  return item.duration !== null && item.duration > 0;
+}
 
 /**
  * Device metrics from headers
@@ -71,23 +98,7 @@ export class DisplayService {
         playlist: {
           include: {
             items: {
-              include: {
-                screen: true,
-                screenDesign: {
-                  include: {
-                    widgets: {
-                      include: {
-                        template: true,
-                      },
-                    },
-                  },
-                },
-                pluginInstance: {
-                  include: {
-                    plugin: true,
-                  },
-                },
-              },
+              include: DISPLAY_ITEM_INCLUDE,
               orderBy: {
                 order: 'asc',
               },
@@ -125,11 +136,7 @@ export class DisplayService {
               playlist: {
                 include: {
                   items: {
-                    include: {
-                      screen: true,
-                      screenDesign: { include: { widgets: { include: { template: true } } } },
-                      pluginInstance: { include: { plugin: true } },
-                    },
+                    include: DISPLAY_ITEM_INCLUDE,
                     orderBy: { order: 'asc' },
                   },
                 },
@@ -165,14 +172,7 @@ export class DisplayService {
     const shouldRefreshImmediately = device.refreshPending;
 
     // Build update data with lastSeenAt and optional metrics
-    const updateData: {
-      lastSeenAt: Date;
-      battery?: number;
-      wifi?: number;
-      telemetry?: any;
-      firmwareVersion?: string;
-      refreshPending?: boolean;
-    } = {
+    const updateData: Prisma.DeviceUpdateInput = {
       lastSeenAt: new Date(),
       // Reset refreshPending flag after serving content
       refreshPending: false,
@@ -188,12 +188,7 @@ export class DisplayService {
       updateData.wifi = metrics.wifi;
     }
     if (metrics?.battery !== undefined || metrics?.wifi !== undefined) {
-      const existing = device.telemetry && typeof device.telemetry === 'object' ? device.telemetry as Record<string, unknown> : {};
-      const previous = existing.legacyPull && typeof existing.legacyPull === 'object' ? existing.legacyPull as Record<string, unknown> : {};
-      updateData.telemetry = { ...existing, legacyPull: { ...previous,
-        ...(metrics?.battery !== undefined && !isNaN(metrics.battery) ? { batteryPercent: metrics.battery } : {}),
-        ...(metrics?.wifi !== undefined && !isNaN(metrics.wifi) ? { rssi: metrics.wifi } : {}),
-      }, updatedAt: new Date().toISOString() };
+      updateData.telemetry = mergeLegacyPullTelemetry(device.telemetry, metrics);
     }
 
     // Update firmware version if provided and changed
@@ -582,10 +577,10 @@ export class DisplayService {
    * This ensures each screen shows for exactly its configured duration.
    */
   private getCurrentScreen(
-    items: any[],
+    items: DisplayPlaylistItem[],
     lastScreenId: string | null,
     screenStartedAt: Date | null,
-  ): { item: any; screenChanged: boolean; idealStartTime?: Date } | null {
+  ): SelectedPlaylistItem | null {
     if (!items || items.length === 0) {
       return null;
     }
@@ -595,17 +590,10 @@ export class DisplayService {
       return { item: items[0], screenChanged: false };
     }
 
-    // Find the screen ID for a playlist item
-    const getItemScreenId = (item: any): string | null =>
-      item.screenDesign ? `design-${item.screenDesign.id}`
-        : item.screen ? `screen-${item.screen.id}`
-        : item.pluginInstance?.plugin ? `plugin-${item.pluginInstance.id}`
-        : null;
-
     // Find the current item by lastScreenId
     let currentIndex = -1;
     if (lastScreenId) {
-      currentIndex = items.findIndex(item => getItemScreenId(item) === lastScreenId);
+      currentIndex = items.findIndex(item => itemScreenId(item) === lastScreenId);
     }
 
     // If no previous screen or it's no longer in the playlist, start at first item
@@ -647,25 +635,20 @@ export class DisplayService {
    * robust to firmware that caps the refresh rate (we compare against the device-reported value).
    */
   private getTouchScreen(
-    items: any[],
+    items: DisplayPlaylistItem[],
     lastScreenId: string | null,
     screenStartedAt: Date | null,
     reportedRefreshRate?: number,
-  ): { item: any; screenChanged: boolean; idealStartTime?: Date; refreshRate: number } | null {
+  ): (SelectedPlaylistItem & { refreshRate: number }) | null {
     if (!items || items.length === 0) {
       return null;
     }
 
-    const getItemScreenId = (item: any): string | null =>
-      item.screenDesign ? `design-${item.screenDesign.id}`
-        : item.screen ? `screen-${item.screen.id}`
-        : item.pluginInstance?.plugin ? `plugin-${item.pluginInstance.id}`
-        : null;
-    const isTimed = (item: any) => item.duration != null && item.duration > 0;
-    const refreshFor = (item: any) => (isTimed(item) ? item.duration : DisplayService.STAY_REFRESH);
+    const refreshFor = (item: DisplayPlaylistItem) =>
+      isTimedItem(item) ? item.duration ?? DisplayService.STAY_REFRESH : DisplayService.STAY_REFRESH;
 
     const currentIndex = lastScreenId
-      ? items.findIndex((it) => getItemScreenId(it) === lastScreenId)
+      ? items.findIndex((item) => itemScreenId(item) === lastScreenId)
       : -1;
 
     // First poll (or the tracked screen was removed): show the first item, don't advance past it.
@@ -675,7 +658,7 @@ export class DisplayService {
 
     const current = items[currentIndex];
     let advance: boolean;
-    if (isTimed(current)) {
+    if (isTimedItem(current)) {
       advance = true; // timed: a timer wake (duration elapsed) and an early tap both advance
     } else {
       // untimed: advance only if the device came back before its long sleep finished (= a tap)
@@ -692,7 +675,7 @@ export class DisplayService {
     const next = items[(currentIndex + 1) % items.length];
     return {
       item: next,
-      screenChanged: getItemScreenId(next) !== lastScreenId,
+      screenChanged: itemScreenId(next) !== lastScreenId,
       idealStartTime: new Date(),
       refreshRate: refreshFor(next),
     };
@@ -744,14 +727,25 @@ export class DisplayService {
     return this.screenRendererService.applyEinkProcessing(input, width, height, false, format, bitDepth);
   }
 
-  /**
-   * Get base64 encoded image (if requested by device)
-   * This would require actual image processing in production
-   */
+  /** Encode only Inker-managed upload files. Screen records may also contain
+   * remote URLs; fetching those here would create an SSRF and availability
+   * boundary inside the device polling request. */
   private async getBase64Image(imageUrl: string): Promise<string | undefined> {
-    // TODO: Implement base64 encoding of image
-    // For now, return undefined and device will fetch via URL
-    return undefined;
+    const normalized = imageUrl.replaceAll('\\', '/').replace(/^\/+/, '');
+    if (!normalized.startsWith('uploads/')) return undefined;
+
+    const uploadsRoot = path.resolve(process.cwd(), 'uploads');
+    const imagePath = path.resolve(process.cwd(), normalized);
+    if (imagePath !== uploadsRoot && !imagePath.startsWith(`${uploadsRoot}${path.sep}`)) {
+      return undefined;
+    }
+
+    try {
+      return (await fs.readFile(imagePath)).toString('base64');
+    } catch {
+      this.logger.warn('Failed to read a managed upload for inline delivery');
+      return undefined;
+    }
   }
 
   /**
@@ -828,13 +822,13 @@ export class DisplayService {
   /**
    * Check if a screen design contains a clock widget
    */
-  private hasClockWidget(screenDesign: any): boolean {
+  private hasClockWidget(screenDesign: DisplayPlaylistItem['screenDesign']): boolean {
     if (!screenDesign?.widgets || !Array.isArray(screenDesign.widgets)) {
       return false;
     }
 
     return screenDesign.widgets.some(
-      (widget: any) => widget.template && widget.template.name === 'clock',
+      (widget) => widget.template?.name === 'clock',
     );
   }
 
@@ -844,7 +838,7 @@ export class DisplayService {
    * This ensures the device wakes up exactly when the minute changes
    */
   private getRefreshRateForScreen(
-    currentScreen: any,
+    currentScreen: Pick<DisplayPlaylistItem, 'screenDesign'> | null | undefined,
     deviceRefreshRate: number,
   ): number {
     let refreshRate = deviceRefreshRate;
@@ -885,7 +879,7 @@ export class DisplayService {
    * This ensures the clock updates exactly when the minute changes (e.g., 20:00 -> 20:01)
    */
   getNextRefreshTimestamp(
-    currentScreen: any,
+    currentScreen: Pick<DisplayPlaylistItem, 'screenDesign'> | null | undefined,
     deviceRefreshRate: number,
   ): number | null {
     let refreshMs = deviceRefreshRate * 1000;

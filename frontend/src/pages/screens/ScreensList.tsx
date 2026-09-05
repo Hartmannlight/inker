@@ -9,7 +9,7 @@ import { screenService, screenDesignerService, customWidgetService, dataSourceSe
 import { useNotification } from '../../contexts/NotificationContext';
 
 const CUSTOM_WIDGET_TEMPLATE_OFFSET = 10000;
-import type { Screen, ScreenDesign, WidgetTemplate } from '../../types';
+import type { PluginInstance, Screen, ScreenDesign, WidgetTemplate } from '../../types';
 
 // Combined screen type for display
 interface CombinedScreen {
@@ -114,7 +114,7 @@ export function ScreensList() {
 
   // Fetch plugin instances (shown as screens)
   const fetchPluginInstances = useCallback(() => pluginService.getAllInstances(), []);
-  const { data: pluginInstances, refetch: refetchPlugins } = useApi<any[]>(fetchPluginInstances);
+  const { data: pluginInstances, refetch: refetchPlugins } = useApi<PluginInstance[]>(fetchPluginInstances);
 
   // Fetch widget templates for preview rendering
   const { data: widgetTemplates } = useApi<WidgetTemplate[]>(
@@ -163,8 +163,8 @@ export function ScreensList() {
     ...uploadedScreens.map((screen): CombinedScreen => ({
       id: screen.id,
       name: screen.name,
-      description: screen.description,
-      thumbnailUrl: screen.thumbnailUrl,
+      description: screen.description ?? undefined,
+      thumbnailUrl: screen.thumbnailUrl ?? undefined,
       isDefault: screen.isDefault,
       isDesigned: false,
       width: screen.width,
@@ -185,7 +185,7 @@ export function ScreensList() {
       design: design,
     })),
     // Map plugin instances as screens (only child instances with dashboard_uid — not parent connections)
-    ...(pluginInstances || []).filter((inst: any) => inst.settings?.dashboard_uid && inst.name !== '__preview__').map((inst: any): CombinedScreen => ({
+    ...(pluginInstances || []).filter((inst) => inst.settings.dashboard_uid && inst.name !== '__preview__').map((inst): CombinedScreen => ({
       id: `plugin-${inst.id}`,
       name: inst.name || inst.plugin?.name || 'Plugin',
       description: inst.plugin?.description,

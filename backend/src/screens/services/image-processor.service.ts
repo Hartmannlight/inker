@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as sharpModule from 'sharp';
-// Handle both ESM and CJS imports for Bun compatibility
-const sharp = (sharpModule as any).default || sharpModule;
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { floydSteinbergDither } from '../../common/utils/raster.util';
+import { sharp } from '../../common/utils/sharp.util';
 
 /**
  * Image Processor Service
@@ -240,50 +239,7 @@ export class ImageProcessorService {
         .raw()
         .toBuffer({ resolveWithObject: true });
 
-      // Create a writable copy of pixel data
-      const pixels = new Float32Array(data.length);
-      for (let i = 0; i < data.length; i++) {
-        pixels[i] = data[i];
-      }
-
-      // Apply Floyd-Steinberg dithering
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = y * width + x;
-          const oldPixel = pixels[idx];
-
-          // Quantize to black or white
-          const newPixel = oldPixel < threshold ? 0 : 255;
-          pixels[idx] = newPixel;
-
-          // Calculate quantization error
-          const error = oldPixel - newPixel;
-
-          // Distribute error to neighboring pixels (Floyd-Steinberg pattern)
-          // Right pixel: 7/16
-          if (x + 1 < width) {
-            pixels[idx + 1] += (error * 7) / 16;
-          }
-          // Bottom-left pixel: 3/16
-          if (x - 1 >= 0 && y + 1 < height) {
-            pixels[(y + 1) * width + (x - 1)] += (error * 3) / 16;
-          }
-          // Bottom pixel: 5/16
-          if (y + 1 < height) {
-            pixels[(y + 1) * width + x] += (error * 5) / 16;
-          }
-          // Bottom-right pixel: 1/16
-          if (x + 1 < width && y + 1 < height) {
-            pixels[(y + 1) * width + (x + 1)] += (error * 1) / 16;
-          }
-        }
-      }
-
-      // Convert back to Uint8Array, clamping values
-      const output = Buffer.alloc(data.length);
-      for (let i = 0; i < pixels.length; i++) {
-        output[i] = Math.max(0, Math.min(255, Math.round(pixels[i])));
-      }
+      const output = floydSteinbergDither(data, width, height, { threshold });
 
       // Create output image from processed pixels
       await sharp(output, {
@@ -319,10 +275,11 @@ export class ImageProcessorService {
       dithering?: boolean;
       threshold?: number;
       contrast?: number;
+      preserveColor?: boolean;
     } = {},
   ): Promise<string> {
     try {
-      const { dithering = true, threshold = 128, contrast = 1.2 } = options;
+      const { dithering = true, threshold = 128, contrast = 1.2, preserveColor = false } = options;
 
       this.logger.debug(
         `Processing image for e-ink with dithering: ${width}x${height}`,
@@ -330,6 +287,21 @@ export class ImageProcessorService {
 
       // First resize and prepare the image
       const tempPath = outputPath.replace('.png', '_temp.png');
+
+      if (preserveColor) {
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await sharp(inputPath)
+          .flatten({ background: { r: 255, g: 255, b: 255 } })
+          .resize(width, height, {
+            fit: 'contain',
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+          })
+          .toColourspace('srgb')
+          .png({ compressionLevel: 9 })
+          .toFile(outputPath);
+        this.logger.debug(`Processed RGB source image saved to: ${outputPath}`);
+        return outputPath;
+      }
 
       let pipeline = sharp(inputPath)
         .resize(width, height, {

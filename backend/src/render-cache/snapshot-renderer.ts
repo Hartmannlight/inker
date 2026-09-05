@@ -1,13 +1,10 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import type { PublicationRevision } from '@prisma/client';
-// Sharp is CommonJS; a synthetic default works in Bun source tests but not
-// in Nest's production webpack bundle (which leaves sharp external).
-import * as sharpModule from 'sharp';
-import type sharpFactory from 'sharp';
 import type { Sharp } from 'sharp';
-const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
+import { sharp } from '../common/utils/sharp.util';
 import { encodeBmp1bit } from '../common/utils/bmp1bit.util';
-import { publicationArtifacts, sha256, type PublishedArtifact } from '../publications/publication-content';
+import { publicationArtifacts, type PublishedArtifact } from '../publications/publication-content';
+import { sha256 } from '../common/utils/content-hash.util';
 import { MAX_RENDER_BYTES, MAX_RENDER_PIXELS, MAX_SNAPSHOT_BYTES, RENDER_MIME_TYPES, validateRenderTarget, type RenderTarget } from './render-input';
 import { QUEUE_POLICIES } from '../jobs/queue-policy';
 
@@ -36,7 +33,26 @@ function quantize(value: number, bits: number): number {
 }
 
 function quantizePixels(pixels: Buffer, target: RenderTarget): void {
-  if (target.colorSpace !== 'rgb') {
+  if (target.colorSpace !== 'rgb' && target.bitDepth === 1) {
+    const width = target.width;
+    let currentError = new Float32Array(width + 2);
+    let nextError = new Float32Array(width + 2);
+    for (let y = 0; y < target.height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x;
+        const value = Math.max(0, Math.min(255, pixels[index] + currentError[x + 1]));
+        const quantized = value < 128 ? 0 : 255;
+        pixels[index] = quantized;
+        const error = value - quantized;
+        currentError[x + 2] += error * 7 / 16;
+        nextError[x] += error * 3 / 16;
+        nextError[x + 1] += error * 5 / 16;
+        nextError[x + 2] += error / 16;
+      }
+      currentError = nextError;
+      nextError = new Float32Array(width + 2);
+    }
+  } else if (target.colorSpace !== 'rgb') {
     for (let i = 0; i < pixels.length; i++) pixels[i] = quantize(pixels[i], target.bitDepth);
   } else if (target.bitDepth < 24) {
     const bits = target.bitDepth === 16 ? [5, 6, 5] : [3, 3, 2];

@@ -10,7 +10,7 @@ import { OutboxStore } from '../src/events/outbox.store';
 import { MAINTENANCE_DUE, MaintenanceService } from '../src/jobs/maintenance.service';
 import { LogCleanupService, MAINTENANCE_BATCH_SIZE } from '../src/jobs/services/log-cleanup.service';
 import { PublicationCleanupService } from '../src/publications/publication-cleanup.service';
-import { sqliteWrite } from '../src/sources/source-writes';
+import { sqliteWrite } from '../src/common/utils/sqlite-write.util';
 
 const root = resolve(import.meta.dir, '..');
 const HOUR = 3_600_000;

@@ -234,10 +234,10 @@ export class ScreensService {
         try {
           await fs.unlink(filePath);
           this.logger.debug(`Deleted file: ${filePath}`);
-        } catch (error: any) {
+        } catch (error: unknown) {
           // ENOENT = file not found, which is acceptable
-          if (error.code !== 'ENOENT') {
-            this.logger.warn(`Failed to delete file ${filePath}: ${error.message}`);
+          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+            this.logger.warn(`Failed to delete file ${filePath}: ${error instanceof Error ? error.message : 'unknown error'}`);
           }
         }
       }),
@@ -278,7 +278,7 @@ export class ScreensService {
     const screenshotBuffer = await this.screenRenderer.renderHtmlToPng(html, width, height);
     await fs.writeFile(outputPath, screenshotBuffer);
 
-    // Process image for e-ink display with Floyd-Steinberg dithering
+    // Retain an RGB source. Publication rendering converts it only for e-ink targets.
     const processedPath = path.join(
       this.uploadsDir,
       `processed_${filename}`,
@@ -288,7 +288,7 @@ export class ScreensService {
       processedPath,
       width,
       height,
-      { dithering: true },
+      { preserveColor: true },
     );
 
     // Create thumbnail
@@ -329,7 +329,7 @@ export class ScreensService {
 
   /**
    * Create screen from image file
-   * Processes and optimizes image for e-ink display
+   * Processes and optimizes a full-color source image
    */
   async createFromImage(
     imageBuffer: Buffer,
@@ -347,7 +347,7 @@ export class ScreensService {
     // Save temporary file
     await fs.writeFile(tempPath, imageBuffer);
 
-    // Process image for e-ink display with Floyd-Steinberg dithering
+    // Retain an RGB source. Publication rendering converts it only for e-ink targets.
     const processedFilename = `processed_${filename.replace(ext, '.png')}`;
     const processedPath = path.join(this.uploadsDir, processedFilename);
 
@@ -356,7 +356,7 @@ export class ScreensService {
       processedPath,
       width,
       height,
-      { dithering: true },
+      { preserveColor: true },
     );
 
     // Create thumbnail
@@ -413,7 +413,7 @@ export class ScreensService {
     const screenshotBuffer = await this.screenRenderer.renderUrlToPng(url, width, height);
     await fs.writeFile(outputPath, screenshotBuffer);
 
-    // Process image for e-ink display with Floyd-Steinberg dithering
+    // Retain an RGB source. Publication rendering converts it only for e-ink targets.
     const processedPath = path.join(
       this.uploadsDir,
       `processed_${filename}`,
@@ -423,7 +423,7 @@ export class ScreensService {
       processedPath,
       width,
       height,
-      { dithering: true },
+      { preserveColor: true },
     );
 
     // Create thumbnail

@@ -293,7 +293,7 @@ export const DesignCanvas = forwardRef<DesignCanvasHandle, DesignCanvasProps>(fu
     } catch (err) {
       console.error('Failed to parse dropped widget data:', err);
     }
-  }, [width, height, onDropWidget]);
+  }, [width, height, scale, onDropWidget]);
 
   const getTemplate = useCallback((templateId: number): WidgetTemplate | undefined => {
     return templates.find((t) => t.id === templateId);

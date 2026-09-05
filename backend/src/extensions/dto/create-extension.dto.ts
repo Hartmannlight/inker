@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import type { Prisma } from '@prisma/client';
 import { IsString, IsOptional, IsBoolean, IsIn, IsObject } from 'class-validator';
 
 export class CreateExtensionDto {
@@ -32,7 +33,7 @@ export class CreateExtensionDto {
   })
   @IsOptional()
   @IsObject()
-  config?: any;
+  config?: Prisma.InputJsonObject;
 
   @ApiPropertyOptional({
     example: true,

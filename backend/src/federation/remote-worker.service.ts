@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { OutboxEvent, RemoteSubscription } from '@prisma/client';
 import { FEDERATION_LIMITS, parseFederationCapabilities, parseFederationPublicationFeed, type FederationPublicationFeed } from '@inker/contracts';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,8 +6,7 @@ import { OutboxStore } from '../events/outbox.store';
 import { outboxCorrelation } from '../events/outbox-correlation';
 import { OUTBOX_POLICY, queueRetryDelay } from '../jobs/queue-policy';
 import { EncryptionService } from '../common/services/encryption.service';
-import { DEFAULT_INSTANCE_SECRET_PATH } from '../config/instance-secrets';
-import { canonicalJson, sha256 } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 import { sourceWrite } from '../sources/source-writes';
 import { REMOTE_LIMITS, REMOTE_SYNC, scheduleRemote } from './remote-job';
 import { RemoteImportService } from './remote-import.service';
@@ -39,7 +37,12 @@ function constantError(error: unknown): string {
 
 @Injectable()
 export class RemoteWorkerService {
-  constructor(private readonly prisma: PrismaService, private readonly store: OutboxStore, private readonly importer: RemoteImportService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly store: OutboxStore,
+    private readonly importer: RemoteImportService,
+    private readonly encryption: EncryptionService,
+  ) {}
 
   async schedule(now = new Date()) {
     const due = await this.prisma.remoteSubscription.findMany({ where: {
@@ -75,8 +78,7 @@ export class RemoteWorkerService {
 
   protected createTransport(): Transport { return new RemoteTransport(); }
   protected decrypt(ciphertext: string): string {
-    const config = new ConfigService({ encryption: { secretPath: process.env.INKER_INSTANCE_SECRET_PATH || DEFAULT_INSTANCE_SECRET_PATH } });
-    return new EncryptionService(config).decrypt(ciphertext);
+    return this.encryption.decrypt(ciphertext);
   }
 
   async execute(event: OutboxEvent, parent: AbortSignal) {

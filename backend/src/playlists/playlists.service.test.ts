@@ -153,7 +153,7 @@ describe('PlaylistsService', () => {
 
     it('should update screens by deleting old and creating new items', async () => {
       mockPrisma.playlist.findUnique
-        .mockImplementation((...args: any[]) => {
+        .mockImplementation(() => {
           // First call: check existence
           if (mockPrisma.playlist.findUnique.calls.length <= 1) {
             return Promise.resolve({

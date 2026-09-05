@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { GrafanaConnectionModal } from './GrafanaConnectionModal';
 
-interface PluginInstance {
+export interface PluginActionInstance {
   id: number;
   pluginId: number;
   name?: string;
-  settings: Record<string, any>;
+  settings: Record<string, unknown>;
   plugin: { id: number; slug: string; name: string };
 }
 
@@ -16,14 +16,14 @@ export interface PluginAction {
   iconOnly?: boolean;
   variant?: 'default' | 'primary';
   /** If set, clicking navigates to this path instead of opening a modal */
-  navigateTo?: (instance: PluginInstance) => string;
+  navigateTo?: (instance: PluginActionInstance) => string;
   modalSize?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   modalTitle?: string;
-  isVisible: (instance: PluginInstance) => boolean;
-  renderModal?: (instance: PluginInstance, onClose: () => void) => ReactNode;
+  isVisible: (instance: PluginActionInstance) => boolean;
+  renderModal?: (instance: PluginActionInstance, onClose: () => void) => ReactNode;
 }
 
-const isGrafanaParent = (instance: PluginInstance) =>
+const isGrafanaParent = (instance: PluginActionInstance) =>
   !instance.settings?.parentInstanceId;
 
 const grafanaActions: PluginAction[] = [

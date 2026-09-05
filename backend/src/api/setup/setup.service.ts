@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SetupScreenService } from './setup-screen.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Device } from '@prisma/client';
 import { DeliveryPolicyRegistry } from '../../device-platform/delivery-policy.registry';
 import { ProfileResolverService } from '../../device-platform/profile-resolver.service';
 import { TransportAdapterRegistry } from '../../device-platform/transport-adapter.registry';
@@ -13,6 +13,7 @@ import {
   BUILTIN_POLICY_IDS,
   BUILTIN_PROFILE_IDS,
 } from '../../device-platform/device-configuration.catalog';
+import { mergeLegacyPullTelemetry } from '../../device-platform/legacy-pull-telemetry';
 
 /**
  * Known device model dimensions for /api/setup provisioning.
@@ -98,13 +99,7 @@ export class SetupService {
 
     if (device) {
       // Device exists, update firmware version and metrics if provided
-      const updateData: {
-        firmwareVersion?: string;
-        lastSeenAt: Date;
-        battery?: number;
-        wifi?: number;
-        telemetry?: any;
-      } = {
+      const updateData: Prisma.DeviceUpdateInput = {
         lastSeenAt: new Date(),
       };
 
@@ -122,12 +117,7 @@ export class SetupService {
         updateData.wifi = metrics.wifi;
       }
       if (metrics?.battery !== undefined || metrics?.wifi !== undefined) {
-        const existing = device.telemetry && typeof device.telemetry === 'object' ? device.telemetry as Record<string, unknown> : {};
-        const previous = existing.legacyPull && typeof existing.legacyPull === 'object' ? existing.legacyPull as Record<string, unknown> : {};
-        updateData.telemetry = { ...existing, legacyPull: { ...previous,
-          ...(metrics?.battery !== undefined && !isNaN(metrics.battery) ? { batteryPercent: metrics.battery } : {}),
-          ...(metrics?.wifi !== undefined && !isNaN(metrics.wifi) ? { rssi: metrics.wifi } : {}),
-        }, updatedAt: new Date().toISOString() };
+        updateData.telemetry = mergeLegacyPullTelemetry(device.telemetry, metrics);
       }
 
       device = await this.prisma.device.update({
@@ -262,7 +252,7 @@ export class SetupService {
    * Must match the exact format from firmware/setup.rb:
    * { api_key, friendly_id, image_url, message }
    */
-  private buildSetupResponse(device: any, baseUrl?: string) {
+  private buildSetupResponse(device: Pick<Device, 'apiKey' | 'friendlyId'>, baseUrl?: string) {
     // Use dynamic URL from request, or fall back to environment/default
     const apiUrl = baseUrl || process.env.API_URL || 'http://localhost:3002';
 

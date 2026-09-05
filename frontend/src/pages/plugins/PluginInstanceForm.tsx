@@ -6,20 +6,12 @@ import { useApi, useMutation } from '../../hooks/useApi';
 import { useNotification } from '../../contexts/NotificationContext';
 
 import { config } from '../../config';
-import apiClient, { pluginService } from '../../services/api';
+import apiClient, { getErrorMessage, pluginService } from '../../services/api';
+import type { Plugin as BasePlugin, PluginInstance as BasePluginInstance } from '../../types';
 
-interface Plugin {
-  id: number;
-  slug: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  category: string;
-  source: string;
-  isBuiltin: boolean;
+interface Plugin extends Omit<BasePlugin, 'settingsSchema'> {
   oauthProvider?: string;
   settingsSchema?: SettingsField[];
-  _count?: { instances: number };
 }
 
 interface SettingsField {
@@ -29,27 +21,29 @@ interface SettingsField {
   description?: string;
   required?: boolean;
   encrypted?: boolean;
-  default?: any;
+  default?: unknown;
   options?: { label: string; value: string }[];
 }
 
-interface PluginInstance {
-  id: number;
-  pluginId: number;
-  name?: string;
-  settings: Record<string, any>;
+interface PluginInstance extends Omit<BasePluginInstance, 'plugin'> {
   plugin: Plugin;
   oauthToken?: string;
-  lastFetchedAt?: string;
-  lastError?: string;
+}
+
+function scalarFormValue(value: unknown, fallback: string | number = ''): string | number {
+  return typeof value === 'string' || typeof value === 'number' ? value : fallback;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 export function PluginInstanceForm() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const notification = useNotification();
-  const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const { error: notifyError, success: notifySuccess } = useNotification();
+  const [formValues, setFormValues] = useState<Record<string, unknown>>({});
   const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
   const [oauthConnecting, setOauthConnecting] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -61,7 +55,7 @@ export function PluginInstanceForm() {
 
   const { data: instance, isLoading } = useApi<PluginInstance>(fetchInstance);
 
-  const saveMutation = useMutation<PluginInstance, Record<string, any>>(
+  const saveMutation = useMutation<PluginInstance, Record<string, unknown>>(
     (settings) => apiClient.put<{ data: PluginInstance }>(`/plugins/instances/${id}`, { settings }).then((res) => res.data.data),
     {
       successMessage: 'Settings saved',
@@ -79,7 +73,7 @@ export function PluginInstanceForm() {
         setFormValues({ ...instance.settings });
       } else {
         const schema = instance.plugin.settingsSchema || [];
-        const defaults: Record<string, any> = {};
+        const defaults: Record<string, unknown> = {};
         for (const field of schema) {
           defaults[field.key] = instance.settings[field.key] ?? field.default ?? '';
         }
@@ -104,12 +98,12 @@ export function PluginInstanceForm() {
     const timer = setTimeout(() => {
       apiClient.put(`/plugins/instances/${id}`, { settings: formValues })
         .then(() => setPreviewTimestamp(Date.now()))
-        .catch(() => notification.error('Failed to save settings'));
+        .catch(() => notifyError('Failed to save settings'));
     }, 800);
     return () => clearTimeout(timer);
-  }, [formValues, initialized, id]);
+  }, [formValues, initialized, id, isGrafanaPlugin, notifyError]);
 
-  const handleFieldChange = (key: string, value: any) => {
+  const handleFieldChange = (key: string, value: unknown) => {
     setFormValues((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -133,7 +127,7 @@ export function PluginInstanceForm() {
       const res = await apiClient.get<{ data: { url: string } }>(`/plugins/instances/${id}/oauth/authorize`);
       window.open(res.data.data.url, 'oauth', 'width=600,height=700');
     } catch {
-      notification.error('Failed to start OAuth flow');
+      notifyError('Failed to start OAuth flow');
     } finally {
       setOauthConnecting(false);
     }
@@ -142,18 +136,18 @@ export function PluginInstanceForm() {
   const handleOAuthDisconnect = async () => {
     try {
       await apiClient.post(`/plugins/instances/${id}/oauth/disconnect`);
-      notification.success('OAuth disconnected');
+      notifySuccess('OAuth disconnected');
     } catch {
-      notification.error('Failed to disconnect');
+      notifyError('Failed to disconnect');
     }
   };
 
   // Show notification if we just completed OAuth
   useEffect(() => {
     if (searchParams.get('oauth') === 'connected') {
-      notification.success('OAuth connected successfully');
+      notifySuccess('OAuth connected successfully');
     }
-  }, []);
+  }, [searchParams, notifySuccess]);
 
   if (isLoading) {
     return (
@@ -281,7 +275,7 @@ export function PluginInstanceForm() {
                   saving={saveMutation.isLoading}
                   schema={schema}
                   isChild={!!instance.settings?.parentInstanceId}
-                  parentInstanceId={instance.settings?.parentInstanceId}
+                  parentInstanceId={optionalNumber(instance.settings.parentInstanceId)}
                 />
               ) : schema.length === 0 ? (
                 <p className="text-text-muted">This plugin has no configurable settings.</p>
@@ -406,8 +400,8 @@ interface GrafanaPanel {
 interface GrafanaSettingsProps {
   instanceId: number;
   pluginId: number;
-  formValues: Record<string, any>;
-  onChange: (key: string, value: any) => void;
+  formValues: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
   onSave: () => void;
   saving: boolean;
   schema: SettingsField[];
@@ -445,7 +439,7 @@ function GrafanaSettings({ instanceId, pluginId, formValues, onChange, onSave, s
 /** Parent mode: connection settings + generate screen */
 function GrafanaParentSettings({ instanceId, formValues, onChange }: {
   instanceId: number; pluginId: number;
-  formValues: Record<string, any>; onChange: (key: string, value: any) => void;
+  formValues: Record<string, unknown>; onChange: (key: string, value: unknown) => void;
   onSave: () => void; saving: boolean;
 }) {
   const navigate = useNavigate();
@@ -462,7 +456,7 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
   const [screenWidth, setScreenWidth] = useState(800);
   const [screenHeight, setScreenHeight] = useState(480);
   const [screenName, setScreenName] = useState('');
-  const [childScreens, setChildScreens] = useState<any[]>([]);
+  const [childScreens, setChildScreens] = useState<BasePluginInstance[]>([]);
 
   const inputClasses =
     'w-full px-3 py-2.5 rounded-lg border border-border-light bg-bg-input text-text-primary placeholder-text-placeholder focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all';
@@ -477,14 +471,14 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
   const fetchChildScreens = useCallback(async () => {
     try {
       const all = await pluginService.getAllInstances();
-      const children = all.filter((i: any) => i.settings?.parentInstanceId === instanceId);
+      const children = all.filter((i) => i.settings.parentInstanceId === instanceId);
       // Clean up any stale __preview__ instances
       for (const child of children) {
         if (child.name === '__preview__') {
           try { await pluginService.deleteInstance(child.id); } catch { /* ignore */ }
         }
       }
-      setChildScreens(children.filter((i: any) => i.name !== '__preview__'));
+      setChildScreens(children.filter((i) => i.name !== '__preview__'));
     } catch { /* ignore */ }
   }, [instanceId]);
 
@@ -502,8 +496,8 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
       const data = resp.data.data || resp.data;
       setDashboards(data);
       if (data.length === 0) setError('No dashboards found in Grafana');
-    } catch (e: any) {
-      setError(e.response?.data?.message || e.message || 'Failed to connect to Grafana');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Failed to connect to Grafana');
     } finally {
       setLoadingDashboards(false);
     }
@@ -517,8 +511,8 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
       const resp = await apiClient.post('/plugins/grafana/panels', { instanceId, dashboard_uid: uid });
       const data = resp.data.data || resp.data;
       setPanels(data);
-    } catch (e: any) {
-      setError(e.response?.data?.message || 'Failed to load panels');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Failed to load panels');
     } finally {
       setLoadingPanels(false);
     }
@@ -563,7 +557,7 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
       } catch { /* ignore preview errors */ }
     }, 500);
     return () => clearTimeout(timer);
-  }, [screenDashboard, screenPanel, screenTimeRange, screenWidth, screenHeight, showGenerator]);
+  }, [instanceId, previewInstanceId, screenDashboard, screenPanel, screenTimeRange, screenWidth, screenHeight, showGenerator]);
 
   const handleGenerateScreenFinal = async () => {
     if (!screenDashboard || !screenPanel) return;
@@ -592,8 +586,8 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
       }
       notification.success('Screen generated!');
       navigate('/screens');
-    } catch (e: any) {
-      notification.error(e.response?.data?.message || 'Failed to generate screen');
+    } catch (error: unknown) {
+      notification.error(getErrorMessage(error) || 'Failed to generate screen');
     } finally {
       setGenerating(false);
     }
@@ -621,7 +615,7 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
           <label className="block text-sm font-medium text-text-primary mb-1.5">
             Grafana URL <span className="text-red-500">*</span>
           </label>
-          <input type="text" value={formValues.grafana_url ?? ''} onChange={(e) => onChange('grafana_url', e.target.value)} className={inputClasses} placeholder="http://localhost:3000" />
+          <input type="text" value={scalarFormValue(formValues.grafana_url)} onChange={(e) => onChange('grafana_url', e.target.value)} className={inputClasses} placeholder="http://localhost:3000" />
         </div>
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1.5">
@@ -639,7 +633,7 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
               </button>
             </div>
           ) : (
-            <input type="password" value={formValues.api_key === MASK ? '' : (formValues.api_key ?? '')} onChange={(e) => onChange('api_key', e.target.value)} className={inputClasses} placeholder="Enter API key" />
+            <input type="password" value={formValues.api_key === MASK ? '' : scalarFormValue(formValues.api_key)} onChange={(e) => onChange('api_key', e.target.value)} className={inputClasses} placeholder="Enter API key" />
           )}
         </div>
         <button onClick={fetchDashboards} disabled={!canConnect || loadingDashboards}
@@ -656,12 +650,12 @@ function GrafanaParentSettings({ instanceId, formValues, onChange }: {
       {childScreens.length > 0 && (
         <div className="space-y-3 pt-4 border-t border-border-light">
           <h3 className="text-sm font-semibold text-text-primary uppercase tracking-wider">Generated Screens</h3>
-          {childScreens.map((child: any) => (
+          {childScreens.map((child) => (
             <div key={child.id} onClick={() => navigate(`/plugins/instances/${child.id}`)}
               className="flex items-center justify-between p-3 rounded-lg border border-border-light bg-bg-muted hover:bg-bg-accent cursor-pointer transition-colors">
               <div>
                 <p className="text-sm font-medium text-text-primary">{child.name || 'Grafana Screen'}</p>
-                <p className="text-xs text-text-muted">Panel {child.settings?.panel_id} — {child.settings?.time_range || 'now-6h'}</p>
+                <p className="text-xs text-text-muted">Panel {String(child.settings.panel_id ?? '')} — {String(child.settings.time_range || 'now-6h')}</p>
               </div>
               <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
             </div>
@@ -833,7 +827,7 @@ function GrafanaPreview({ instanceId, timestamp }: { instanceId: number; timesta
 /** Child mode: edit dashboard/panel/time range for an existing screen */
 function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, saving }: {
   instanceId: number; parentInstanceId: number;
-  formValues: Record<string, any>; onChange: (key: string, value: any) => void;
+  formValues: Record<string, unknown>; onChange: (key: string, value: unknown) => void;
   onSave: () => void; saving: boolean; schema: SettingsField[];
 }) {
   const [dashboards, setDashboards] = useState<GrafanaDashboard[]>([]);
@@ -861,8 +855,8 @@ function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, 
           setPanels(pResp.data.data || pResp.data);
           setLoadingPanels(false);
         }
-      } catch (e: any) {
-        setError(e.response?.data?.message || 'Failed to load from Grafana');
+      } catch (error: unknown) {
+        setError(getErrorMessage(error) || 'Failed to load from Grafana');
       } finally {
         setLoadingDashboards(false);
       }
@@ -877,8 +871,8 @@ function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, 
     try {
       const resp = await apiClient.post('/plugins/grafana/panels', { instanceId: parentInstanceId, dashboard_uid: uid });
       setPanels(resp.data.data || resp.data);
-    } catch (e: any) {
-      setError(e.response?.data?.message || 'Failed to load panels');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Failed to load panels');
     } finally {
       setLoadingPanels(false);
     }
@@ -891,7 +885,7 @@ function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, 
       <div>
         <label className="block text-sm font-medium text-text-primary mb-1.5">Dashboard</label>
         {loadingDashboards ? <div className="text-sm text-text-muted">Loading dashboards...</div> : (
-          <select value={formValues.dashboard_uid ?? ''} onChange={(e) => handleDashboardChange(e.target.value)} className={inputClasses}>
+          <select value={scalarFormValue(formValues.dashboard_uid)} onChange={(e) => handleDashboardChange(e.target.value)} className={inputClasses}>
             <option value="">Choose a dashboard...</option>
             {dashboards.map((d) => <option key={d.uid} value={d.uid}>{d.title}</option>)}
           </select>
@@ -912,7 +906,7 @@ function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, 
 
       <div>
         <label className="block text-sm font-medium text-text-primary mb-1.5">Time Range</label>
-        <select value={formValues.time_range ?? 'now-6h'} onChange={(e) => onChange('time_range', e.target.value)} className={inputClasses}>
+        <select value={scalarFormValue(formValues.time_range, 'now-6h')} onChange={(e) => onChange('time_range', e.target.value)} className={inputClasses}>
                   <option value="now-5m">Last 5 minutes</option>
                   <option value="now-15m">Last 15 minutes</option>
                   <option value="now-30m">Last 30 minutes</option>
@@ -931,9 +925,9 @@ function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, 
       <div>
         <label className="block text-sm font-medium text-text-primary mb-1.5">Resolution</label>
         <div className="flex items-center gap-2">
-          <input type="number" value={formValues.screen_width ?? 800} onChange={(e) => onChange('screen_width', Number(e.target.value) || 800)} className={inputClasses} min={100} max={3840} />
+          <input type="number" value={scalarFormValue(formValues.screen_width, 800)} onChange={(e) => onChange('screen_width', Number(e.target.value) || 800)} className={inputClasses} min={100} max={3840} />
           <span className="text-text-muted shrink-0">x</span>
-          <input type="number" value={formValues.screen_height ?? 480} onChange={(e) => onChange('screen_height', Number(e.target.value) || 480)} className={inputClasses} min={100} max={2160} />
+          <input type="number" value={scalarFormValue(formValues.screen_height, 480)} onChange={(e) => onChange('screen_height', Number(e.target.value) || 480)} className={inputClasses} min={100} max={2160} />
           <span className="text-xs text-text-muted shrink-0">px</span>
         </div>
       </div>
@@ -951,8 +945,8 @@ function GrafanaChildSettings({ parentInstanceId, formValues, onChange, onSave, 
 
 interface SettingsFieldRendererProps {
   field: SettingsField;
-  value: any;
-  onChange: (value: any) => void;
+  value: unknown;
+  onChange: (value: unknown) => void;
   onMultiSelectToggle: (optionValue: string) => void;
 }
 
@@ -974,7 +968,7 @@ function SettingsFieldRenderer({ field, value, onChange, onMultiSelectToggle }: 
       {(field.type === 'text' || field.type === 'password' || field.encrypted) && (
         <input
           type={field.encrypted || field.type === 'password' ? 'password' : 'text'}
-          value={value ?? ''}
+          value={scalarFormValue(value)}
           onChange={(e) => onChange(e.target.value)}
           className={inputClasses}
           placeholder={`Enter ${field.label.toLowerCase()}`}
@@ -985,7 +979,7 @@ function SettingsFieldRenderer({ field, value, onChange, onMultiSelectToggle }: 
       {field.type === 'number' && !field.encrypted && (
         <input
           type="number"
-          value={value ?? ''}
+          value={scalarFormValue(value)}
           onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
           className={inputClasses}
           placeholder={`Enter ${field.label.toLowerCase()}`}
@@ -996,7 +990,7 @@ function SettingsFieldRenderer({ field, value, onChange, onMultiSelectToggle }: 
       {field.type === 'date' && (
         <input
           type="date"
-          value={value ?? ''}
+          value={scalarFormValue(value)}
           onChange={(e) => onChange(e.target.value)}
           className={inputClasses}
         />
@@ -1005,7 +999,7 @@ function SettingsFieldRenderer({ field, value, onChange, onMultiSelectToggle }: 
       {/* Select */}
       {field.type === 'select' && (
         <select
-          value={value ?? ''}
+          value={scalarFormValue(value)}
           onChange={(e) => onChange(e.target.value)}
           className={inputClasses}
         >

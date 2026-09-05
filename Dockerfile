@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Build shared contracts
 # =============================================================================
-FROM oven/bun:1.3.14-alpine AS contracts-builder
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS contracts-builder
 
 WORKDIR /contracts
 
@@ -17,7 +17,7 @@ RUN bun run build
 # =============================================================================
 # Stage 2: Build frontend
 # =============================================================================
-FROM oven/bun:1.3.14-alpine AS frontend-builder
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS frontend-builder
 
 WORKDIR /app
 
@@ -33,12 +33,12 @@ RUN bun run build
 # =============================================================================
 # Stage 3: Install backend production dependencies
 # =============================================================================
-FROM oven/bun:1.3.14-slim AS backend-install
+FROM oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS backend-install
 
 WORKDIR /app
 
 # Node.js binary for Prisma generate (bun segfaults with Prisma CLI)
-COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.22.3-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
@@ -46,6 +46,7 @@ COPY --from=contracts-builder /contracts/package.json /contracts/package.json
 COPY --from=contracts-builder /contracts/README.md /contracts/README.md
 COPY --from=contracts-builder /contracts/dist /contracts/dist
 COPY backend/package.json backend/bun.lock* ./
+COPY backend/prisma.config.ts ./
 COPY backend/prisma ./prisma/
 
 # Install all deps → generate prisma → reinstall production-only → prune
@@ -78,11 +79,11 @@ RUN bun install --frozen-lockfile && \
 # =============================================================================
 # Stage 4: Build backend
 # =============================================================================
-FROM oven/bun:1.3.14-slim AS backend-builder
+FROM oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS backend-builder
 
 WORKDIR /app
 
-COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.22.3-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 /usr/local/bin/node /usr/local/bin/node
 
 # The builder also runs the renderer unit suite. Keep Chromium's shared-library
 # set here so that those tests execute in CI without affecting the runtime image.
@@ -109,9 +110,13 @@ RUN bun run build
 # =============================================================================
 # Stage 5: Production (all-in-one)
 # =============================================================================
-FROM debian:trixie-slim AS production
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS production
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
+# Keep the rendering browser aligned with the revision expected by Puppeteer
+# 23.11.0. Do not resolve "stable" at build time: browser updates can change
+# font metrics and therefore device pixels for an otherwise identical commit.
+ARG CHROME_VERSION=131.0.6778.204
 # Provided automatically by `docker buildx` (amd64 | arm64). Falls back to the build host's
 # Debian arch so a plain `docker build` also works.
 ARG TARGETARCH
@@ -139,7 +144,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ln -sf "$(command -v chromium)" /usr/local/bin/inker-chromium; \
     else \
         # x86: minimal chrome-headless-shell from chrome-for-testing (unchanged path)
-        CHROME_VERSION=$(wget -qO- "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE") && \
         wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-headless-shell-linux64.zip" -O /tmp/chrome.zip && \
         unzip /tmp/chrome.zip -d /opt/ && \
         chmod +x /opt/chrome-headless-shell-linux64/chrome-headless-shell && \
@@ -179,11 +183,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
            /var/cache/debconf/*-old
 
 # Install Bun runtime (copy from build image)
-COPY --from=oven/bun:1.3.14-slim /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
 # Node.js binary for Prisma CLI (Bun's baseline mode crashes on non-AVX2 hardware)
-COPY --from=node:22.22.3-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.22.3-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 /usr/local/bin/node /usr/local/bin/node
 
 # Puppeteer configuration — fixed symlink resolves to the right browser per architecture
 # (chrome-headless-shell on amd64, distro chromium on arm64; both linked in the layer above)
@@ -199,7 +203,6 @@ ENV NODE_ENV=production \
     WORKER_HEALTH_PORT=3001 \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_SERVICES_GRACETIME=28000 \
-    CORS_ORIGINS=* \
     LOG_LEVEL=info
 
 # Set up application directory
@@ -227,6 +230,7 @@ COPY --from=backend-install /app/node_modules/@prisma ./node_modules/@prisma
 # Copy backend build
 COPY --from=backend-builder /app/dist ./dist
 COPY backend/package.json ./
+COPY backend/prisma.config.ts ./
 
 # Copy backend font assets
 COPY backend/assets/fonts /app/assets/fonts

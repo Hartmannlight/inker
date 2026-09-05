@@ -17,16 +17,11 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Multer } from 'multer';
+import type { UploadedFile as UploadedImageFile } from '../common/uploaded-file';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as sharpModule from 'sharp';
-// Handle both ESM and CJS imports for Bun compatibility
-const sharp = (sharpModule as any).default || sharpModule;
-
-// Max file size for widget images (90KB for e-ink devices)
-const MAX_WIDGET_IMAGE_SIZE = 90000;
+import { sharp } from '../common/utils/sharp.util';
 
 // Ensure widgets upload directory exists
 const widgetsUploadDir = './uploads/widgets';
@@ -56,7 +51,8 @@ import {
 import { ScreenDesignerService } from './screen-designer.service';
 import { WidgetTemplatesService } from './services/widget-templates.service';
 import { ScreenRendererService } from './services/screen-renderer.service';
-import { matchesIfNoneMatch } from '../device-platform/pull-content.controller';
+import { matchesIfNoneMatch } from '../common/utils/http-cache.util';
+import { floydSteinbergDither } from '../common/utils/raster.util';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateScreenDesignDto,
@@ -353,8 +349,8 @@ export class ScreenDesignerController {
   @Post(':id/upload-capture')
   @ApiBearerAuth('access-token')
   @ApiOperation({
-    summary: 'Upload browser-captured B&W image for device',
-    description: 'Receives a PNG with Floyd-Steinberg dithering already applied from browser. Only inverts colors for TRMNL e-ink device and saves.',
+    summary: 'Upload a browser-captured source image',
+    description: 'Stores an RGB source capture. Device-specific rendering later preserves color for LCD or converts it for e-ink.',
   })
   @ApiParam({ name: 'id', description: 'Screen design ID' })
   @ApiResponse({ status: 201, description: 'Capture saved for device' })
@@ -377,7 +373,7 @@ export class ScreenDesignerController {
   )
   async uploadCapture(
     @Param('id', ParseIntPipe) id: number,
-    @UploadedFile() file: Multer.File,
+    @UploadedFile() file: UploadedImageFile,
   ) {
     // Verify the screen design exists
     await this.screenDesignerService.getScreenDesign(id);
@@ -389,15 +385,11 @@ export class ScreenDesignerController {
     this.logger.log(`Saving browser capture for screen ${id}: ${file.size} bytes`);
 
     try {
-      // Simple e-ink processing for browser captures:
-      // 1. Flatten transparency to white background
-      // 2. Convert to grayscale
-      //
-      // NOTE: NO negate() - browser captures already have correct colors
-      // (white background, black content). The device displays as-is.
+      // Preserve color in the canonical source. E-ink conversion belongs to
+      // the target-profile render step and is therefore still available.
       const processedBuffer = await sharp(file.buffer)
         .flatten({ background: { r: 255, g: 255, b: 255 } })
-        .grayscale()
+        .toColourspace('srgb')
         .png({ compressionLevel: 9 })
         .toBuffer();
 
@@ -422,7 +414,7 @@ export class ScreenDesignerController {
       this.logger.error('Failed to save browser capture:', error);
       const message = process.env.NODE_ENV === 'production'
         ? 'Image processing failed'
-        : `Failed to process image: ${error.message}`;
+        : `Failed to process image: ${error instanceof Error ? error.message : String(error)}`;
       throw new BadRequestException(message);
     }
   }
@@ -501,7 +493,7 @@ export class ScreenDesignerController {
   )
   async captureWithDrawing(
     @Param('id', ParseIntPipe) id: number,
-    @UploadedFile() drawingFile?: Multer.File,
+    @UploadedFile() drawingFile?: UploadedImageFile,
   ) {
     // Verify the screen design exists
     await this.screenDesignerService.getScreenDesign(id);
@@ -548,15 +540,15 @@ export class ScreenDesignerController {
         compositeBuffer = widgetsBuffer;
       }
 
-      // Apply e-ink processing: flatten, grayscale
-      // NO negate() - colors are correct (white bg, black content)
+      // Store a full-color source capture. Render-cache output is converted
+      // for monochrome targets while RGB devices keep these colors.
       const processedBuffer = await sharp(compositeBuffer)
         .flatten({ background: { r: 255, g: 255, b: 255 } })
-        .grayscale()
+        .toColourspace('srgb')
         .png({ compressionLevel: 9 })
         .toBuffer();
 
-      this.logger.log(`[captureWithDrawing] E-ink processed: ${processedBuffer.length} bytes`);
+      this.logger.log(`[captureWithDrawing] RGB source processed: ${processedBuffer.length} bytes`);
 
       // Save to captures directory
       const filename = `capture_${id}.png`;
@@ -579,7 +571,7 @@ export class ScreenDesignerController {
       this.logger.error('[captureWithDrawing] Failed:', error);
       const message = process.env.NODE_ENV === 'production'
         ? 'Screen capture failed'
-        : `Failed to capture screen: ${error.message}`;
+        : `Failed to capture screen: ${error instanceof Error ? error.message : String(error)}`;
       throw new BadRequestException(message);
     }
   }
@@ -625,7 +617,7 @@ export class ScreenDesignerController {
       },
     }),
   )
-  async uploadWidgetImage(@UploadedFile() file: Multer.File) {
+  async uploadWidgetImage(@UploadedFile() file: UploadedImageFile) {
     this.logger.log(`Upload request received, file: ${file ? JSON.stringify({ name: file.originalname, size: file.size, mimetype: file.mimetype }) : 'NO FILE'}`);
 
     if (!file) {
@@ -637,13 +629,14 @@ export class ScreenDesignerController {
     const outputPath = path.join(widgetsUploadDir, outputFilename);
 
     try {
-      // Process image for e-ink: 1-bit (black/white) or 2-bit (4 grays), max 90KB
-      // Use in-memory buffer (no disk write before validation)
+      // Keep a color source image. Per-device rendering later produces either
+      // RGB output or an optimized monochrome/grayscale e-ink variant.
       const inputBuffer = file.buffer;
       let scale = 1.0;
       let buffer: Buffer;
       let attempts = 0;
-      const maxAttempts = 15;
+      const maxAttempts = 12;
+      const maxSourceBytes = 2 * 1024 * 1024;
 
       // Get original image metadata
       const metadata = await sharp(inputBuffer).metadata();
@@ -654,77 +647,25 @@ export class ScreenDesignerController {
         const newWidth = Math.round(originalWidth * scale);
         const newHeight = Math.round(originalHeight * scale);
 
-        // Convert to grayscale and normalize
-        // IMPORTANT: flatten() converts transparent backgrounds to white
-        // Without this, transparent pixels become black after processing
-        const grayBuffer = await sharp(inputBuffer)
+        buffer = await sharp(inputBuffer, { animated: false, limitInputPixels: 25_000_000 })
           .flatten({ background: { r: 255, g: 255, b: 255 } })
           .resize(newWidth, newHeight, {
             fit: 'inside',
             withoutEnlargement: true,
           })
-          .grayscale()
-          .normalise()
-          .raw()
-          .toBuffer({ resolveWithObject: true });
-
-        // Apply Floyd-Steinberg dithering for 1-bit output
-        const { data, info } = grayBuffer;
-        const pixels = new Float32Array(data.length);
-        for (let i = 0; i < data.length; i++) {
-          pixels[i] = data[i];
-        }
-
-        // Floyd-Steinberg dithering to black/white (1-bit)
-        const threshold = 128;
-        for (let y = 0; y < info.height; y++) {
-          for (let x = 0; x < info.width; x++) {
-            const idx = y * info.width + x;
-            const oldPixel = pixels[idx];
-            const newPixel = oldPixel < threshold ? 0 : 255;
-            pixels[idx] = newPixel;
-            const error = oldPixel - newPixel;
-
-            if (x + 1 < info.width) {
-              pixels[idx + 1] += (error * 7) / 16;
-            }
-            if (x - 1 >= 0 && y + 1 < info.height) {
-              pixels[(y + 1) * info.width + (x - 1)] += (error * 3) / 16;
-            }
-            if (y + 1 < info.height) {
-              pixels[(y + 1) * info.width + x] += (error * 5) / 16;
-            }
-            if (x + 1 < info.width && y + 1 < info.height) {
-              pixels[(y + 1) * info.width + (x + 1)] += (error * 1) / 16;
-            }
-          }
-        }
-
-        // Convert back to buffer
-        const output = Buffer.alloc(data.length);
-        for (let i = 0; i < pixels.length; i++) {
-          output[i] = Math.max(0, Math.min(255, Math.round(pixels[i])));
-        }
-
-        // Create grayscale PNG (dithered to black/white values)
-        buffer = await sharp(output, {
-          raw: {
-            width: info.width,
-            height: info.height,
-            channels: 1,
-          },
-        })
-          .toColorspace('b-w')
+          .toColourspace('srgb')
           .png({ compressionLevel: 9 })
           .toBuffer();
 
         attempts++;
 
         // If still too large, reduce dimensions
-        if (buffer.length > MAX_WIDGET_IMAGE_SIZE) {
+        if (buffer.length > maxSourceBytes) {
           scale *= 0.85;
         }
-      } while (buffer.length > MAX_WIDGET_IMAGE_SIZE && attempts < maxAttempts);
+      } while (buffer.length > maxSourceBytes && attempts < maxAttempts);
+
+      if (buffer.length > maxSourceBytes) throw new Error('Optimized image is still too large');
 
       // Save the processed image to disk
       await fs.promises.writeFile(outputPath, buffer);
@@ -742,7 +683,7 @@ export class ScreenDesignerController {
     } catch (error) {
       const message = process.env.NODE_ENV === 'production'
         ? 'Image processing failed'
-        : `Failed to process image: ${error.message}`;
+        : `Failed to process image: ${error instanceof Error ? error.message : String(error)}`;
       throw new BadRequestException(message);
     }
   }
@@ -753,8 +694,8 @@ export class ScreenDesignerController {
    */
   private async applyFloydSteinbergDithering(
     inputBuffer: Buffer,
-    width: number,
-    height: number,
+    _width: number,
+    _height: number,
   ): Promise<Buffer> {
     // Get raw grayscale pixel data
     const { data, info } = await sharp(inputBuffer)
@@ -762,43 +703,7 @@ export class ScreenDesignerController {
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    // Create float array for error diffusion
-    const pixels = new Float32Array(data.length);
-    for (let i = 0; i < data.length; i++) {
-      pixels[i] = data[i];
-    }
-
-    // Floyd-Steinberg dithering to black/white
-    const threshold = 128;
-    for (let y = 0; y < info.height; y++) {
-      for (let x = 0; x < info.width; x++) {
-        const idx = y * info.width + x;
-        const oldPixel = pixels[idx];
-        const newPixel = oldPixel < threshold ? 0 : 255;
-        pixels[idx] = newPixel;
-        const error = oldPixel - newPixel;
-
-        // Distribute error to neighboring pixels
-        if (x + 1 < info.width) {
-          pixels[idx + 1] += (error * 7) / 16;
-        }
-        if (x - 1 >= 0 && y + 1 < info.height) {
-          pixels[(y + 1) * info.width + (x - 1)] += (error * 3) / 16;
-        }
-        if (y + 1 < info.height) {
-          pixels[(y + 1) * info.width + x] += (error * 5) / 16;
-        }
-        if (x + 1 < info.width && y + 1 < info.height) {
-          pixels[(y + 1) * info.width + (x + 1)] += (error * 1) / 16;
-        }
-      }
-    }
-
-    // Convert back to buffer
-    const output = Buffer.alloc(data.length);
-    for (let i = 0; i < pixels.length; i++) {
-      output[i] = Math.max(0, Math.min(255, Math.round(pixels[i])));
-    }
+    const output = floydSteinbergDither(data, info.width, info.height);
 
     // Create PNG from raw grayscale data
     return sharp(output, {

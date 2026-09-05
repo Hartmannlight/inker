@@ -360,7 +360,7 @@ export function PlaylistDetail() {
                         <Button size="sm" variant="outline" aria-label={`Move ${screen.name} up`} disabled={index === 0} onClick={() => moveItem(index, -1)}>↑</Button>
                         <Button size="sm" variant="outline" aria-label={`Move ${screen.name} down`} disabled={index === (playlist.screens.length - 1)} onClick={() => moveItem(index, 1)}>↓</Button>
                         <label className="sr-only" htmlFor={`duration-${screen.itemId}`}>Duration for {screen.name}</label>
-                        <input id={`duration-${screen.itemId}`} className="w-16 rounded border px-1" type="number" min="1" defaultValue={screen.duration} onBlur={event => updateItem({ itemId: screen.itemId!, data: { duration: Math.max(1, Number(event.currentTarget.value) || 60) } })} />
+                        <input id={`duration-${screen.itemId}`} className="w-16 rounded border px-1" type="number" min="0" defaultValue={screen.duration ?? 0} onBlur={event => updateItem({ itemId: screen.itemId!, data: { duration: Math.max(0, Number(event.currentTarget.value) || 0) } })} />
                         <Button size="sm" variant="outline" aria-label={`Remove ${screen.name}`} onClick={() => removeItem(screen.itemId!)}>Remove</Button>
                       </div>}
                     </div>

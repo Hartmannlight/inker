@@ -8,6 +8,13 @@ import {
   MaxLength,
 } from 'class-validator';
 
+export interface FirmwareLogEntry {
+  level?: unknown;
+  message?: unknown;
+  metadata?: unknown;
+  [key: string]: unknown;
+}
+
 /**
  * Create log DTO - supports both single and batch formats
  *
@@ -16,7 +23,8 @@ import {
  *
  * TRMNL firmware sends extra fields in batch log entries (created_at, id,
  * source_line, battery_voltage, etc.) and numeric log levels.
- * The logs array is typed as any[] to accept these without validation errors.
+ * Unknown firmware fields remain accepted, while the service projects only
+ * bounded primitive values into persistence.
  * The service extracts only the fields it needs (level, message, metadata).
  */
 export class CreateLogDto {
@@ -44,15 +52,14 @@ export class CreateLogDto {
   })
   @IsOptional()
   @IsObject()
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 
   // Batch format from TRMNL firmware
-  // Typed as any[] to accept firmware-specific extra fields without rejection
   @ApiProperty({
     required: false,
     description: 'Array of log entries (batch format)',
   })
   @IsOptional()
   @IsArray()
-  logs?: any[];
+  logs?: FirmwareLogEntry[];
 }

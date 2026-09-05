@@ -1,8 +1,9 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { types } from 'node:util';
 import type { JsonValue } from '@inker/contracts';
 import { executeIsolated, IsolatedExecutionError } from '../isolation/isolated-executor';
-import { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
+import type { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
 import { TRMNL_CSS } from './sync/trmnl-css';
 
 export type PluginLayout = 'full' | 'half_horizontal' | 'half_vertical' | 'quadrant';
@@ -14,15 +15,30 @@ export type PluginLayout = 'full' | 'half_horizontal' | 'half_vertical' | 'quadr
  */
 @Injectable()
 export class PluginRendererService {
-  constructor(readonly screenRenderer: ScreenRendererService) {}
+  private readonly logger = new Logger(PluginRendererService.name);
+  private screenRenderer?: ScreenRendererService;
+
+  constructor(private readonly moduleRef: ModuleRef) {}
+
+  private async getScreenRenderer(): Promise<ScreenRendererService> {
+    if (this.screenRenderer) return this.screenRenderer;
+    try {
+      const { ScreenRendererService } = await import('../screen-designer/services/screen-renderer.service');
+      this.screenRenderer = this.moduleRef.get(ScreenRendererService, { strict: false });
+      return this.screenRenderer;
+    } catch (error) {
+      this.logger.warn('Screen renderer is unavailable from the application context', error);
+      throw new ServiceUnavailableException('PLUGIN_RENDERER_UNAVAILABLE');
+    }
+  }
 
   /**
    * Render a plugin's Liquid template with data to HTML string
    */
   async renderToHtml(
     markup: string,
-    locals: Record<string, any>,
-    _settings: Record<string, any> = {},
+    locals: Record<string, unknown>,
+    _settings: Record<string, unknown> = {},
     signal?: AbortSignal,
   ): Promise<string> {
     if (!locals || typeof locals !== 'object' || types.isProxy(locals) || Array.isArray(locals)
@@ -80,8 +96,8 @@ ${innerHtml}
    */
   async renderToPng(
     markup: string,
-    locals: Record<string, any>,
-    settings: Record<string, any> = {},
+    locals: Record<string, unknown>,
+    settings: Record<string, unknown> = {},
     width: number = 800,
     height: number = 480,
     mode: 'device' | 'preview' | 'einkPreview' = 'device',
@@ -92,7 +108,8 @@ ${innerHtml}
     const fullPage = this.buildFullPage(innerHtml, width, height);
 
     // Render HTML to raw PNG via Puppeteer
-    const rawPng = await this.screenRenderer.renderHtmlToPng(fullPage, width, height);
+    const screenRenderer = await this.getScreenRenderer();
+    const rawPng = await screenRenderer.renderHtmlToPng(fullPage, width, height);
 
     // For preview mode, return without e-ink processing
     if (mode === 'preview') {
@@ -101,7 +118,7 @@ ${innerHtml}
 
     // Apply e-ink processing (dithering + optional inversion)
     const shouldNegate = mode === 'device';
-    return this.screenRenderer.applyEinkProcessing(rawPng, width, height, shouldNegate);
+    return screenRenderer.applyEinkProcessing(rawPng, width, height, shouldNegate);
   }
 
   /**

@@ -1,11 +1,11 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { DashboardService } from './dashboard.service';
+import { DashboardService, type VersionCheckResult } from './dashboard.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 
 /**
@@ -62,15 +62,7 @@ export class DashboardController {
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Check for available updates' })
   @ApiResponse({ status: 200, description: 'Version check result' })
-  async checkForUpdate() {
+  async checkForUpdate(): Promise<VersionCheckResult> {
     return this.dashboardService.checkForUpdate();
-  }
-
-  @Post('update')
-  @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: 'Perform auto-update via Docker socket' })
-  @ApiResponse({ status: 200, description: 'Update result' })
-  async performUpdate() {
-    return this.dashboardService.performUpdate();
   }
 }

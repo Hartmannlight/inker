@@ -72,8 +72,13 @@ describe('WP-21 SQLite sources and durable connector execution', () => {
     store = new OutboxStore(prisma as PrismaService);
     secondStore = new OutboxStore(other as PrismaService);
     publications = new PublicationPersistenceService(prisma as PrismaService);
-    worker = new SourceWorkerService(prisma as PrismaService, store, publications);
-    second = new SourceWorkerService(other as PrismaService, secondStore, new PublicationPersistenceService(other as PrismaService));
+    worker = new SourceWorkerService(prisma as PrismaService, store, publications, encryption);
+    second = new SourceWorkerService(
+      other as PrismaService,
+      secondStore,
+      new PublicationPersistenceService(other as PrismaService),
+      encryption,
+    );
   }, 30_000);
 
   afterEach(async () => {

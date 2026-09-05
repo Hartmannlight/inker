@@ -98,7 +98,7 @@ export function PluginCreator() {
     }
     return INITIAL_FORM;
   });
-  const [sampleData, setSampleData] = useState<any>(null);
+  const [sampleData, setSampleData] = useState<unknown>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [activeLayout, setActiveLayout] = useState<'full' | 'half_horizontal' | 'half_vertical' | 'quadrant'>('full');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -139,7 +139,7 @@ export function PluginCreator() {
   }, [existingPlugin, isEdit]);
 
   // Save mutation
-  const saveMutation = useMutation(
+  const saveMutation = useMutation<unknown, void>(
     async () => {
       const payload = {
         ...formData,
@@ -168,7 +168,7 @@ export function PluginCreator() {
     }
   );
 
-  const update = (key: keyof PluginFormData, value: any) => {
+  const update = <Key extends keyof PluginFormData>(key: Key, value: PluginFormData[Key]) => {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
@@ -196,8 +196,8 @@ export function PluginCreator() {
       const data = await response.json();
       setSampleData(data);
       success('Data fetched successfully');
-    } catch (err: any) {
-      showError(`Fetch failed: ${err.message}`);
+    } catch (error) {
+      showError(`Fetch failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setTestLoading(false);
     }
@@ -212,9 +212,18 @@ export function PluginCreator() {
     update('dataHeaders', headers);
   };
 
+  const getActiveMarkup = useCallback(() => {
+    switch (activeLayout) {
+      case 'full': return formData.markupFull;
+      case 'half_horizontal': return formData.markupHalfHorizontal;
+      case 'half_vertical': return formData.markupHalfVertical;
+      case 'quadrant': return formData.markupQuadrant;
+    }
+  }, [activeLayout, formData.markupFull, formData.markupHalfHorizontal, formData.markupHalfVertical, formData.markupQuadrant]);
+
   // Settings schema management
   // Live preview for template step
-  const handlePreview = async () => {
+  const handlePreview = useCallback(async () => {
     const markup = getActiveMarkup();
     if (!markup) return;
     setPreviewLoading(true);
@@ -230,26 +239,17 @@ export function PluginCreator() {
     } finally {
       setPreviewLoading(false);
     }
-  };
+  }, [getActiveMarkup, sampleData]);
 
   const addField = () => update('settingsSchema', [
     ...formData.settingsSchema,
     { key: '', label: '', type: 'text', default: '' },
   ]);
   const removeField = (i: number) => update('settingsSchema', formData.settingsSchema.filter((_, idx) => idx !== i));
-  const updateField = (i: number, key: keyof SettingsField, val: any) => {
+  const updateField = <Key extends keyof SettingsField>(i: number, key: Key, val: SettingsField[Key]) => {
     const fields = [...formData.settingsSchema];
     fields[i] = { ...fields[i], [key]: val };
     update('settingsSchema', fields);
-  };
-
-  const getActiveMarkup = () => {
-    switch (activeLayout) {
-      case 'full': return formData.markupFull;
-      case 'half_horizontal': return formData.markupHalfHorizontal;
-      case 'half_vertical': return formData.markupHalfVertical;
-      case 'quadrant': return formData.markupQuadrant;
-    }
   };
 
   const setActiveMarkup = (value: string) => {
@@ -265,7 +265,7 @@ export function PluginCreator() {
     if (isEdit && existingPlugin && formData.markupFull && !previewUrl) {
       handlePreview();
     }
-  }, [isEdit, existingPlugin]);
+  }, [isEdit, existingPlugin, formData.markupFull, previewUrl, handlePreview]);
 
   const hasTemplate = !!formData.markupFull;
 
@@ -555,9 +555,12 @@ export function PluginCreator() {
                     className="w-full px-4 py-3 rounded-lg border border-border-default bg-bg-page text-text-primary font-mono text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-accent"
                     spellCheck={false}
                   />
-                  {sampleData && (
+                  {sampleData !== null && (
                     <p className="text-xs text-text-muted mt-2">
-                      Available data keys: {Object.keys(typeof sampleData === 'object' ? sampleData : {}).join(', ') || 'none'}
+                      Available data keys: {Object.keys(
+                        typeof sampleData === 'object' && sampleData !== null && !Array.isArray(sampleData)
+                          ? sampleData : {},
+                      ).join(', ') || 'none'}
                     </p>
                   )}
                 </div>
@@ -818,7 +821,7 @@ export function PluginCreator() {
             </Button>
           ) : (
             <Button
-              onClick={() => saveMutation.mutate(undefined as any)}
+              onClick={() => void saveMutation.mutate(undefined)}
               disabled={saveMutation.isLoading || !formData.name || !formData.slug || !formData.markupFull}
               isLoading={saveMutation.isLoading}
             >

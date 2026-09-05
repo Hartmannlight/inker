@@ -6,25 +6,256 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CustomWidgetsService } from '../../custom-widgets/custom-widgets.service';
 import { SettingsService } from '../../settings/settings.service';
-import * as sharpModule from 'sharp';
-import type { Sharp, FitEnum } from 'sharp';
-// Handle both ESM and CJS imports for Bun compatibility
-const sharp = (sharpModule as any).default || sharpModule;
+import type { FitEnum } from 'sharp';
+import { sharp } from '../../common/utils/sharp.util';
+import { fetchWeatherData, weatherCondition, weatherIconSvg } from './weather-data';
+import {
+  batteryWidget,
+  batteryWidgetStyles,
+  deviceInfoWidget,
+  deviceInfoWidgetStyles,
+  dividerWidget,
+  rectangleWidget,
+  wifiWidget,
+  wifiWidgetStyles,
+  type WidgetHtmlTools,
+} from './device-widget-renderers';
+import {
+  clockWidget,
+  clockWidgetStyles,
+  countdownWidget,
+  countdownWidgetStyles,
+  dateWidget,
+  dateWidgetStyles,
+  type TemporalWidgetTools,
+} from './temporal-widget-renderers';
+import {
+  calendarWidget,
+  calendarWidgetStyles,
+  daysUntilWidget,
+  daysUntilWidgetStyles,
+  textWidget,
+  textWidgetStyles,
+  type ContentWidgetTools,
+} from './content-widget-renderers';
 import puppeteer, { Browser, Page } from 'puppeteer';
+interface QRCodeApi {
+  toBuffer(content: string, options: Record<string, unknown>): Promise<Buffer>;
+  toString(content: string, options: Record<string, unknown>): Promise<string>;
+}
 import * as QRCodeModule from 'qrcode';
-const QRCode = (QRCodeModule as any).default || QRCodeModule;
+const QRCode = ((QRCodeModule as unknown as { default?: QRCodeApi }).default ?? QRCodeModule) as QRCodeApi;
 import { encodeBmp1bit, encodeGray4Bmp, quantizeGray16 } from '../../common/utils/bmp1bit.util';
+import { floydSteinbergDither } from '../../common/utils/raster.util';
 import type { ScreenDesign, ScreenWidget, WidgetTemplate } from '@prisma/client';
 import { calculateDaysUntil } from './days-until.util';
+import type { PluginRendererService } from '../../plugins/plugin-renderer.service';
 
-type WidgetWithTemplate = ScreenWidget & { template: WidgetTemplate };
-type ScreenDesignWithWidgets = ScreenDesign & { widgets: WidgetWithTemplate[] };
+export { calendarLayout, stripDiacritics } from './content-widget-renderers';
+
+export type RenderableWidget = Pick<ScreenWidget, 'id' | 'screenDesignId' | 'templateId' | 'x' | 'y' | 'width' | 'height' | 'rotation' | 'config' | 'zIndex'> & {
+  template: Pick<WidgetTemplate, 'name' | 'label'>;
+};
+export type RenderableScreenDesign = Pick<ScreenDesign, 'id' | 'name' | 'width' | 'height' | 'background'> & {
+  widgets: RenderableWidget[];
+};
+type WidgetWithTemplate = RenderableWidget;
+type ScreenDesignWithWidgets = RenderableScreenDesign;
+type WidgetConfig = Record<string, unknown>;
+
+interface LegacyWidgetConfig extends WidgetConfig {
+  cellOverrides?: WidgetConfig;
+  color?: string;
+  content?: string;
+  customWidgetId?: number;
+  dayMode?: 'calendar' | 'workdays';
+  design?: string;
+  durationDays?: number;
+  eventName?: string;
+  fillColor?: string;
+  fit?: keyof FitEnum;
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: string;
+  forecastDay?: number;
+  forecastTime?: string;
+  format?: string;
+  inputMode?: 'targetDate' | 'duration';
+  label?: string;
+  labelPrefix?: string;
+  labelSuffix?: string;
+  latitude?: number;
+  locale?: string;
+  location?: string;
+  longitude?: number;
+  layout?: string;
+  orientation?: string;
+  owner?: string;
+  pluginId?: number;
+  repo?: string;
+  showCondition?: boolean;
+  showDay?: boolean;
+  showDayName?: boolean;
+  showDayOfWeek?: boolean;
+  showDays?: boolean;
+  showFirmware?: boolean;
+  showHours?: boolean;
+  showHumidity?: boolean;
+  showIcon?: boolean;
+  showLocation?: boolean;
+  showMac?: boolean;
+  showMinutes?: boolean;
+  showMonth?: boolean;
+  showName?: boolean;
+  showPercentage?: boolean;
+  showRepoName?: boolean;
+  showSeconds?: boolean;
+  showStrength?: boolean;
+  showTemperature?: boolean;
+  showWeekday?: boolean;
+  showWind?: boolean;
+  showYear?: boolean;
+  startDate?: string;
+  style?: string;
+  targetDate?: string;
+  text?: string;
+  textAlign?: string;
+  thickness?: number;
+  timezone?: string;
+  units?: string;
+  url?: string;
+  verticalAlign?: string;
+}
+
+interface RenderedGridCell {
+  row: number;
+  col: number;
+  fieldType?: string;
+  value?: unknown;
+  label?: string;
+  formattedValue: string;
+  align?: string;
+  verticalAlign?: string;
+}
+
+interface RenderedGrid {
+  gridCols: number;
+  gridRows: number;
+  gridGap: number;
+  cells: RenderedGridCell[];
+}
+
+function objectConfig(value: unknown): WidgetConfig {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as WidgetConfig
+    : {};
+}
+
+function configText(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value ? value : fallback;
+}
+
+function configNumber(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function configChoice<T extends string>(value: unknown, choices: readonly T[], fallback: T): T {
+  return typeof value === 'string' && choices.includes(value as T) ? value as T : fallback;
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/** Normalize the persisted JSON boundary used by the old buffer renderer. */
+function legacyWidgetConfig(value: unknown): LegacyWidgetConfig {
+  const source = objectConfig(value);
+  return {
+    cellOverrides: objectConfig(source.cellOverrides), color: optionalText(source.color),
+    content: optionalText(source.content), customWidgetId: optionalNumber(source.customWidgetId),
+    dayMode: configChoice(source.dayMode, ['calendar', 'workdays'] as const, 'calendar'),
+    design: optionalText(source.design), durationDays: optionalNumber(source.durationDays),
+    eventName: optionalText(source.eventName), fillColor: optionalText(source.fillColor),
+    fit: configChoice(source.fit, ['contain', 'cover', 'fill', 'inside', 'outside'] as const, 'contain'),
+    fontFamily: optionalText(source.fontFamily), fontSize: optionalNumber(source.fontSize),
+    fontWeight: optionalText(source.fontWeight), forecastDay: optionalNumber(source.forecastDay),
+    forecastTime: optionalText(source.forecastTime), format: optionalText(source.format),
+    inputMode: configChoice(source.inputMode, ['targetDate', 'duration'] as const, 'targetDate'),
+    label: optionalText(source.label), labelPrefix: optionalText(source.labelPrefix),
+    labelSuffix: optionalText(source.labelSuffix), latitude: optionalNumber(source.latitude),
+    locale: optionalText(source.locale), location: optionalText(source.location),
+    longitude: optionalNumber(source.longitude), layout: optionalText(source.layout),
+    orientation: optionalText(source.orientation), owner: optionalText(source.owner),
+    pluginId: optionalNumber(source.pluginId), repo: optionalText(source.repo),
+    showCondition: optionalBoolean(source.showCondition), showDay: optionalBoolean(source.showDay),
+    showDayName: optionalBoolean(source.showDayName), showDayOfWeek: optionalBoolean(source.showDayOfWeek),
+    showDays: optionalBoolean(source.showDays), showFirmware: optionalBoolean(source.showFirmware),
+    showHours: optionalBoolean(source.showHours), showHumidity: optionalBoolean(source.showHumidity),
+    showIcon: optionalBoolean(source.showIcon), showLocation: optionalBoolean(source.showLocation),
+    showMac: optionalBoolean(source.showMac), showMinutes: optionalBoolean(source.showMinutes),
+    showMonth: optionalBoolean(source.showMonth), showName: optionalBoolean(source.showName),
+    showPercentage: optionalBoolean(source.showPercentage), showRepoName: optionalBoolean(source.showRepoName),
+    showSeconds: optionalBoolean(source.showSeconds), showStrength: optionalBoolean(source.showStrength),
+    showTemperature: optionalBoolean(source.showTemperature), showWeekday: optionalBoolean(source.showWeekday),
+    showWind: optionalBoolean(source.showWind), showYear: optionalBoolean(source.showYear),
+    startDate: optionalText(source.startDate), style: optionalText(source.style),
+    targetDate: optionalText(source.targetDate), text: optionalText(source.text),
+    textAlign: optionalText(source.textAlign), thickness: optionalNumber(source.thickness),
+    timezone: optionalText(source.timezone), units: optionalText(source.units),
+    url: optionalText(source.url), verticalAlign: optionalText(source.verticalAlign),
+  };
+}
+
+function renderedGrid(value: WidgetConfig): RenderedGrid | null {
+  const gridCols = configNumber(value.gridCols, Number.NaN);
+  const gridRows = configNumber(value.gridRows, Number.NaN);
+  const gridGap = configNumber(value.gridGap, 8);
+  if (!Number.isSafeInteger(gridCols) || !Number.isSafeInteger(gridRows)
+    || gridCols < 1 || gridRows < 1 || gridCols * gridRows > 16
+    || !Array.isArray(value.cells) || value.cells.length > 16) {
+    return null;
+  }
+
+  const cells: RenderedGridCell[] = [];
+  for (const candidate of value.cells) {
+    const cell = objectConfig(candidate);
+    const row = configNumber(cell.row, Number.NaN);
+    const col = configNumber(cell.col, Number.NaN);
+    if (!Number.isSafeInteger(row) || !Number.isSafeInteger(col)
+      || row < 0 || col < 0 || row >= gridRows || col >= gridCols
+      || typeof cell.formattedValue !== 'string') {
+      return null;
+    }
+    cells.push({
+      row,
+      col,
+      fieldType: typeof cell.fieldType === 'string' ? cell.fieldType : undefined,
+      value: cell.value,
+      label: typeof cell.label === 'string' ? cell.label : undefined,
+      formattedValue: cell.formattedValue,
+      align: typeof cell.align === 'string' ? cell.align : undefined,
+      verticalAlign: typeof cell.verticalAlign === 'string' ? cell.verticalAlign : undefined,
+    });
+  }
+  return { gridCols, gridRows, gridGap, cells };
+}
 
 /**
  * Device context passed during rendering
@@ -36,6 +267,8 @@ export interface DeviceContext {
   deviceName?: string;      // Device name/label
   firmwareVersion?: string; // Firmware version
   macAddress?: string;      // MAC address
+  foregroundColor?: string; // Device-specific LCD foreground/icon color
+  backgroundColor?: string; // Device-specific LCD canvas background
 }
 
 /**
@@ -52,50 +285,6 @@ export type RenderMode = 'device' | 'preview' | 'einkPreview';
  * - 'bmp': 1-bit BMP for TRMNL OG / DIY-kit firmware that rejects PNG (issue #31)
  */
 export type ImageFormat = 'png' | 'bmp';
-
-/**
- * Shared calendar-widget layout math. MUST stay identical to the frontend CalendarWidget
- * (WidgetRenderer.tsx) so the designer preview matches the device render exactly. Font sizes scale
- * to the widget but are capped to fit their cell/width — nothing wraps or overflows.
- */
-/**
- * Flatten accented/special Latin letters to their base ASCII form (ś→s, ż→z, ł→l, é→e …) so the
- * calendar renders consistently on e-ink where diacritics can look off or inconsistent.
- */
-export function stripDiacritics(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/ł/g, 'l')
-    .replace(/Ł/g, 'L')
-    .replace(/ø/g, 'o')
-    .replace(/Ø/g, 'O')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D');
-}
-
-export function calendarLayout(
-  width: number,
-  height: number,
-  labels: string[],
-  title: string,
-  showHeader: boolean,
-  weekRows: number,
-  scale: number,
-): { headerH: number; headerSize: number; labelSize: number; daySize: number; dot: number; gridStyle: string; cellBase: string } {
-  const headerH = showHeader ? Math.max(14, Math.floor(height * 0.15)) : 0;
-  const cell = Math.min(width / 7, (height - headerH) / (weekRows + 1));
-  const maxLabelLen = Math.max(...labels.map((l) => l.length), 1);
-  const daySize = Math.max(8, Math.floor(cell * 0.42 * scale));
-  const labelSize = Math.max(7, Math.floor(Math.min(cell * 0.34, (cell * 0.92) / (maxLabelLen * 0.62)) * scale));
-  const headerSize = showHeader
-    ? Math.max(10, Math.floor(Math.min(headerH * 0.6, (width * 0.9) / (Math.max(title.length, 1) * 0.6)) * scale))
-    : 0;
-  const dot = Math.max(12, Math.min(Math.floor(cell * 0.92), Math.floor(cell * 0.8 * scale)));
-  const cellBase = 'display:flex;align-items:center;justify-content:center;overflow:hidden;min-width:0;min-height:0;';
-  const gridStyle = `flex:1;min-height:0;box-sizing:border-box;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-template-rows:repeat(${weekRows + 1},minmax(0,1fr));text-align:center;overflow:hidden;`;
-  return { headerH, headerSize, labelSize, daySize, dot, gridStyle, cellBase };
-}
 
 /**
  * Screen Renderer Service
@@ -115,6 +304,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     private customWidgetsService: CustomWidgetsService,
     private configService: ConfigService,
     private settingsService: SettingsService,
+    private moduleRef: ModuleRef,
   ) {}
 
   /**
@@ -257,8 +447,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       case 'serif':
         return "'Merriweather', 'Symbola', serif";
       default:
-        // If already a specific font or unknown, return with fallback
-        return fontFamily.includes(',') ? fontFamily : `${fontFamily}, 'Symbola', sans-serif`;
+        return "'Inter', 'Symbola', sans-serif";
     }
   }
 
@@ -366,6 +555,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     return this.renderDesign(screenDesign as ScreenDesignWithWidgets, deviceContext, renderMode, format, bitDepth);
+  }
+
+  /** Render an immutable publication recipe without consulting the draft design. */
+  async renderPublishedDesign(screenDesign: RenderableScreenDesign, deviceContext?: DeviceContext): Promise<Buffer> {
+    return this.renderDesignAsHtml(screenDesign, deviceContext);
   }
 
   /**
@@ -481,7 +675,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     // Apply Floyd-Steinberg dithering
-    const ditheredBuffer = this.applyFloydSteinbergDithering(data, info.width, info.height, threshold);
+    const ditheredBuffer = this.dither(data, info.width, info.height, threshold);
 
     // BMP path: emit a 1-bit BMP at full device resolution for firmware that
     // rejects PNG (TRMNL OG / DIY kits — issue #31). A 1-bit BMP is a fixed,
@@ -531,7 +725,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         .raw()
         .toBuffer({ resolveWithObject: true });
 
-      const scaledDithered = this.applyFloydSteinbergDithering(
+      const scaledDithered = this.dither(
         scaledGray.data,
         scaledGray.info.width,
         scaledGray.info.height,
@@ -561,58 +755,17 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    * Apply Floyd-Steinberg dithering algorithm
    * Converts grayscale image data to 1-bit with error diffusion
    */
-  private applyFloydSteinbergDithering(
+  private dither(
     data: Buffer,
     width: number,
     height: number,
     threshold: number,
   ): Buffer {
-    const pixels = new Float32Array(data.length);
-
-    // Pre-dithering contrast enhancement
-    for (let i = 0; i < data.length; i++) {
-      const val = data[i];
-      if (val > 200) pixels[i] = 255;      // Near-white becomes pure white
-      else if (val < 55) pixels[i] = 0;    // Near-black becomes pure black
-      else pixels[i] = val;
-    }
-
-    // Floyd-Steinberg dithering
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = y * width + x;
-        const oldPixel = pixels[idx];
-        const newPixel = oldPixel < threshold ? 0 : 255;
-        pixels[idx] = newPixel;
-        const error = oldPixel - newPixel;
-
-        // Error diffusion: 7/16, 3/16, 5/16, 1/16
-        // Clamp after each addition to prevent error accumulation artifacts
-        if (x + 1 < width) {
-          pixels[idx + 1] = Math.max(0, Math.min(255, pixels[idx + 1] + (error * 7) / 16));
-        }
-        if (x - 1 >= 0 && y + 1 < height) {
-          const i = (y + 1) * width + (x - 1);
-          pixels[i] = Math.max(0, Math.min(255, pixels[i] + (error * 3) / 16));
-        }
-        if (y + 1 < height) {
-          const i = (y + 1) * width + x;
-          pixels[i] = Math.max(0, Math.min(255, pixels[i] + (error * 5) / 16));
-        }
-        if (x + 1 < width && y + 1 < height) {
-          const i = (y + 1) * width + (x + 1);
-          pixels[i] = Math.max(0, Math.min(255, pixels[i] + (error * 1) / 16));
-        }
-      }
-    }
-
-    // Convert back to buffer
-    const output = Buffer.alloc(data.length);
-    for (let i = 0; i < pixels.length; i++) {
-      output[i] = Math.max(0, Math.min(255, Math.round(pixels[i])));
-    }
-
-    return output;
+    return floydSteinbergDither(data, width, height, {
+      threshold,
+      contrastSnap: { low: 55, high: 200 },
+      clampDiffusion: true,
+    });
   }
 
   /**
@@ -620,7 +773,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    */
   private async renderWidget(widget: WidgetWithTemplate, deviceContext?: DeviceContext): Promise<Buffer | null> {
     const { template, width, height, config } = widget;
-    const widgetConfig = config as Record<string, any>;
+    const widgetConfig = legacyWidgetConfig(config);
 
     switch (template.name) {
       case 'clock':
@@ -683,7 +836,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderClockWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const now = new Date();
     const format = config.format || '24h';
@@ -729,7 +882,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderDateWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const now = new Date();
     const fontSize = config.fontSize || 24;
@@ -793,7 +946,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderTextWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const text = config.text || 'Text';
     const fontSize = config.fontSize || 24;
@@ -806,180 +959,13 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       textAlign: config.textAlign || 'left',
     });
   }
-
-  /**
-   * Weather code to condition text mapping (WMO codes)
-   * https://open-meteo.com/en/docs
-   */
-  private getWeatherCondition(code: number): { text: string; icon: string } {
-    const conditions: Record<number, { text: string; icon: string }> = {
-      0: { text: 'Clear', icon: 'sun' },
-      1: { text: 'Mostly Clear', icon: 'sun' },
-      2: { text: 'Partly Cloudy', icon: 'cloud-sun' },
-      3: { text: 'Cloudy', icon: 'cloud' },
-      45: { text: 'Foggy', icon: 'fog' },
-      48: { text: 'Icy Fog', icon: 'fog' },
-      51: { text: 'Light Drizzle', icon: 'drizzle' },
-      53: { text: 'Drizzle', icon: 'drizzle' },
-      55: { text: 'Heavy Drizzle', icon: 'drizzle' },
-      56: { text: 'Freezing Drizzle', icon: 'drizzle' },
-      57: { text: 'Heavy Freezing Drizzle', icon: 'drizzle' },
-      61: { text: 'Light Rain', icon: 'rain' },
-      63: { text: 'Rain', icon: 'rain' },
-      65: { text: 'Heavy Rain', icon: 'rain' },
-      66: { text: 'Freezing Rain', icon: 'rain' },
-      67: { text: 'Heavy Freezing Rain', icon: 'rain' },
-      71: { text: 'Light Snow', icon: 'snow' },
-      73: { text: 'Snow', icon: 'snow' },
-      75: { text: 'Heavy Snow', icon: 'snow' },
-      77: { text: 'Snow Grains', icon: 'snow' },
-      80: { text: 'Light Showers', icon: 'rain' },
-      81: { text: 'Showers', icon: 'rain' },
-      82: { text: 'Heavy Showers', icon: 'rain' },
-      85: { text: 'Snow Showers', icon: 'snow' },
-      86: { text: 'Heavy Snow Showers', icon: 'snow' },
-      95: { text: 'Thunderstorm', icon: 'thunder' },
-      96: { text: 'Thunderstorm + Hail', icon: 'thunder' },
-      99: { text: 'Heavy Thunderstorm', icon: 'thunder' },
-    };
-    return conditions[code] || { text: 'Unknown', icon: 'cloud' };
-  }
-
-  /**
-   * Get weather icon SVG path
-   */
-  private getWeatherIconSvg(icon: string, size: number, color: string): string {
-    const cx = size / 2;
-    const cy = size / 2;
-    const r = size * 0.3;
-
-    switch (icon) {
-      case 'sun':
-        // Sun with rays
-        return `
-          <circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>
-          ${[0, 45, 90, 135, 180, 225, 270, 315].map(angle => {
-            const rad = (angle * Math.PI) / 180;
-            const x1 = cx + Math.cos(rad) * (r + 4);
-            const y1 = cy + Math.sin(rad) * (r + 4);
-            const x2 = cx + Math.cos(rad) * (r + 10);
-            const y2 = cy + Math.sin(rad) * (r + 10);
-            return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="2"/>`;
-          }).join('')}
-        `;
-      case 'cloud':
-        return `
-          <ellipse cx="${cx - 5}" cy="${cy + 5}" rx="${r * 0.8}" ry="${r * 0.6}" fill="${color}"/>
-          <ellipse cx="${cx + 8}" cy="${cy + 5}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
-          <ellipse cx="${cx}" cy="${cy - 2}" rx="${r}" ry="${r * 0.7}" fill="${color}"/>
-        `;
-      case 'cloud-sun':
-        return `
-          <circle cx="${cx + 10}" cy="${cy - 8}" r="${r * 0.5}" fill="${color}"/>
-          ${[0, 60, 120, 180, 240, 300].map(angle => {
-            const rad = (angle * Math.PI) / 180;
-            const x1 = cx + 10 + Math.cos(rad) * (r * 0.5 + 3);
-            const y1 = cy - 8 + Math.sin(rad) * (r * 0.5 + 3);
-            const x2 = cx + 10 + Math.cos(rad) * (r * 0.5 + 7);
-            const y2 = cy - 8 + Math.sin(rad) * (r * 0.5 + 7);
-            return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="1.5"/>`;
-          }).join('')}
-          <ellipse cx="${cx - 5}" cy="${cy + 8}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
-          <ellipse cx="${cx + 6}" cy="${cy + 8}" rx="${r * 0.6}" ry="${r * 0.45}" fill="${color}"/>
-          <ellipse cx="${cx}" cy="${cy + 2}" rx="${r * 0.85}" ry="${r * 0.6}" fill="${color}"/>
-        `;
-      case 'rain':
-        return `
-          <ellipse cx="${cx - 5}" cy="${cy - 5}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
-          <ellipse cx="${cx + 6}" cy="${cy - 5}" rx="${r * 0.6}" ry="${r * 0.45}" fill="${color}"/>
-          <ellipse cx="${cx}" cy="${cy - 10}" rx="${r * 0.85}" ry="${r * 0.6}" fill="${color}"/>
-          <line x1="${cx - 8}" y1="${cy + 5}" x2="${cx - 12}" y2="${cy + 15}" stroke="${color}" stroke-width="2"/>
-          <line x1="${cx}" y1="${cy + 5}" x2="${cx - 4}" y2="${cy + 15}" stroke="${color}" stroke-width="2"/>
-          <line x1="${cx + 8}" y1="${cy + 5}" x2="${cx + 4}" y2="${cy + 15}" stroke="${color}" stroke-width="2"/>
-        `;
-      case 'drizzle':
-        return `
-          <ellipse cx="${cx - 5}" cy="${cy - 5}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
-          <ellipse cx="${cx + 6}" cy="${cy - 5}" rx="${r * 0.6}" ry="${r * 0.45}" fill="${color}"/>
-          <ellipse cx="${cx}" cy="${cy - 10}" rx="${r * 0.85}" ry="${r * 0.6}" fill="${color}"/>
-          <circle cx="${cx - 6}" cy="${cy + 8}" r="2" fill="${color}"/>
-          <circle cx="${cx + 2}" cy="${cy + 12}" r="2" fill="${color}"/>
-          <circle cx="${cx + 8}" cy="${cy + 6}" r="2" fill="${color}"/>
-        `;
-      case 'snow':
-        return `
-          <ellipse cx="${cx - 5}" cy="${cy - 5}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
-          <ellipse cx="${cx + 6}" cy="${cy - 5}" rx="${r * 0.6}" ry="${r * 0.45}" fill="${color}"/>
-          <ellipse cx="${cx}" cy="${cy - 10}" rx="${r * 0.85}" ry="${r * 0.6}" fill="${color}"/>
-          <text x="${cx - 8}" y="${cy + 12}" font-size="12" font-family="sans-serif" fill="${color}">*</text>
-          <text x="${cx}" y="${cy + 16}" font-size="12" font-family="sans-serif" fill="${color}">*</text>
-          <text x="${cx + 8}" y="${cy + 10}" font-size="12" font-family="sans-serif" fill="${color}">*</text>
-        `;
-      case 'thunder':
-        return `
-          <ellipse cx="${cx - 5}" cy="${cy - 8}" rx="${r * 0.7}" ry="${r * 0.5}" fill="${color}"/>
-          <ellipse cx="${cx + 6}" cy="${cy - 8}" rx="${r * 0.6}" ry="${r * 0.45}" fill="${color}"/>
-          <ellipse cx="${cx}" cy="${cy - 13}" rx="${r * 0.85}" ry="${r * 0.6}" fill="${color}"/>
-          <path d="M ${cx - 2} ${cy} L ${cx + 5} ${cy} L ${cx} ${cy + 8} L ${cx + 8} ${cy + 8} L ${cx - 3} ${cy + 20} L ${cx} ${cy + 10} L ${cx - 6} ${cy + 10} Z" fill="${color}"/>
-        `;
-      case 'fog':
-        return `
-          <line x1="${cx - 15}" y1="${cy - 8}" x2="${cx + 15}" y2="${cy - 8}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
-          <line x1="${cx - 12}" y1="${cy}" x2="${cx + 12}" y2="${cy}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
-          <line x1="${cx - 15}" y1="${cy + 8}" x2="${cx + 15}" y2="${cy + 8}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
-        `;
-      default:
-        return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="2"/>`;
-    }
-  }
-
-  private async fetchWeatherData(
-    latitude: number,
-    longitude: number,
-    forecastDay: number,
-    forecastTime: string,
-  ): Promise<{
-    temperature: number;
-    weatherCode: number;
-    humidity: number;
-    windSpeed: number;
-    dayName: string;
-  } | null> {
-    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
-      !Number.isFinite(longitude) || longitude < -180 || longitude > 180 ||
-      !Number.isSafeInteger(forecastDay) || forecastDay < 0 || forecastDay > 14) return null;
-    const params = new URLSearchParams({
-      latitude: String(latitude), longitude: String(longitude), timezone: 'auto',
-      current: 'temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m',
-      daily: 'temperature_2m_max,weather_code', forecast_days: String(Math.max(1, forecastDay + 1)),
-    });
-    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
-      signal: AbortSignal.timeout(8_000), headers: { Accept: 'application/json', 'User-Agent': 'Inker/1.0' },
-    });
-    if (!response.ok) return null;
-    const data = await response.json() as Record<string, any>;
-    const current = data.current;
-    const daily = data.daily;
-    const useForecast = forecastDay > 0 || forecastTime !== 'current';
-    const temperature = useForecast ? daily?.temperature_2m_max?.[forecastDay] : current?.temperature_2m;
-    const weatherCode = useForecast ? daily?.weather_code?.[forecastDay] : current?.weather_code;
-    if (!Number.isFinite(temperature) || !Number.isFinite(weatherCode)) return null;
-    const date = daily?.time?.[forecastDay] ? new Date(`${daily.time[forecastDay]}T12:00:00Z`) : new Date();
-    return {
-      temperature: Math.round(Number(temperature)), weatherCode: Number(weatherCode),
-      humidity: Number.isFinite(current?.relative_humidity_2m) ? Number(current.relative_humidity_2m) : 0,
-      windSpeed: Number.isFinite(current?.wind_speed_10m) ? Math.round(Number(current.wind_speed_10m)) : 0,
-      dayName: new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(date),
-    };
-  }
-
   /**
    * Render a weather widget from its source data
    */
   private async renderWeatherWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const location = config.location || 'Unknown';
     const latitude = config.latitude || 52.2297;
@@ -998,7 +984,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const color = this.sanitizeColor(config.color || '#000000');
 
     // Fetch real weather data
-    const weatherData = await this.fetchWeatherData(latitude, longitude, forecastDay, forecastTime);
+    const weatherData = await fetchWeatherData(latitude, longitude, forecastDay, forecastTime);
 
     if (!weatherData) {
       // Fallback to placeholder if API fails
@@ -1011,7 +997,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
 
     const { temperature, weatherCode, humidity, windSpeed, dayName } = weatherData;
-    const condition = this.getWeatherCondition(weatherCode);
+    const condition = weatherCondition(weatherCode);
 
     // Convert temperature if imperial
     const displayTemp = units === 'imperial'
@@ -1048,7 +1034,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       const iconY = currentY + 5;
       svgContent += `
         <g transform="translate(${iconX}, ${iconY})">
-          ${this.getWeatherIconSvg(condition.icon, iconSize, color)}
+          ${weatherIconSvg(condition.icon, iconSize, color)}
         </g>
       `;
     }
@@ -1127,7 +1113,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderQRCodeWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const content = config.content || 'https://example.com';
     const size = Math.min(width, height);
@@ -1164,7 +1150,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderBatteryWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
     deviceContext?: DeviceContext,
   ): Promise<Buffer> {
     const showPercentage = config.showPercentage ?? true;
@@ -1252,7 +1238,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderCountdownWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const targetDate = new Date(config.targetDate || new Date());
     const label = config.label || 'Countdown';
@@ -1295,7 +1281,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderDividerWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const orientation = config.orientation || 'horizontal';
     const color = this.sanitizeColor(config.color || '#000000');
@@ -1337,12 +1323,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderRectangleWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const fillColor = this.parseColor(config.fillColor || '#000000');
-    const borderRadius = config.borderRadius || 0;
-
-    // Create a simple rectangle (borderRadius would need SVG overlay for proper support)
+    // The buffer renderer currently supports solid rectangles. Borders and
+    // rounded corners are handled by the HTML renderer below.
     return sharp({
       create: {
         width,
@@ -1361,7 +1346,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderWifiWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
     deviceContext?: DeviceContext,
   ): Promise<Buffer> {
     const fontSize = config.fontSize || 18;
@@ -1453,7 +1438,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderDeviceInfoWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
     deviceContext?: DeviceContext,
   ): Promise<Buffer> {
     const fontSize = config.fontSize || 16;
@@ -1495,7 +1480,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderDaysUntilWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const fontSize = config.fontSize || 32;
     const color = this.sanitizeColor(config.color || '#000000');
@@ -1646,7 +1631,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderGitHubWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const owner = config.owner || 'facebook';
     const repo = config.repo || 'react';
@@ -1740,7 +1725,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderImageWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: LegacyWidgetConfig,
   ): Promise<Buffer> {
     const url = config.url;
     const fit = config.fit || 'contain';
@@ -1777,20 +1762,20 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderCustomWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: WidgetConfig,
   ): Promise<Buffer> {
-    const customWidgetId = config.customWidgetId as number | undefined;
+    const customWidgetId = configNumber(config.customWidgetId, 0);
 
     // Font settings from screen designer config
-    const fontSize = config.fontSize || 24;
-    const fontFamily = config.fontFamily || 'sans-serif';
-    const fontWeight = config.fontWeight || 'normal';
-    const textAlign = config.textAlign || 'center';
-    const verticalAlign = config.verticalAlign || 'middle';
-    const color = this.sanitizeColor(config.color || '#000000');
+    const fontSize = configNumber(config.fontSize, 24);
+    const fontFamily = configText(config.fontFamily, 'sans-serif');
+    const fontWeight = configChoice(config.fontWeight, ['normal', 'bold'] as const, 'normal');
+    const textAlign = configChoice(config.textAlign, ['left', 'center', 'right'] as const, 'center');
+    const verticalAlign = configChoice(config.verticalAlign, ['top', 'middle', 'bottom'] as const, 'middle');
+    const color = this.sanitizeColor(configText(config.color, '#000000'));
 
     // Per-cell overrides from screen designer
-    const cellOverrides = (config.cellOverrides as Record<string, Record<string, unknown>>) || {};
+    const cellOverrides = objectConfig(config.cellOverrides);
 
     if (!customWidgetId) {
       this.logger.warn('Custom widget missing customWidgetId in config');
@@ -1801,9 +1786,9 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       // Read persisted custom-widget data; rendering must never refresh a source.
       const preview = await this.customWidgetsService.getWithData(customWidgetId, true);
       const { widget, renderedContent } = preview;
-      const widgetConfig = widget.config as Record<string, any>;
-      const fieldType = widgetConfig.fieldType as string | undefined;
-      const valueFieldType = widgetConfig.valueFieldType as string | undefined;
+      const widgetConfig = objectConfig(widget.config);
+      const fieldType = typeof widgetConfig.fieldType === 'string' ? widgetConfig.fieldType : undefined;
+      const valueFieldType = typeof widgetConfig.valueFieldType === 'string' ? widgetConfig.valueFieldType : undefined;
 
       this.logger.debug(`Rendering custom widget ${customWidgetId}: displayType=${widget.displayType}, fontSize=${fontSize}`);
 
@@ -1831,9 +1816,9 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async renderPluginWidget(
     width: number,
     height: number,
-    config: Record<string, any>,
+    config: WidgetConfig,
   ): Promise<Buffer> {
-    const pluginId = config.pluginId as number | undefined;
+    const pluginId = configNumber(config.pluginId, 0);
     if (!pluginId) {
       return this.renderPlaceholderWidget(width, height, 'No plugin selected');
     }
@@ -1860,8 +1845,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       }
 
       // Settings come from the widget config itself
-      const settings = config as Record<string, any>;
-      return await pluginRenderer.renderToPng(markup, {}, settings, width, height, 'preview');
+      return await pluginRenderer.renderToPng(markup, {}, config, width, height, 'preview');
     } catch {
       throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
     }
@@ -1871,11 +1855,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    * Generate plugin widget content as HTML for the designer preview
    */
   private async generatePluginWidgetContent(
-    config: Record<string, any>,
+    config: WidgetConfig,
     width: number,
     height: number,
   ): Promise<string> {
-    const pluginId = config.pluginId as number | undefined;
+    const pluginId = configNumber(config.pluginId, 0);
     if (!pluginId) {
       return '<div style="color:#999;font-size:12px;display:flex;align-items:center;justify-content:center;height:100%">Select a plugin</div>';
     }
@@ -1900,8 +1884,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         return `<div style="font-size:12px;padding:8px"><strong>${plugin.name}</strong><br/><span style="color:#999">No template</span></div>`;
       }
 
-      const settings = config as Record<string, any>;
-      const html = await pluginRenderer.renderToHtml(markup, {}, settings);
+      const html = await pluginRenderer.renderToHtml(markup, {}, config);
       return html;
     } catch {
       throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
@@ -1914,10 +1897,11 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private inferPluginLayout(
     width: number,
     height: number,
-    configLayout?: string,
+    configLayout?: unknown,
   ): 'full' | 'half_horizontal' | 'half_vertical' | 'quadrant' {
-    if (configLayout && ['full', 'half_horizontal', 'half_vertical', 'quadrant'].includes(configLayout)) {
-      return configLayout as any;
+    if (configLayout === 'full' || configLayout === 'half_horizontal'
+      || configLayout === 'half_vertical' || configLayout === 'quadrant') {
+      return configLayout;
     }
     // Auto-detect from dimensions
     if (width >= 600 && height >= 350) return 'full';
@@ -1929,21 +1913,21 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   /**
    * Get the PluginRendererService (lazy to avoid circular dependency)
    */
-  private async getPluginRenderer(): Promise<any> {
+  private async getPluginRenderer(): Promise<PluginRendererService | null> {
     try {
-      // Dynamic import to avoid circular module dependency
+      // Resolve lazily so the existing module cycle does not become a service
+      // construction cycle. ModuleRef preserves Nest lifecycle and test hooks.
       const { PluginRendererService } = await import('../../plugins/plugin-renderer.service');
-      // Get from NestJS module context via prisma's connection
-      // Since we can't inject it, instantiate with this service
       if (!this._pluginRenderer) {
-        this._pluginRenderer = new PluginRendererService(this as any);
+        this._pluginRenderer = this.moduleRef.get(PluginRendererService, { strict: false });
       }
       return this._pluginRenderer;
-    } catch {
+    } catch (error) {
+      this.logger.warn('Plugin renderer is unavailable from the application context', error);
       return null;
     }
   }
-  private _pluginRenderer: any = null;
+  private _pluginRenderer: PluginRendererService | null = null;
 
   /**
    * Generate HTML that matches the frontend WidgetRenderer component exactly
@@ -1952,10 +1936,10 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
   private async generateCustomWidgetHtml(
     width: number,
     height: number,
-    renderedContent: any,
+    renderedContent: unknown,
     styles: { fontSize: number; fontFamily: string; fontWeight: string; textAlign: string; verticalAlign: string; color: string },
     fieldTypes: { fieldType?: string; valueFieldType?: string },
-    cellOverrides: Record<string, Record<string, unknown>> = {},
+    cellOverrides: WidgetConfig = {},
   ): Promise<string> {
     const { fontSize, fontWeight, textAlign, verticalAlign, color } = styles;
     // Apply font family mapping to use loaded fonts
@@ -1988,27 +1972,10 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     } else if (typeof renderedContent === 'object' && renderedContent !== null) {
       // Check if it's a grid display type
       if ('type' in renderedContent && renderedContent.type === 'grid') {
-        const gridContent = renderedContent as {
-          type: 'grid';
-          gridCols: number;
-          gridRows: number;
-          gridGap: number;
-          cells: Array<{
-            row: number;
-            col: number;
-            field: string;
-            fieldType: string;
-            label?: string;
-            value: unknown;
-            formattedValue: string;
-            align?: string;
-            verticalAlign?: string;
-          }>;
-        };
+        const gridContent = renderedGrid(objectConfig(renderedContent));
+        if (!gridContent) throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
 
         const cellFontSize = fontSize * 0.7;
-        const labelFontSize = cellFontSize * 0.6;
-
         // Pre-process all image URLs in parallel for e-ink display
         const processedCells = await Promise.all(
           gridContent.cells.map(async (cell) => {
@@ -2024,18 +1991,18 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         const cellsHtml = processedCells.map(cell => {
           const cellKey = `${cell.row}-${cell.col}`;
           // Get cell-specific overrides from screen designer config
-          const override = cellOverrides[cellKey] || {};
+          const override = objectConfig(cellOverrides[cellKey]);
 
           // Use override values or fall back to defaults
-          const cellFontSizeOverride = (override.fontSize as number) || cellFontSize;
-          const cellFontWeightOverride = (override.fontWeight as string) || 'bold';
+          const cellFontSizeOverride = configNumber(override.fontSize, cellFontSize);
+          const cellFontWeightOverride = configChoice(override.fontWeight, ['normal', 'bold'] as const, 'bold');
           // Apply font mapping to cell override or use the already-mapped parent fontFamily
-          const cellFontFamilyOverride = override.fontFamily
-            ? this.mapFontFamily(override.fontFamily as string)
+          const cellFontFamilyOverride = typeof override.fontFamily === 'string'
+            ? this.mapFontFamily(override.fontFamily)
             : fontFamily;
-          const cellAlign = (override.align as string) || cell.align || 'center';
-          const cellVerticalAlign = (override.verticalAlign as string) || cell.verticalAlign || 'middle';
-          const imageFit = (override.imageFit as string) || 'contain';
+          const cellAlign = configChoice(override.align ?? cell.align, ['left', 'center', 'right'] as const, 'center');
+          const cellVerticalAlign = configChoice(override.verticalAlign ?? cell.verticalAlign, ['top', 'middle', 'bottom'] as const, 'middle');
+          const imageFit = configChoice(override.imageFit, ['contain', 'cover', 'fill', 'none', 'scale-down'] as const, 'contain');
 
           // Map horizontal alignment to flexbox align-items
           const alignItems = cellAlign === 'left' ? 'flex-start' : cellAlign === 'right' ? 'flex-end' : 'center';
@@ -2522,7 +2489,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     body {
       width: ${width}px;
       height: ${height}px;
-      background: ${this.sanitizeColor(background || '#ffffff', '#ffffff')};
+      background: ${this.sanitizeColor(deviceContext?.backgroundColor || background || '#ffffff', '#ffffff')};
       position: relative;
       overflow: hidden;
       font-family: sans-serif;
@@ -2594,36 +2561,52 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
    */
   private async generateWidgetHtml(widget: WidgetWithTemplate, deviceContext?: DeviceContext): Promise<string> {
     const { x, y, width, height, config, template } = widget;
-    const widgetConfig = config as Record<string, any>;
+    const sourceConfig = objectConfig(config);
+    const widgetConfig = deviceContext?.foregroundColor && template.name !== 'image'
+      ? { ...sourceConfig, color: deviceContext.foregroundColor, borderColor: deviceContext.foregroundColor }
+      : sourceConfig;
 
     // Get widget-specific content
     let content = '';
     let extraStyles = '';
+    const htmlTools: WidgetHtmlTools = {
+      escapeHtml: (value) => this.escapeHtml(value),
+      sanitizeColor: (value, fallback) => this.sanitizeColor(value, fallback),
+    };
+    const temporalTools: TemporalWidgetTools = {
+      escapeHtml: htmlTools.escapeHtml,
+      mapFontFamily: (value) => this.mapFontFamily(value),
+    };
+    const contentTools: ContentWidgetTools = {
+      ...htmlTools,
+      mapFontFamily: temporalTools.mapFontFamily,
+    };
+    const defaultTimezone = this.configService.get<string>('defaultTimezone', 'UTC');
 
     switch (template.name) {
       case 'clock':
-        content = this.generateClockContent(widgetConfig);
-        extraStyles = this.getClockStyles(widgetConfig);
+        content = clockWidget(widgetConfig, defaultTimezone, temporalTools);
+        extraStyles = clockWidgetStyles(widgetConfig, temporalTools);
         break;
       case 'date':
-        content = this.generateDateContent(widgetConfig);
-        extraStyles = this.getDateStyles(widgetConfig);
+        content = dateWidget(widgetConfig, defaultTimezone, temporalTools);
+        extraStyles = dateWidgetStyles(widgetConfig, temporalTools);
         break;
       case 'calendar':
-        content = this.generateCalendarContent(widgetConfig, width, height);
-        extraStyles = this.getCalendarStyles(widgetConfig);
+        content = calendarWidget(widgetConfig, width, height, defaultTimezone, contentTools);
+        extraStyles = calendarWidgetStyles();
         break;
       case 'text':
-        content = this.generateTextContent(widgetConfig);
-        extraStyles = this.getTextStyles(widgetConfig);
+        content = textWidget(widgetConfig, contentTools);
+        extraStyles = textWidgetStyles(widgetConfig, contentTools);
         break;
       case 'daysuntil':
-        content = this.generateDaysUntilContent(widgetConfig);
-        extraStyles = this.getDaysUntilStyles(widgetConfig);
+        content = daysUntilWidget(widgetConfig, contentTools);
+        extraStyles = daysUntilWidgetStyles(widgetConfig, contentTools);
         break;
       case 'countdown':
-        content = this.generateCountdownContent(widgetConfig);
-        extraStyles = this.getCountdownStyles(widgetConfig);
+        content = countdownWidget(widgetConfig, temporalTools);
+        extraStyles = countdownWidgetStyles(widgetConfig, temporalTools);
         break;
       case 'weather':
         content = await this.generateWeatherContent(widgetConfig);
@@ -2633,25 +2616,25 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         content = await this.generateQRCodeContent(widgetConfig, Math.min(width, height));
         break;
       case 'battery':
-        content = this.generateBatteryContent(widgetConfig, deviceContext);
-        extraStyles = this.getBatteryStyles(widgetConfig);
+        content = batteryWidget(widgetConfig, deviceContext);
+        extraStyles = batteryWidgetStyles(widgetConfig);
         break;
       case 'wifi':
-        content = this.generateWifiContent(widgetConfig, deviceContext);
-        extraStyles = this.getWifiStyles(widgetConfig);
+        content = wifiWidget(widgetConfig, deviceContext);
+        extraStyles = wifiWidgetStyles(widgetConfig);
         break;
       case 'deviceinfo':
-        content = this.generateDeviceInfoContent(widgetConfig, deviceContext);
-        extraStyles = this.getDeviceInfoStyles(widgetConfig);
+        content = deviceInfoWidget(widgetConfig, deviceContext, htmlTools);
+        extraStyles = deviceInfoWidgetStyles(widgetConfig);
         break;
       case 'image':
         content = await this.generateImageContent(widgetConfig, width, height);
         break;
       case 'divider':
-        content = this.generateDividerContent(widgetConfig, width, height);
+        content = dividerWidget(widgetConfig, htmlTools);
         break;
       case 'rectangle':
-        content = this.generateRectangleContent(widgetConfig);
+        content = rectangleWidget(widgetConfig, htmlTools);
         break;
       case 'github':
         content = await this.generateGitHubContent(widgetConfig);
@@ -2668,302 +2651,57 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
         content = `<div style="color: #999; font-size: 12px;">Unknown: ${template.name}</div>`;
     }
 
+    if (deviceContext?.foregroundColor && template.name !== 'image') {
+      const foreground = this.sanitizeColor(deviceContext.foregroundColor);
+      const background = this.sanitizeColor(deviceContext.backgroundColor || '#ffffff', '#ffffff');
+      content = content
+        .replace(/#000000\b/gi, foreground)
+        .replace(/#000\b/gi, foreground)
+        .replace(/#ffffff\b/gi, background)
+        .replace(/#fff\b/gi, background);
+    }
+
     // Handle rotation, z-index, and opacity
-    const rotation = (widget as any).rotation || 0;
+    const rotation = widget.rotation || 0;
     const zIndex = widget.zIndex || 0;
-    const opacity = (widgetConfig.opacity as number) ?? 100;
+    const opacity = configNumber(widgetConfig.opacity, 100);
     const rotationStyle = rotation !== 0 ? `transform: rotate(${rotation}deg); transform-origin: center center;` : '';
     const opacityStyle = opacity < 100 ? `opacity: ${opacity / 100};` : '';
+    const colorStyle = `color: ${this.sanitizeColor(deviceContext?.foregroundColor || configText(widgetConfig.color, '#000000'))};`;
+    const themedWidgetBackground = deviceContext?.backgroundColor && template.name !== 'image'
+      ? deviceContext.backgroundColor
+      : typeof sourceConfig.backgroundColor === 'string' ? sourceConfig.backgroundColor : undefined;
+    const backgroundStyle = themedWidgetBackground && themedWidgetBackground !== 'transparent'
+      ? `background-color: ${this.sanitizeColor(themedWidgetBackground, '#ffffff')};`
+      : '';
 
-    return `<div class="widget" style="left: ${x}px; top: ${y}px; width: ${width}px; height: ${height}px; z-index: ${zIndex}; ${opacityStyle} ${extraStyles} ${rotationStyle}">${content}</div>`;
-  }
-
-  // ----- Clock Widget -----
-  private generateClockContent(config: Record<string, any>): string {
-    const now = new Date();
-    const format = config.format || '24h';
-    const showSeconds = config.showSeconds || false;
-    const timezone = config.timezone || 'local';
-    const defaultTimezone = this.configService.get<string>('defaultTimezone', 'UTC');
-    const effectiveTimezone = (timezone === 'local' || timezone === '') ? defaultTimezone : timezone;
-
-    const options: Intl.DateTimeFormatOptions = {
-      timeZone: effectiveTimezone,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: showSeconds ? '2-digit' : undefined,
-      hour12: format === '12h',
-    };
-
-    return this.escapeHtml(now.toLocaleTimeString('en-US', options));
-  }
-
-  private getClockStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 48;
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'monospace');
-    const textAlign = config.textAlign || 'left';
-    const justifyContent = textAlign === 'left' ? 'flex-start' : textAlign === 'right' ? 'flex-end' : 'center';
-    return `font-size: ${fontSize}px; font-family: ${fontFamily}; justify-content: ${justifyContent}; white-space: nowrap; padding: 0 8px;`;
-  }
-
-  // ----- Date Widget -----
-  private generateDateContent(config: Record<string, any>): string {
-    const now = new Date();
-    const locale = config.locale || 'en-US';
-    const showWeekday = config.showWeekday ?? config.showDayOfWeek ?? false;
-    const showDay = config.showDay ?? true;
-    const showMonth = config.showMonth ?? true;
-    const showYear = config.showYear ?? true;
-    const timezone = config.timezone || '';
-    const defaultTimezone = this.configService.get<string>('defaultTimezone', 'UTC');
-    const effectiveTimezone = (timezone === 'local' || timezone === '') ? defaultTimezone : timezone;
-
-    this.logger.debug(`Date widget: config.timezone="${timezone}", effectiveTimezone="${effectiveTimezone}"`);
-
-    const options: Intl.DateTimeFormatOptions = { timeZone: effectiveTimezone };
-    if (showWeekday) options.weekday = 'long';
-    if (showDay) options.day = 'numeric';
-    if (showMonth) options.month = 'long';
-    if (showYear) options.year = 'numeric';
-    if (!showWeekday && !showDay && !showMonth && !showYear) {
-      options.day = 'numeric';
-      options.month = 'long';
-      options.year = 'numeric';
-    }
-
-    const dateStr = now.toLocaleDateString(locale, options);
-    this.logger.debug(`Date widget: rendered "${dateStr}"`);
-
-    return this.escapeHtml(dateStr);
-  }
-
-  private getDateStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 24;
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
-    const textAlign = config.textAlign || 'center';
-    const justifyContent = textAlign === 'left' ? 'flex-start' : textAlign === 'right' ? 'flex-end' : 'center';
-    const lineHeight = fontSize * 1.2;
-    return `font-size: ${fontSize}px; font-family: ${fontFamily}; line-height: ${lineHeight}px; white-space: nowrap; padding: 0 8px; justify-content: ${justifyContent};`;
-  }
-
-  // ----- Calendar Widget -----
-  // A simple month calendar: weekday labels, the current month's dates, today highlighted.
-  private generateCalendarContent(config: Record<string, any>, width: number, height: number): string {
-    const now = new Date();
-    const locale = config.locale || 'en-US';
-    const timezone = config.timezone || '';
-    const defaultTimezone = this.configService.get<string>('defaultTimezone', 'UTC');
-    const tz = (timezone === 'local' || timezone === '') ? defaultTimezone : timezone;
-    const weekStartsMonday = (config.weekStart || 'sunday') === 'monday';
-    const showHeader = config.showHeader ?? true;
-
-    // Resolve "today" in the effective timezone (only the highlight depends on the timezone;
-    // the month grid itself is the same wall-clock calendar everywhere).
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
-    }).formatToParts(now);
-    const pv = (t: string): number => Number(parts.find((p) => p.type === t)?.value);
-    const year = pv('year');
-    const month = pv('month'); // 1-12
-    const today = pv('day');
-
-    const firstWeekday = new Date(year, month - 1, 1).getDay(); // 0=Sun
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const lead = weekStartsMonday ? (firstWeekday + 6) % 7 : firstWeekday;
-
-    // Localized weekday abbreviations (Jan 1 2023 is a Sunday; noon avoids timezone edge cases).
-    // Diacritics stripped so they render consistently on e-ink.
-    const labelFmt = new Intl.DateTimeFormat(locale, { weekday: 'short' });
-    const allLabels = Array.from({ length: 7 }, (_, i) => stripDiacritics(labelFmt.format(new Date(2023, 0, 1 + i, 12))));
-    const labels = weekStartsMonday ? [...allLabels.slice(1), allLabels[0]] : allLabels;
-
-    const gridLines = config.gridLines ?? false;
-    const highlightWeekends = config.highlightWeekends ?? false;
-    const scale = Math.max(0.3, (Number(config.fontScale) || 100) / 100);
-
-    const title = stripDiacritics(new Intl.DateTimeFormat(locale, { timeZone: tz, month: 'long', year: 'numeric' }).format(now));
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
-    const weekRows = Math.ceil((lead + daysInMonth) / 7);
-
-    const styling = calendarLayout(width, height, labels, title, showHeader, weekRows, scale);
-    const { headerH, headerSize, labelSize, daySize, dot, gridStyle, cellBase } = styling;
-
-    // A visible-on-grayscale weekend shade (the previous near-white tint washed out on the TRMNL X).
-    const shade = (weekend: boolean): string => (highlightWeekends && weekend ? 'background:#cccccc;' : '');
-    // Uniform 1px grid: each cell draws its right+bottom, the grid draws the top+left frame — so every
-    // line is exactly 1px (no doubling). Blanks are divided too.
-    const cellDiv = gridLines ? 'border-right:1px solid #000;border-bottom:1px solid #000;' : '';
-    const gridFrame = gridLines ? 'border-top:1px solid #000;border-left:1px solid #000;' : '';
-    // The single thicker line: separates the weekday names from the day numbers (always shown).
-    const labelSep = 'border-bottom:2px solid #000;';
-
-    const headerCells = labels
-      .map((l, i) => {
-        const lw = weekStartsMonday ? (i + 1) % 7 : i; // weekday of this column (0=Sun)
-        const weekend = lw === 0 || lw === 6;
-        return `<div style="${cellBase}font-weight:600;font-size:${labelSize}px;text-transform:uppercase;letter-spacing:0.03em;white-space:nowrap;${cellDiv}${labelSep}${shade(weekend)}">${l}</div>`;
-      })
-      .join('');
-    // Blank days: empty (no number), but still divided by the grid lines when enabled.
-    const blanks = Array.from({ length: lead }, () => `<div style="${cellDiv}"></div>`).join('');
-    const dayCells = Array.from({ length: daysInMonth }, (_, i) => {
-      const d = i + 1;
-      const weekday = (firstWeekday + i) % 7; // 0=Sun
-      const weekend = weekday === 0 || weekday === 6;
-      const inner = d === today
-        ? `<span style="display:flex;align-items:center;justify-content:center;width:${dot}px;height:${dot}px;background:#000;color:#fff;border-radius:50%;font-weight:600;">${d}</span>`
-        : `${d}`;
-      return `<div style="${cellBase}font-size:${daySize}px;${cellDiv}${shade(weekend)}">${inner}</div>`;
-    }).join('');
-
-    return `<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;font-family:${fontFamily};color:#000;padding:4px;overflow:hidden;">`
-      + (showHeader ? `<div style="height:${headerH}px;line-height:${headerH}px;text-align:center;font-weight:700;font-size:${headerSize}px;letter-spacing:0.02em;white-space:nowrap;overflow:hidden;">${this.escapeHtml(title)}</div>` : '')
-      + `<div style="${gridStyle}${gridFrame}">${headerCells}${blanks}${dayCells}</div>`
-      + '</div>';
-  }
-
-  private getCalendarStyles(_config: Record<string, any>): string {
-    // Let the calendar block fill the whole widget (the base .widget is a centered flex row).
-    return 'align-items: stretch; justify-content: stretch; padding: 0;';
-  }
-
-  // ----- Text Widget -----
-  private generateTextContent(config: Record<string, any>): string {
-    const text = config.text || 'Text';
-    return `<div style="width: 100%; text-align: ${config.textAlign || 'left'};">${this.escapeHtml(text)}</div>`;
-  }
-
-  private getTextStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 24;
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
-    const fontWeight = config.fontWeight || 'normal';
-    const color = this.sanitizeColor(config.color || '#000000');
-    return `font-size: ${fontSize}px; font-family: ${fontFamily}; font-weight: ${fontWeight}; color: ${color}; padding: 10px; line-height: 1.2;`;
-  }
-
-  // ----- Days Until Widget -----
-  private generateDaysUntilContent(config: Record<string, any>): string {
-    const calculation = calculateDaysUntil(config);
-    if (calculation.error) {
-      return `<div style="font-size:14px;text-align:center;color:#666;">${this.escapeHtml(calculation.error)}</div>`;
-    }
-
-    const prefix = config.labelPrefix ?? '';
-    const suffix = config.labelSuffix ?? ' days until vacation';
-    const label = `${prefix}${calculation.remainingDays}${suffix}`;
-    const design = config.design || 'text';
-    const showPercentage = config.showPercentage !== false;
-    const progress = calculation.hasProgress ? calculation.progress : 0;
-    const color = this.sanitizeColor(config.color || '#000000');
-
-    if (design === 'text') return this.escapeHtml(label);
-    if (!calculation.hasProgress) {
-      return `<div style="text-align:center;"><div>${this.escapeHtml(label)}</div><div style="font-size:12px;color:#666;">Set a start date to show progress</div></div>`;
-    }
-
-    if (design === 'compact') {
-      return `<div style="display:flex;align-items:center;width:100%;height:100%;gap:12px;padding:8px;box-sizing:border-box;">
-        <div style="font-size:min(72px,1.8em);font-weight:700;line-height:1;">${calculation.remainingDays}</div>
-        <div style="display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;">
-          <div style="font-size:0.55em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${this.escapeHtml(config.eventName || 'Vacation')}</div>
-          <div style="height:12px;border:1px solid ${color};padding:1px;"><div style="height:100%;width:${progress}%;background:${color};"></div></div>
-          ${showPercentage ? `<div style="font-size:0.4em;">${progress}%</div>` : ''}
-        </div>
-      </div>`;
-    }
-
-    if (design === 'segments') {
-      const filled = Math.round(progress / 5);
-      const segments = Array.from({ length: 20 }, (_, index) =>
-        `<span style="display:block;min-width:0;border:1px solid ${color};background:${index < filled ? color : 'white'};"></span>`,
-      ).join('');
-      return `<div style="display:flex;flex-direction:column;justify-content:center;width:100%;height:100%;gap:8px;padding:8px;box-sizing:border-box;">
-        <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.55em;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(label)}</span>${showPercentage ? `<strong>${progress}%</strong>` : ''}</div>
-        <div style="display:grid;grid-template-columns:repeat(20,minmax(0,1fr));gap:1px;height:20px;">${segments}</div>
-      </div>`;
-    }
-
-    return `<div style="display:flex;flex-direction:column;justify-content:center;width:100%;height:100%;gap:7px;padding:8px;box-sizing:border-box;">
-      <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.55em;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(label)}</span>${showPercentage ? `<strong>${progress}%</strong>` : ''}</div>
-      <div style="height:20px;border:2px solid ${color};padding:2px;"><div style="height:100%;width:${progress}%;background:${color};"></div></div>
-      <div style="display:flex;justify-content:space-between;font-size:0.36em;"><span>${calculation.elapsedDays} done</span><span>${calculation.totalDays} total</span></div>
-    </div>`;
-  }
-
-  private getDaysUntilStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 32;
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
-    const color = this.sanitizeColor(config.color || '#000000');
-    return `font-size: ${fontSize}px; font-family: ${fontFamily}; color: ${color}; white-space: nowrap; padding: 0; align-items: stretch; justify-content: stretch;`;
-  }
-
-  // ----- Countdown Widget -----
-  private generateCountdownContent(config: Record<string, any>): string {
-    const targetDateStr = config.targetDate || '2025-12-31T23:59:59';
-    const label = config.label || '';
-    const showDays = config.showDays !== false;
-    const showHours = config.showHours !== false;
-    const showMinutes = config.showMinutes !== false;
-    const showSeconds = config.showSeconds !== false;
-
-    const now = new Date();
-    const targetDate = new Date(targetDateStr);
-    const diffMs = targetDate.getTime() - now.getTime();
-
-    if (diffMs <= 0) {
-      return this.escapeHtml(label || "Time's up!");
-    }
-
-    const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
-
-    const parts: string[] = [];
-    if (showDays && days > 0) parts.push(`${days}d`);
-    if (showHours) parts.push(`${hours.toString().padStart(2, '0')}h`);
-    if (showMinutes) parts.push(`${minutes.toString().padStart(2, '0')}m`);
-    if (showSeconds) parts.push(`${seconds.toString().padStart(2, '0')}s`);
-
-    const fontSize = config.fontSize || 32;
-    let html = '';
-    if (label) {
-      html += `<div style="font-size: ${fontSize * 0.5}px; margin-bottom: 4px;">${this.escapeHtml(label)}</div>`;
-    }
-    html += `<div style="font-weight: bold;">${this.escapeHtml(parts.join(' '))}</div>`;
-    return html;
-  }
-
-  private getCountdownStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 32;
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'monospace');
-    return `font-size: ${fontSize}px; font-family: ${fontFamily}; flex-direction: column; justify-content: center; white-space: nowrap; padding: 0 8px;`;
+    return `<div class="widget" style="left: ${x}px; top: ${y}px; width: ${width}px; height: ${height}px; z-index: ${zIndex}; ${opacityStyle} ${extraStyles} ${colorStyle} ${backgroundStyle} ${rotationStyle}">${content}</div>`;
   }
 
   // ----- Weather Widget -----
-  private async generateWeatherContent(config: Record<string, any>): Promise<string> {
-    const location = config.location || 'Unknown';
-    const latitude = config.latitude || 52.2297;
-    const longitude = config.longitude || 21.0122;
-    const units = config.units || 'metric';
-    const forecastDay = config.forecastDay || 0;
-    const forecastTime = config.forecastTime || 'current';
+  private async generateWeatherContent(config: WidgetConfig): Promise<string> {
+    const location = configText(config.location, 'Unknown');
+    const latitude = configNumber(config.latitude, 52.2297);
+    const longitude = configNumber(config.longitude, 21.0122);
+    const units = config.units === 'imperial' ? 'imperial' : 'metric';
+    const forecastDay = configNumber(config.forecastDay, 0);
+    const forecastTime = configText(config.forecastTime, 'current');
     const showIcon = config.showIcon !== false;
     const showTemperature = config.showTemperature !== false;
     const showCondition = config.showCondition !== false;
     const showLocation = config.showLocation !== false;
-    const showHumidity = config.showHumidity as boolean;
-    const showWind = config.showWind as boolean;
-    const showDayName = config.showDayName as boolean;
-    const fontSize = config.fontSize || 32;
+    const showHumidity = config.showHumidity === true;
+    const showWind = config.showWind === true;
+    const showDayName = config.showDayName === true;
+    const fontSize = configNumber(config.fontSize, 32);
 
     try {
-      const weatherData = await this.fetchWeatherData(latitude, longitude, forecastDay, forecastTime);
+      const weatherData = await fetchWeatherData(latitude, longitude, forecastDay, forecastTime);
       if (!weatherData) {
         return `<div style="color: #666;">${this.escapeHtml(location)}<br>Weather unavailable</div>`;
       }
 
-      const condition = this.getWeatherCondition(weatherData.weatherCode);
+      const condition = weatherCondition(weatherData.weatherCode);
       const displayTemp = units === 'imperial'
         ? Math.round((weatherData.temperature * 9/5) + 32)
         : weatherData.temperature;
@@ -2982,7 +2720,7 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
 
       html += '<div style="display: flex; align-items: center; gap: 8px;">';
       if (showIcon) {
-        html += `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 ${iconSize} ${iconSize}" xmlns="http://www.w3.org/2000/svg" style="color: currentColor;">${this.getWeatherIconSvg(condition.icon, iconSize, 'currentColor')}</svg>`;
+        html += `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 ${iconSize} ${iconSize}" xmlns="http://www.w3.org/2000/svg" style="color: currentColor;">${weatherIconSvg(condition.icon, iconSize, 'currentColor')}</svg>`;
       }
       html += '<div style="display: flex; flex-direction: column;">';
       if (showTemperature) {
@@ -3010,14 +2748,14 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
   }
 
-  private getWeatherStyles(config: Record<string, any>): string {
+  private getWeatherStyles(_config: WidgetConfig): string {
     return 'justify-content: center; padding: 8px;';
   }
 
   // ----- QR Code Widget -----
-  private async generateQRCodeContent(config: Record<string, any>, size: number): Promise<string> {
-    const content = config.content || 'https://example.com';
-    const qrSize = config.size || Math.min(size - 20, 100);
+  private async generateQRCodeContent(config: WidgetConfig, size: number): Promise<string> {
+    const content = configText(config.content, 'https://example.com');
+    const qrSize = configNumber(config.size, Math.min(size - 20, 100));
     try {
       const qrSvg = await QRCode.toString(content, {
         type: 'svg',
@@ -3035,91 +2773,12 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
   }
 
-  // ----- Battery Widget -----
-  private generateBatteryContent(config: Record<string, any>, deviceContext?: DeviceContext): string {
-    const showPercentage = config.showPercentage as boolean;
-    const showIcon = config.showIcon as boolean;
-    const batteryLevel = deviceContext?.battery;
-
-    if (batteryLevel === undefined) {
-      return '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">⚡</span><span>External power</span></div>';
-    }
-
-    let html = '<div style="display: flex; align-items: center; gap: 8px;">';
-    if (showIcon) {
-      const fillWidth = Math.round((batteryLevel / 100) * 14);
-      html += `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="1" y="6" width="18" height="12" rx="2" />
-        <rect x="19" y="9" width="4" height="6" rx="1" />
-        <rect x="3" y="8" width="${fillWidth}" height="8" fill="currentColor" rx="1" />
-      </svg>`;
-    }
-    if (showPercentage) {
-      html += `<span>${batteryLevel}%</span>`;
-    }
-    html += '</div>';
-    return html;
-  }
-
-  private getBatteryStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 16;
-    return `font-size: ${fontSize}px; justify-content: center;`;
-  }
-
-  // ----- WiFi Widget -----
-  private generateWifiContent(config: Record<string, any>, deviceContext?: DeviceContext): string {
-    const showStrength = config.showStrength !== false;
-    const showIcon = config.showIcon !== false;
-    const signalStrength = deviceContext?.wifi;
-
-    let html = '<div style="display: flex; align-items: center; gap: 8px;">';
-    if (showIcon) {
-      html += `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M8.111 16.404a5.5 5.5 0 017.778 0" />
-        <path d="M12 20h.01" />
-        <path d="M4.93 13.071c3.904-3.905 10.236-3.905 14.141 0" />
-        <path d="M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-      </svg>`;
-    }
-    if (showStrength) {
-      html += `<span>${signalStrength === undefined ? 'Signal unavailable' : `${Math.round(signalStrength)} dBm`}</span>`;
-    }
-    html += '</div>';
-    return html;
-  }
-
-  private getWifiStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 16;
-    return `font-size: ${fontSize}px; justify-content: center;`;
-  }
-
-  // ----- Device Info Widget -----
-  private generateDeviceInfoContent(config: Record<string, any>, deviceContext?: DeviceContext): string {
-    const showName = config.showName !== false;
-    const showFirmware = config.showFirmware !== false;
-    const showMac = config.showMac as boolean;
-
-    const deviceName = deviceContext?.deviceName || 'Device unavailable';
-    const firmware = deviceContext?.firmwareVersion || 'unknown';
-    const mac = deviceContext?.macAddress || 'not reported';
-
-    let html = '<div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">';
-    if (showName) html += `<div style="font-weight: bold;">${this.escapeHtml(deviceName)}</div>`;
-    if (showFirmware) html += `<div style="color: #666;">Firmware: ${this.escapeHtml(firmware)}</div>`;
-    if (showMac) html += `<div style="color: #888; font-size: 12px;">${this.escapeHtml(mac)}</div>`;
-    html += '</div>';
-    return html;
-  }
-
-  private getDeviceInfoStyles(config: Record<string, any>): string {
-    const fontSize = config.fontSize || 14;
-    return `font-size: ${fontSize}px; justify-content: center;`;
-  }
-
   // ----- Image Widget -----
-  private async generateImageContent(config: Record<string, any>, width: number, height: number): Promise<string> {
-    const url = config.url || config.imageUrl || '';
-    const fit = config.fit || 'contain';
+  private async generateImageContent(config: WidgetConfig, _width: number, _height: number): Promise<string> {
+    const url = configText(config.url, configText(config.imageUrl, ''));
+    const fit = ['contain', 'cover', 'fill', 'none', 'scale-down'].includes(String(config.fit))
+      ? String(config.fit)
+      : 'contain';
 
     if (!url) {
       return '<div style="color: #999; font-size: 12px;">No image URL</div>';
@@ -3128,45 +2787,18 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     const imageBuffer = await this.readLocalRaster(url);
     const imageUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
 
-    return `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: white;">
-      <img src="${imageUrl}" alt="Image" style="max-width: 100%; max-height: 100%; object-fit: ${fit}; filter: grayscale(100%) contrast(1.2);" />
+    return `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: transparent;">
+      <img src="${imageUrl}" alt="Image" style="width: 100%; height: 100%; object-fit: ${fit};" />
     </div>`;
-  }
-
-  // ----- Divider Widget -----
-  private generateDividerContent(config: Record<string, any>, width: number, height: number): string {
-    const orientation = config.orientation || 'horizontal';
-    const thickness = config.thickness || 2;
-    const color = this.sanitizeColor(config.color || '#000000');
-    const style = config.style || 'solid';
-
-    const isHorizontal = orientation === 'horizontal';
-    const lineStyle = style === 'solid'
-      ? `background-color: ${color};`
-      : `border-style: ${style}; border-color: ${color}; border-width: ${thickness}px; background-color: transparent;`;
-
-    return `<div style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;">
-      <div style="${lineStyle} ${isHorizontal ? `width: 100%; height: ${thickness}px;` : `width: ${thickness}px; height: 100%;`}"></div>
-    </div>`;
-  }
-
-  // ----- Rectangle Widget -----
-  private generateRectangleContent(config: Record<string, any>): string {
-    const backgroundColor = this.sanitizeColor(config.backgroundColor || '#000000');
-    const borderColor = this.sanitizeColor(config.borderColor || '#000000');
-    const borderWidth = config.borderWidth || 0;
-
-    const borderStyle = borderWidth > 0 ? `border: ${borderWidth}px solid ${borderColor};` : 'border: none;';
-    return `<div style="width: 100%; height: 100%; background-color: ${backgroundColor}; ${borderStyle}"></div>`;
   }
 
   // ----- GitHub Widget -----
-  private async generateGitHubContent(config: Record<string, any>): Promise<string> {
-    const owner = config.owner || 'facebook';
-    const repo = config.repo || 'react';
+  private async generateGitHubContent(config: WidgetConfig): Promise<string> {
+    const owner = configText(config.owner, 'facebook');
+    const repo = configText(config.repo, 'react');
     const showIcon = config.showIcon !== false;
-    const showRepoName = config.showRepoName as boolean;
-    const fontSize = config.fontSize || 32;
+    const showRepoName = config.showRepoName === true;
+    const fontSize = configNumber(config.fontSize, 32);
 
     const result = await this.fetchGitHubStars(owner, repo);
     const starsCount = result?.stars ?? 0;
@@ -3188,27 +2820,27 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     return html;
   }
 
-  private getGitHubStyles(config: Record<string, any>): string {
-    const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
+  private getGitHubStyles(config: WidgetConfig): string {
+    const fontFamily = this.mapFontFamily(configText(config.fontFamily, 'sans-serif'));
     return `font-family: ${fontFamily}; justify-content: center;`;
   }
 
   // ----- Custom Widget -----
-  private async generateCustomWidgetContent(config: Record<string, any>, width: number, height: number): Promise<string> {
-    const customWidgetId = config.customWidgetId as number;
+  private async generateCustomWidgetContent(config: WidgetConfig, _width: number, _height: number): Promise<string> {
+    const customWidgetId = configNumber(config.customWidgetId, 0);
     if (!customWidgetId) return '<div style="color: #999;">No widget ID</div>';
 
     try {
       const result = await this.customWidgetsService.getWithData(customWidgetId, true);
       const renderedContent = result.renderedContent;
-      const widgetConfig = (result.widget?.config as Record<string, any>) || {};
+      const widgetConfig = objectConfig(result.widget?.config);
 
-      const fontSize = config.fontSize || 24;
-      const fontFamily = this.mapFontFamily(config.fontFamily || 'sans-serif');
-      const fontWeight = config.fontWeight || 'normal';
-      const textAlign = config.textAlign || 'center';
-      const verticalAlign = config.verticalAlign || 'middle';
-      const color = this.sanitizeColor(config.color || '#000000');
+      const fontSize = configNumber(config.fontSize, 24);
+      const fontFamily = this.mapFontFamily(configText(config.fontFamily, 'sans-serif'));
+      const fontWeight = configChoice(config.fontWeight, ['normal', 'bold'] as const, 'normal');
+      const textAlign = configChoice(config.textAlign, ['left', 'center', 'right'] as const, 'center');
+      const verticalAlign = configChoice(config.verticalAlign, ['top', 'middle', 'bottom'] as const, 'middle');
+      const color = this.sanitizeColor(configText(config.color, '#000000'));
 
       const alignItems = textAlign === 'left' ? 'flex-start' : textAlign === 'right' ? 'flex-end' : 'center';
       const justifyContent = verticalAlign === 'top' ? 'flex-start' : verticalAlign === 'bottom' ? 'flex-end' : 'center';
@@ -3233,7 +2865,9 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
       if (typeof renderedContent === 'object' && renderedContent !== null) {
         // Grid display
         if ('type' in renderedContent && renderedContent.type === 'grid') {
-          return await this.generateGridHtml(renderedContent as any, fontSize, fontFamily, config.cellOverrides || {});
+          const grid = renderedGrid(renderedContent);
+          if (!grid) throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+          return await this.generateGridHtml(grid, fontSize, fontFamily, objectConfig(config.cellOverrides));
         }
         // Title-value display
         if (('title' in renderedContent || 'label' in renderedContent) && 'value' in renderedContent) {
@@ -3261,26 +2895,29 @@ export class ScreenRendererService implements OnModuleDestroy, OnModuleInit {
     }
   }
 
-  private getCustomWidgetStyles(config: Record<string, any>): string {
+  private getCustomWidgetStyles(_config: WidgetConfig): string {
     return '';
   }
 
   private async generateGridHtml(
-    gridContent: { gridCols: number; gridRows: number; gridGap: number; cells: any[] },
+    gridContent: RenderedGrid,
     fontSize: number,
     fontFamily: string,
-    cellOverrides: Record<string, any>
+    cellOverrides: WidgetConfig,
   ): Promise<string> {
     const { gridCols, gridRows, gridGap, cells } = gridContent;
     const cellFontSize = fontSize * 0.7;
 
     const cellsHtml = await Promise.all(cells.map(async cell => {
       const cellKey = `${cell.row}-${cell.col}`;
-      const override = cellOverrides[cellKey] || {};
-      const cFontSize = override.fontSize || cellFontSize;
-      const cFontWeight = override.fontWeight || 'bold';
-      const cFontFamily = override.fontFamily || fontFamily;
-      const cAlign = override.align || cell.align || 'center';
+      const override = objectConfig(cellOverrides[cellKey]);
+      const cFontSize = configNumber(override.fontSize, cellFontSize);
+      const cFontWeight = configChoice(override.fontWeight, ['normal', 'bold'] as const, 'bold');
+      const cFontFamily = typeof override.fontFamily === 'string'
+        ? this.mapFontFamily(override.fontFamily)
+        : fontFamily;
+      const configuredAlign = configText(override.align, configText(cell.align, 'center'));
+      const cAlign = configuredAlign === 'left' || configuredAlign === 'right' ? configuredAlign : 'center';
 
       if (cell.fieldType === 'image' && cell.value) {
         const imageUrl = await this.processImageForEinkHtml(String(cell.value));

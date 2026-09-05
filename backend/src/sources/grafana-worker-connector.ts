@@ -1,11 +1,9 @@
 import axios from 'axios';
-import * as sharpModule from 'sharp';
-import type sharpFactory from 'sharp';
 import { createSafeHttpAgent, createSafeHttpsAgent, validateUrlSafety } from '../common/utils/url-safety';
 import { grafanaRequestUrl, parseGrafanaDashboards, parseGrafanaPanels, validateGrafanaPanelConfiguration } from './grafana-connector';
 import type { ConnectorContext, ConnectorResult } from './connectors';
+import { sharp } from '../common/utils/sharp.util';
 
-const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 const MAX_RENDER_BYTES = 2 * 1024 * 1024;
 const MAX_RENDER_PIXELS = 4_194_304;
 

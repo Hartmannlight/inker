@@ -33,13 +33,18 @@ export interface Device {
   apiKey?: string;
   lastConnectedAt?: string | null;
   capabilities?: Record<string, unknown> | null;
+  capabilitiesOverride?: Record<string, unknown> | null;
+  configuration?: {
+    displayControl?: import('../services/api').DisplayControlSettings;
+    [key: string]: unknown;
+  } | null;
   telemetry?: Record<string, unknown> | null;
   /** Computed status based on lastSeenAt */
   status: DeviceStatus;
   /** Computed boolean for online status */
   isOnline: boolean;
   /** Last time device connected */
-  lastSeenAt: string;
+  lastSeenAt?: string | null;
   /** Battery level as percentage (0-100) */
   battery: number | null;
   /** WiFi signal strength in dBm (typically -30 to -90) */
@@ -57,7 +62,6 @@ export interface Device {
   model?: DeviceModel | null;
   refreshRate?: number;
   isActive?: boolean;
-  userId: number;
   createdAt: string;
   updatedAt: string;
   width?: number;
@@ -86,18 +90,17 @@ export interface DeviceLog {
 
 // Screen types
 export interface Screen {
-  id: string;
+  id: number;
   name: string;
-  description?: string;
+  description?: string | null;
   imageUrl: string;
-  thumbnailUrl?: string;
+  thumbnailUrl?: string | null;
   width: number;
   height: number;
   compatibility?: {
     kind: 'exact' | 'adaptable' | 'risky' | 'unknown';
     reason: string;
   };
-  userId: string;
   createdAt: string;
   updatedAt: string;
   /** Indicates if this is the system default welcome screen */
@@ -113,14 +116,13 @@ export interface PlaylistDevice {
 
 // Playlist types
 export interface Playlist {
-  id: string;
+  id: number;
   name: string;
-  description?: string;
+  description?: string | null;
   screens: PlaylistScreenWithDetails[];
   isActive: boolean;
   /** TRMNL X only: advance to the next screen on each device poll (middle tap / on schedule) */
   advanceOnTap?: boolean;
-  userId: string;
   createdAt: string;
   updatedAt: string;
   /** Devices currently assigned to this playlist */
@@ -133,7 +135,8 @@ export interface Playlist {
 
 export interface PlaylistScreen {
   screenId: string;
-  duration: number; // in seconds
+  /** Seconds, or null when the item waits for an explicit advance action. */
+  duration: number | null;
   order: number;
 }
 
@@ -379,7 +382,6 @@ export interface VersionCheck {
   latestVersion: string;
   updateAvailable: boolean;
   releaseUrl: string;
-  dockerAvailable: boolean;
 }
 
 // Notification types
@@ -518,11 +520,11 @@ export interface GitHubWidgetConfig {
 export interface PluginSettingsField {
   key: string;
   label: string;
-  type: string; // text, select, multi_select, toggle, number, date
-  options?: string[];
+  type: 'text' | 'select' | 'multi_select' | 'toggle' | 'number' | 'date' | string;
+  options?: Array<string | { value: string; label: string }>;
   required?: boolean;
   encrypted?: boolean;
-  default?: string;
+  default?: string | number | boolean;
 }
 
 export interface Plugin {

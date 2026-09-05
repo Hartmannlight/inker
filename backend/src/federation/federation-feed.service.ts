@@ -5,7 +5,8 @@ import {
 } from '@inker/contracts';
 import type { PublicationRevision } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { canonicalJson, publicationArtifacts, sha256, type PublishedArtifact } from '../publications/publication-content';
+import { publicationArtifacts, type PublishedArtifact } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 import { FederationIdentityService } from './federation-identity.service';
 
 const PUBLICATION_ID = /^[A-Za-z0-9-]{1,100}$/;

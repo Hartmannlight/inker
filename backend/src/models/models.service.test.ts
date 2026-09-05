@@ -73,7 +73,7 @@ describe('ModelsService', () => {
 
     it('should throw BadRequestException when changing to an existing name', async () => {
       let callCount = 0;
-      mockPrisma.model.findUnique.mockImplementation((...args: any[]) => {
+      mockPrisma.model.findUnique.mockImplementation(() => {
         callCount++;
         if (callCount === 1) return Promise.resolve({ id: 1, name: 'OldName' });
         return Promise.resolve({ id: 2, name: 'TakenName' }); // conflict

@@ -11,7 +11,7 @@ import { EventsService } from '../events/events.service';
 import { ScriptExecutorService } from './services/script-executor.service';
 import { CreateCustomWidgetDto } from './dto/create-custom-widget.dto';
 import { UpdateCustomWidgetDto } from './dto/update-custom-widget.dto';
-import { wrapListResponse, wrapPaginatedResponse } from '../common/utils/response.util';
+import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { CUSTOM_WIDGET_TEMPLATE_OFFSET } from '../common/constants/widget.constants';
 
 /** Safe dataSource select — never exposes headers to the frontend */

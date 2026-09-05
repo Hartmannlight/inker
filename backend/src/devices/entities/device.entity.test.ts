@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, afterEach } from 'bun:test';
 import {
   isDeviceOnline,
   calculateDeviceStatus,
@@ -155,6 +155,7 @@ describe('device.entity', () => {
       expect(isNewerVersion('1.0.0', null)).toBe(false);
       expect(isNewerVersion('', '1.0.0')).toBe(false);
       expect(isNewerVersion('abc', '1.0.0')).toBe(false);
+      expect(isNewerVersion('1beta.2', '1.0.0')).toBe(false);
     });
   });
 });

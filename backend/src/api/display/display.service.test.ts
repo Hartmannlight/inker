@@ -69,6 +69,15 @@ describe('DisplayService', () => {
     } finally { log.mockRestore(); }
   });
 
+  it('never fetches remote or escaped paths for inline image delivery', async () => {
+    const getBase64Image = (value: string) =>
+      (service as unknown as { getBase64Image(imageUrl: string): Promise<string | undefined> })
+        .getBase64Image(value);
+
+    expect(await getBase64Image('https://example.com/private.png')).toBeUndefined();
+    expect(await getBase64Image('/uploads/../../private.png')).toBeUndefined();
+  });
+
   describe('getCurrentScreen (private)', () => {
     const getCurrentScreen = (items: any[], lastScreenId: string | null = null, screenStartedAt: Date | null = null) =>
       (service as any).getCurrentScreen(items, lastScreenId, screenStartedAt);

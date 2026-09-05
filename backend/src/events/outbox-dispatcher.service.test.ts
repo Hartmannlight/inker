@@ -66,7 +66,12 @@ describe('OutboxDispatcher durable observability', () => {
     h.event.eventType = SOURCE_REFRESH;
     h.event.aggregateId = 'malformed-source-id';
     const execute = mock(async () => { throw new Error('OUTBOX_INVALID_PAYLOAD'); });
-    (h.dispatcher as unknown as { sources: unknown }).sources = { execute };
+    (h.dispatcher as unknown as {
+      domainHandlers: Map<string, (event: OutboxEvent, signal: AbortSignal) => Promise<'complete'>>;
+    }).domainHandlers.set(SOURCE_REFRESH, async (event, signal) => {
+      await execute(event, signal);
+      return 'complete';
+    });
     await h.dispatcher.dispatch(h.job, undefined, 'source-refresh');
     expect(execute).toHaveBeenCalledTimes(1);
     expect(h.store.fail).toHaveBeenCalledWith(h.event, 'OUTBOX_INVALID_PAYLOAD');

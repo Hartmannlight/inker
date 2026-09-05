@@ -1,11 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
-import * as fs from 'fs';
-import * as http from 'http';
 import * as https from 'https';
+import packageMetadata from '../../package.json';
+import { isNewerVersion } from '../common/utils/version.util';
 
-const CURRENT_VERSION = require('../../package.json').version;
+const CURRENT_VERSION = packageMetadata.version;
+
+export interface VersionCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseUrl: string;
+}
+
+interface GitHubRelease {
+  tag_name?: string;
+  html_url?: string;
+}
 
 /**
  * Dashboard service
@@ -20,7 +32,7 @@ const CURRENT_VERSION = require('../../package.json').version;
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
-  private versionCache: { data: any; timestamp: number } | null = null;
+  private versionCache: { data: VersionCheckResult; timestamp: number } | null = null;
   private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
   constructor(private readonly prisma: PrismaService) {}
@@ -144,23 +156,15 @@ export class DashboardService {
     return lastSeenAt >= onlineThreshold ? 'online' : 'offline';
   }
 
-  async checkForUpdate(): Promise<{
-    currentVersion: string;
-    latestVersion: string;
-    updateAvailable: boolean;
-    releaseUrl: string;
-    dockerAvailable: boolean;
-  }> {
-    const dockerAvailable = this.isDockerAvailable();
-
+  async checkForUpdate(): Promise<VersionCheckResult> {
     if (this.versionCache && Date.now() - this.versionCache.timestamp < this.CACHE_TTL) {
-      return { ...this.versionCache.data, dockerAvailable };
+      return this.versionCache.data;
     }
 
     try {
       const release = await this.fetchLatestRelease();
       const latestVersion = (release.tag_name || '').replace(/^v/, '');
-      const updateAvailable = this.isNewerVersion(latestVersion, CURRENT_VERSION);
+      const updateAvailable = isNewerVersion(latestVersion, CURRENT_VERSION);
       const data = {
         currentVersion: CURRENT_VERSION,
         latestVersion: latestVersion || CURRENT_VERSION,
@@ -168,7 +172,7 @@ export class DashboardService {
         releaseUrl: release.html_url || 'https://github.com/usetrmnl/inker/releases',
       };
       this.versionCache = { data, timestamp: Date.now() };
-      return { ...data, dockerAvailable };
+      return data;
     } catch (error) {
       this.logger.warn('Failed to check for updates', error);
       return {
@@ -176,22 +180,31 @@ export class DashboardService {
         latestVersion: CURRENT_VERSION,
         updateAvailable: false,
         releaseUrl: 'https://github.com/usetrmnl/inker/releases',
-        dockerAvailable,
       };
     }
   }
 
-  private fetchLatestRelease(): Promise<any> {
+  private fetchLatestRelease(): Promise<GitHubRelease> {
     return new Promise((resolve, reject) => {
       const req = https.get(
         'https://api.github.com/repos/usetrmnl/inker/releases/latest',
         { headers: { 'User-Agent': 'Inker', Accept: 'application/vnd.github.v3+json' } },
         (res) => {
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+            res.resume();
+            reject(new Error(`GitHub release request failed with HTTP ${res.statusCode ?? 'unknown'}`));
+            return;
+          }
           let data = '';
           res.on('data', (chunk) => (data += chunk));
           res.on('end', () => {
             try {
-              resolve(JSON.parse(data));
+              const parsed: unknown = JSON.parse(data);
+              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                reject(new Error('Invalid JSON from GitHub'));
+                return;
+              }
+              resolve(parsed as GitHubRelease);
             } catch {
               reject(new Error('Invalid JSON from GitHub'));
             }
@@ -203,86 +216,4 @@ export class DashboardService {
     });
   }
 
-  private isNewerVersion(latest: string, current: string): boolean {
-    const parse = (v: string) => v.split('.').map(Number);
-    const l = parse(latest);
-    const c = parse(current);
-    for (let i = 0; i < Math.max(l.length, c.length); i++) {
-      const lv = l[i] || 0;
-      const cv = c[i] || 0;
-      if (lv > cv) return true;
-      if (lv < cv) return false;
-    }
-    return false;
-  }
-
-  isDockerAvailable(): boolean {
-    try {
-      fs.accessSync('/var/run/docker.sock');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async performUpdate(): Promise<{ success: boolean; message: string }> {
-    if (!this.isDockerAvailable()) {
-      return { success: false, message: 'Docker socket not available' };
-    }
-
-    try {
-      // Pull new image
-      await this.dockerRequest('POST', '/images/create?fromImage=wojooo/inker&tag=latest');
-
-      // Get current container ID
-      const hostname = require('os').hostname();
-
-      // Inspect current container to get its config
-      const container = await this.dockerRequest('GET', `/containers/${hostname}/json`);
-      const config = JSON.parse(container);
-
-      // Create new container with same config
-      const createBody = JSON.stringify({
-        Image: 'wojooo/inker:latest',
-        Env: config.Config?.Env,
-        HostConfig: config.HostConfig,
-        ExposedPorts: config.Config?.ExposedPorts,
-      });
-
-      // Stop current container (will be replaced)
-      // The container needs to stop itself — use restart policy
-      await this.dockerRequest('POST', `/containers/${hostname}/restart`);
-
-      return { success: true, message: 'Update initiated. Container will restart with the new image.' };
-    } catch (error) {
-      this.logger.error('Update failed', error);
-      return { success: false, message: `Update failed: ${error.message}` };
-    }
-  }
-
-  private dockerRequest(method: string, path: string, body?: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const options: http.RequestOptions = {
-        socketPath: '/var/run/docker.sock',
-        path: `/v1.41${path}`,
-        method,
-        headers: { 'Content-Type': 'application/json' },
-      };
-      const req = http.request(options, (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
-          if (res.statusCode && res.statusCode >= 400) {
-            reject(new Error(`Docker API error ${res.statusCode}: ${data}`));
-          } else {
-            resolve(data);
-          }
-        });
-      });
-      req.on('error', reject);
-      req.setTimeout(120000, () => { req.destroy(); reject(new Error('Docker request timeout')); });
-      if (body) req.write(body);
-      req.end();
-    });
-  }
 }

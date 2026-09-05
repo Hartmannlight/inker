@@ -25,6 +25,7 @@ import { PullTelemetryService } from './pull-telemetry.service';
 import { PullArtifactLeaseService } from './pull-artifact-lease.service';
 import { ScreenDesignerModule } from '../screen-designer/screen-designer.module';
 import { DynamicDesignArtifactService } from './dynamic-design-artifact.service';
+import { DeviceArtifactResolverService } from './device-artifact-resolver.service';
 
 @Module({
   imports: [PrismaModule, DiscoveryModule, RenderCacheModule, TimerCoreModule, ScreenDesignerModule],
@@ -36,6 +37,7 @@ import { DynamicDesignArtifactService } from './dynamic-design-artifact.service'
     PullTelemetryService,
     PullArtifactLeaseService,
     DynamicDesignArtifactService,
+    DeviceArtifactResolverService,
     WebSocketTelemetryService,
     PresentationService,
     WebDisplayAuthService,
@@ -67,6 +69,7 @@ import { DynamicDesignArtifactService } from './dynamic-design-artifact.service'
     ProfileResolverService,
     TransportAdapterRegistry,
     DeliveryPolicyRegistry,
+    DeviceArtifactResolverService,
   ],
 })
 export class DevicePlatformModule {}

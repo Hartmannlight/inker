@@ -1,7 +1,8 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/services/encryption.service';
+import { Prisma } from '@prisma/client';
 
 interface OAuthProviderConfig {
   clientId: string;
@@ -18,6 +19,25 @@ interface TokenResponse {
   token_type?: string;
 }
 
+function oauthState(value: unknown): { instanceId: number; provider: string } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as { instanceId?: unknown; provider?: unknown };
+  if (!Number.isSafeInteger(candidate.instanceId) || Number(candidate.instanceId) <= 0 ||
+      typeof candidate.provider !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(candidate.provider)) return null;
+  return { instanceId: Number(candidate.instanceId), provider: candidate.provider };
+}
+
+function tokenResponse(value: unknown): TokenResponse | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Partial<Record<keyof TokenResponse, unknown>>;
+  if (typeof candidate.access_token !== 'string' || !candidate.access_token) return null;
+  if (candidate.refresh_token !== undefined && typeof candidate.refresh_token !== 'string') return null;
+  if (candidate.token_type !== undefined && typeof candidate.token_type !== 'string') return null;
+  if (candidate.expires_in !== undefined &&
+      (typeof candidate.expires_in !== 'number' || !Number.isFinite(candidate.expires_in) || candidate.expires_in <= 0)) return null;
+  return candidate as TokenResponse;
+}
+
 @Injectable()
 export class OAuthService {
   private readonly logger = new Logger(OAuthService.name);
@@ -29,7 +49,7 @@ export class OAuthService {
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
   ) {
-    this.providers = (config.get('oauth.providers') || {}) as Record<string, OAuthProviderConfig>;
+    this.providers = config.get<Record<string, OAuthProviderConfig>>('oauth.providers') || {};
     const apiUrl = config.get<string>('api.url') || 'http://localhost:3002';
     this.callbackUrl = `${apiUrl}/plugins/oauth/callback`;
   }
@@ -60,7 +80,9 @@ export class OAuthService {
   async handleCallback(code: string, state: string): Promise<{ instanceId: number; provider: string }> {
     let parsed: { instanceId: number; provider: string };
     try {
-      parsed = JSON.parse(this.encryption.decrypt(state));
+      const candidate = oauthState(JSON.parse(this.encryption.decrypt(state)) as unknown);
+      if (!candidate) throw new Error('invalid state');
+      parsed = candidate;
     } catch {
       throw new BadRequestException('Invalid OAuth state');
     }
@@ -76,7 +98,7 @@ export class OAuthService {
   }
 
   async getAccessToken(instanceId: number): Promise<string | null> {
-    const instance: any = await this.prisma.pluginInstance.findUnique({
+    const instance = await this.prisma.pluginInstance.findUnique({
       where: { id: instanceId },
       include: { plugin: true },
     });
@@ -98,7 +120,7 @@ export class OAuthService {
   }
 
   async disconnectOAuth(instanceId: number): Promise<void> {
-    await (this.prisma.pluginInstance as any).update({
+    await this.prisma.pluginInstance.update({
       where: { id: instanceId },
       data: {
         oauthToken: null,
@@ -137,11 +159,15 @@ export class OAuthService {
         return null;
       }
 
-      const tokenData: TokenResponse = await response.json();
+      const tokenData = tokenResponse(await response.json());
+      if (!tokenData) {
+        this.logger.error(`Token refresh returned an invalid response for instance ${instanceId}`);
+        return null;
+      }
       await this.storeTokens(instanceId, tokenData);
       return tokenData.access_token;
-    } catch (error) {
-      this.logger.error(`Token refresh error for instance ${instanceId}: ${error.message}`);
+    } catch {
+      this.logger.error(`Token refresh failed for instance ${instanceId}`);
       return null;
     }
   }
@@ -161,15 +187,16 @@ export class OAuthService {
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new BadRequestException(`OAuth token exchange failed: ${response.status} ${body}`);
+      throw new BadRequestException(`OAuth token exchange failed with status ${response.status}`);
     }
 
-    return response.json();
+    const tokens = tokenResponse(await response.json());
+    if (!tokens) throw new BadRequestException('OAuth token exchange returned an invalid response');
+    return tokens;
   }
 
   private async storeTokens(instanceId: number, tokens: TokenResponse): Promise<void> {
-    const data: any = {
+    const data: Prisma.PluginInstanceUpdateInput = {
       oauthToken: this.encryption.encrypt(tokens.access_token),
     };
 

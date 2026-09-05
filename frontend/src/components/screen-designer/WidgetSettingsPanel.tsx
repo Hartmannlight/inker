@@ -2,12 +2,21 @@
  * WidgetSettingsPanel Component
  * Panel for configuring the selected widget's settings.
  */
-import { useCallback, useState, useRef, useEffect } from 'react';
-import type { ScreenWidget, WidgetTemplate, CustomWidget, GridCellOverride } from '../../types';
+import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
+import type {
+  ScreenWidget,
+  WidgetTemplate,
+  CustomWidget,
+  GridCellOverride,
+  Plugin,
+  PluginInstance,
+  PluginSettingsField,
+} from '../../types';
 import { screenDesignerService, customWidgetService, pluginService } from '../../services/api';
 import { config } from '../../config';
 import { SearchableSelect } from '../common/SearchableSelect';
 import { LocationPickerModal } from './LocationPickerModal';
+import { browserTimezone, getCurrentOffset, timezoneData } from './timezone-options';
 
 interface WidgetSettingsPanelProps {
   widget: ScreenWidget | null;
@@ -18,114 +27,9 @@ interface WidgetSettingsPanelProps {
   onDeleteWidget: () => void;
   onSelectWidget?: (id: number) => void;
   pluginBrowserOpen?: boolean;
-  selectedPlugin?: any;
+  selectedPlugin?: Plugin;
   onAddPluginToCanvas?: (instanceId: number, pluginId: number, pluginSlug: string) => void;
 }
-
-// Get the browser's detected timezone
-const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-// Compute the current (DST-aware) UTC offset label for an IANA timezone, e.g. "+1:00", "-5:00", "±0:00".
-// Uses the live offset so e.g. London shows +1:00 during BST and +0:00 in winter.
-const getCurrentOffset = (timeZone: string): string => {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'shortOffset' }).formatToParts(new Date());
-    const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
-    const match = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
-    if (!match) return '±0:00';
-    const hours = parseInt(match[2], 10);
-    const minutes = match[3] ?? '00';
-    if (hours === 0 && minutes === '00') return '±0:00';
-    return `${match[1]}${hours}:${minutes}`;
-  } catch {
-    return '';
-  }
-};
-
-// Timezone data with city aliases for smart search
-// Each timezone has: value (IANA), label (display), offset, region, and searchable city aliases
-interface TimezoneData {
-  value: string;
-  label: string;
-  offset: string;
-  region: string;
-  cities: string[]; // Searchable city names that map to this timezone
-}
-
-const timezoneData: TimezoneData[] = [
-  // UTC
-  { value: 'UTC', label: 'UTC', offset: '±0:00', region: 'UTC', cities: ['utc', 'gmt', 'greenwich', 'coordinated universal time'] },
-
-  // Americas (West to East)
-  { value: 'Pacific/Honolulu', label: 'Hawaii', offset: '-10:00', region: 'Americas', cities: ['honolulu', 'hawaii', 'maui', 'oahu'] },
-  { value: 'America/Anchorage', label: 'Alaska', offset: '-9:00', region: 'Americas', cities: ['anchorage', 'alaska', 'juneau', 'fairbanks'] },
-  { value: 'America/Los_Angeles', label: 'Los Angeles', offset: '-8:00', region: 'Americas', cities: ['los angeles', 'la', 'san francisco', 'seattle', 'portland', 'san diego', 'las vegas', 'pacific', 'hollywood', 'sacramento', 'oakland'] },
-  { value: 'America/Denver', label: 'Denver', offset: '-7:00', region: 'Americas', cities: ['denver', 'phoenix', 'salt lake', 'arizona', 'mountain', 'albuquerque', 'colorado', 'utah'] },
-  { value: 'America/Chicago', label: 'Chicago', offset: '-6:00', region: 'Americas', cities: ['chicago', 'houston', 'dallas', 'austin', 'minneapolis', 'central', 'mexico city', 'guadalajara', 'san antonio', 'kansas city', 'milwaukee', 'oklahoma'] },
-  { value: 'America/New_York', label: 'New York', offset: '-5:00', region: 'Americas', cities: ['new york', 'nyc', 'boston', 'miami', 'atlanta', 'philadelphia', 'washington', 'detroit', 'toronto', 'montreal', 'eastern', 'manhattan', 'brooklyn', 'baltimore', 'pittsburgh', 'charlotte', 'tampa', 'orlando', 'quebec'] },
-  { value: 'America/Sao_Paulo', label: 'São Paulo', offset: '-3:00', region: 'Americas', cities: ['sao paulo', 'rio', 'rio de janeiro', 'brasilia', 'brazil', 'buenos aires', 'argentina', 'salvador', 'fortaleza', 'belo horizonte'] },
-
-  // Western Europe
-  { value: 'Europe/London', label: 'London', offset: '+0:00', region: 'Western Europe', cities: ['london', 'uk', 'united kingdom', 'britain', 'england', 'dublin', 'ireland', 'lisbon', 'portugal', 'edinburgh', 'manchester', 'birmingham', 'glasgow', 'liverpool', 'bristol', 'cardiff', 'belfast', 'leeds', 'sheffield', 'porto', 'cork'] },
-  { value: 'Europe/Paris', label: 'Paris', offset: '+1:00', region: 'Western Europe', cities: ['paris', 'france', 'lyon', 'marseille', 'nice', 'monaco', 'toulouse', 'bordeaux', 'lille', 'nantes', 'strasbourg', 'montpellier'] },
-  { value: 'Europe/Amsterdam', label: 'Amsterdam', offset: '+1:00', region: 'Western Europe', cities: ['amsterdam', 'netherlands', 'holland', 'rotterdam', 'hague', 'brussels', 'belgium', 'antwerp', 'utrecht', 'eindhoven', 'ghent', 'bruges', 'liege', 'luxembourg'] },
-  { value: 'Europe/Madrid', label: 'Madrid', offset: '+1:00', region: 'Western Europe', cities: ['madrid', 'spain', 'barcelona', 'valencia', 'seville', 'malaga', 'bilbao', 'zaragoza', 'palma', 'canary islands', 'tenerife', 'mallorca', 'ibiza'] },
-
-  // Central Europe
-  { value: 'Europe/Berlin', label: 'Berlin', offset: '+1:00', region: 'Central Europe', cities: ['berlin', 'germany', 'munich', 'frankfurt', 'hamburg', 'cologne', 'dusseldorf', 'stuttgart', 'dortmund', 'essen', 'bremen', 'leipzig', 'dresden', 'hannover', 'nuremberg', 'bonn'] },
-  { value: 'Europe/Rome', label: 'Rome', offset: '+1:00', region: 'Central Europe', cities: ['rome', 'italy', 'milan', 'florence', 'venice', 'naples', 'turin', 'vatican', 'bologna', 'genoa', 'palermo', 'verona', 'pisa', 'siena'] },
-  { value: 'Europe/Vienna', label: 'Vienna', offset: '+1:00', region: 'Central Europe', cities: ['vienna', 'austria', 'salzburg', 'innsbruck', 'graz', 'linz'] },
-  { value: 'Europe/Zurich', label: 'Zurich', offset: '+1:00', region: 'Central Europe', cities: ['zurich', 'zürich', 'switzerland', 'geneva', 'bern', 'basel', 'lausanne', 'lucerne', 'interlaken', 'davos'] },
-  { value: 'Europe/Warsaw', label: 'Warsaw', offset: '+1:00', region: 'Central Europe', cities: ['warsaw', 'warszawa', 'poland', 'polska', 'krakow', 'kraków', 'cracow', 'lodz', 'łódź', 'wroclaw', 'wrocław', 'breslau', 'poznan', 'poznań', 'gdansk', 'gdańsk', 'danzig', 'szczecin', 'stettin', 'lublin', 'katowice', 'bialystok', 'białystok', 'czestochowa', 'częstochowa', 'radom', 'torun', 'toruń', 'kielce', 'rzeszow', 'rzeszów', 'olsztyn', 'bydgoszcz', 'gliwice', 'zabrze', 'bytom', 'opole', 'zielona gora', 'zielona góra', 'sopot', 'gdynia', 'zakopane', 'plock', 'płock', 'legnica', 'elblag', 'elbląg', 'tarnow', 'tarnów', 'gorzow', 'gorzów'] },
-  { value: 'Europe/Prague', label: 'Prague', offset: '+1:00', region: 'Central Europe', cities: ['prague', 'praha', 'czech', 'czechia', 'brno', 'ostrava', 'bratislava', 'slovakia', 'kosice', 'pilsen', 'olomouc', 'liberec'] },
-  { value: 'Europe/Budapest', label: 'Budapest', offset: '+1:00', region: 'Central Europe', cities: ['budapest', 'hungary', 'debrecen', 'szeged', 'pecs', 'gyor'] },
-
-  // Northern Europe
-  { value: 'Europe/Stockholm', label: 'Stockholm', offset: '+1:00', region: 'Northern Europe', cities: ['stockholm', 'sweden', 'gothenburg', 'malmo', 'goteborg', 'uppsala'] },
-  { value: 'Europe/Oslo', label: 'Oslo', offset: '+1:00', region: 'Northern Europe', cities: ['oslo', 'norway', 'bergen', 'trondheim', 'stavanger', 'tromso'] },
-  { value: 'Europe/Copenhagen', label: 'Copenhagen', offset: '+1:00', region: 'Northern Europe', cities: ['copenhagen', 'denmark', 'aarhus', 'odense', 'aalborg'] },
-  { value: 'Europe/Helsinki', label: 'Helsinki', offset: '+2:00', region: 'Northern Europe', cities: ['helsinki', 'finland', 'tampere', 'turku', 'oulu', 'espoo', 'vantaa'] },
-
-  // Eastern Europe
-  { value: 'Europe/Athens', label: 'Athens', offset: '+2:00', region: 'Eastern Europe', cities: ['athens', 'greece', 'thessaloniki', 'santorini', 'crete', 'mykonos', 'rhodes', 'corfu', 'patras'] },
-  { value: 'Europe/Bucharest', label: 'Bucharest', offset: '+2:00', region: 'Eastern Europe', cities: ['bucharest', 'romania', 'cluj', 'timisoara', 'iasi', 'constanta', 'brasov', 'sibiu'] },
-  { value: 'Europe/Sofia', label: 'Sofia', offset: '+2:00', region: 'Eastern Europe', cities: ['sofia', 'bulgaria', 'plovdiv', 'varna', 'burgas'] },
-  { value: 'Europe/Tallinn', label: 'Tallinn', offset: '+2:00', region: 'Eastern Europe', cities: ['tallinn', 'estonia', 'tartu'] },
-  { value: 'Europe/Riga', label: 'Riga', offset: '+2:00', region: 'Eastern Europe', cities: ['riga', 'latvia', 'jurmala'] },
-  { value: 'Europe/Vilnius', label: 'Vilnius', offset: '+2:00', region: 'Eastern Europe', cities: ['vilnius', 'lithuania', 'kaunas', 'klaipeda'] },
-  { value: 'Europe/Kyiv', label: 'Kyiv', offset: '+2:00', region: 'Eastern Europe', cities: ['kyiv', 'kiev', 'ukraine', 'kharkiv', 'odessa', 'lviv', 'dnipro', 'donetsk', 'zaporizhzhia'] },
-  { value: 'Europe/Istanbul', label: 'Istanbul', offset: '+3:00', region: 'Eastern Europe', cities: ['istanbul', 'turkey', 'ankara', 'izmir', 'antalya', 'bursa', 'adana', 'bodrum', 'cappadocia'] },
-  { value: 'Europe/Moscow', label: 'Moscow', offset: '+3:00', region: 'Eastern Europe', cities: ['moscow', 'russia', 'st petersburg', 'saint petersburg', 'nizhny novgorod', 'yekaterinburg', 'novosibirsk', 'kazan', 'samara', 'sochi'] },
-
-  // Middle East & Africa
-  { value: 'Africa/Cairo', label: 'Cairo', offset: '+2:00', region: 'Middle East & Africa', cities: ['cairo', 'egypt', 'alexandria', 'giza', 'luxor', 'aswan', 'sharm el sheikh', 'hurghada'] },
-  { value: 'Africa/Johannesburg', label: 'Johannesburg', offset: '+2:00', region: 'Middle East & Africa', cities: ['johannesburg', 'south africa', 'cape town', 'durban', 'pretoria', 'port elizabeth', 'soweto'] },
-  { value: 'Asia/Jerusalem', label: 'Jerusalem', offset: '+2:00', region: 'Middle East & Africa', cities: ['jerusalem', 'israel', 'tel aviv', 'haifa', 'eilat', 'nazareth'] },
-  { value: 'Asia/Dubai', label: 'Dubai', offset: '+4:00', region: 'Middle East & Africa', cities: ['dubai', 'uae', 'abu dhabi', 'sharjah', 'doha', 'qatar', 'bahrain', 'manama', 'muscat', 'oman', 'ajman'] },
-  { value: 'Asia/Riyadh', label: 'Riyadh', offset: '+3:00', region: 'Middle East & Africa', cities: ['riyadh', 'saudi arabia', 'jeddah', 'mecca', 'medina', 'kuwait', 'dammam'] },
-
-  // South Asia
-  { value: 'Asia/Karachi', label: 'Karachi', offset: '+5:00', region: 'South Asia', cities: ['karachi', 'pakistan', 'lahore', 'islamabad', 'rawalpindi', 'faisalabad', 'peshawar'] },
-  { value: 'Asia/Kolkata', label: 'Mumbai', offset: '+5:30', region: 'South Asia', cities: ['mumbai', 'bombay', 'india', 'new delhi', 'delhi', 'bangalore', 'bengaluru', 'chennai', 'hyderabad', 'kolkata', 'calcutta', 'pune', 'ahmedabad', 'jaipur', 'goa', 'lucknow', 'kanpur', 'agra', 'varanasi', 'surat'] },
-  { value: 'Asia/Dhaka', label: 'Dhaka', offset: '+6:00', region: 'South Asia', cities: ['dhaka', 'bangladesh', 'chittagong', 'khulna', 'sylhet'] },
-
-  // Southeast Asia
-  { value: 'Asia/Bangkok', label: 'Bangkok', offset: '+7:00', region: 'Southeast Asia', cities: ['bangkok', 'thailand', 'phuket', 'chiang mai', 'pattaya', 'hanoi', 'vietnam', 'ho chi minh', 'saigon', 'da nang', 'krabi', 'koh samui', 'hoi an'] },
-  { value: 'Asia/Jakarta', label: 'Jakarta', offset: '+7:00', region: 'Southeast Asia', cities: ['jakarta', 'indonesia', 'bali', 'surabaya', 'bandung', 'yogyakarta', 'medan', 'lombok'] },
-  { value: 'Asia/Singapore', label: 'Singapore', offset: '+8:00', region: 'Southeast Asia', cities: ['singapore', 'kuala lumpur', 'malaysia', 'penang', 'johor bahru', 'langkawi', 'ipoh', 'malacca'] },
-  { value: 'Asia/Manila', label: 'Manila', offset: '+8:00', region: 'Southeast Asia', cities: ['manila', 'philippines', 'cebu', 'davao', 'boracay', 'makati', 'palawan', 'baguio'] },
-
-  // East Asia
-  { value: 'Asia/Shanghai', label: 'Shanghai', offset: '+8:00', region: 'East Asia', cities: ['shanghai', 'china', 'beijing', 'peking', 'guangzhou', 'shenzhen', 'hong kong', 'macau', 'chengdu', 'hangzhou', 'nanjing', 'wuhan', 'xian', 'suzhou', 'tianjin', 'chongqing', 'qingdao', 'dalian', 'harbin', 'kunming', 'guilin'] },
-  { value: 'Asia/Taipei', label: 'Taipei', offset: '+8:00', region: 'East Asia', cities: ['taipei', 'taiwan', 'kaohsiung', 'taichung', 'tainan'] },
-  { value: 'Asia/Tokyo', label: 'Tokyo', offset: '+9:00', region: 'East Asia', cities: ['tokyo', 'japan', 'osaka', 'kyoto', 'yokohama', 'nagoya', 'sapporo', 'fukuoka', 'kobe', 'sendai', 'hiroshima', 'nara', 'okinawa', 'hokkaido', 'shibuya', 'shinjuku'] },
-  { value: 'Asia/Seoul', label: 'Seoul', offset: '+9:00', region: 'East Asia', cities: ['seoul', 'korea', 'south korea', 'busan', 'incheon', 'daegu', 'daejeon', 'gangnam', 'jeju'] },
-
-  // Oceania
-  { value: 'Australia/Perth', label: 'Perth', offset: '+8:00', region: 'Oceania', cities: ['perth', 'western australia', 'fremantle'] },
-  { value: 'Australia/Sydney', label: 'Sydney', offset: '+10:00', region: 'Oceania', cities: ['sydney', 'australia', 'melbourne', 'brisbane', 'gold coast', 'canberra', 'adelaide', 'hobart', 'cairns', 'darwin', 'tasmania', 'bondi', 'byron bay', 'great barrier reef'] },
-  { value: 'Pacific/Auckland', label: 'Auckland', offset: '+12:00', region: 'Oceania', cities: ['auckland', 'new zealand', 'wellington', 'christchurch', 'queenstown', 'rotorua', 'dunedin', 'hamilton', 'tauranga'] },
-];
 
 // Define regions in display order
 const regionOrder = [
@@ -141,6 +45,23 @@ const regionOrder = [
   'East Asia',
   'Oceania',
 ];
+
+function pluginSettingsSchema(value: unknown): PluginSettingsField[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((field): field is PluginSettingsField =>
+    Boolean(field) && typeof field === 'object' &&
+    typeof (field as { key?: unknown }).key === 'string' &&
+    typeof (field as { type?: unknown }).type === 'string',
+  );
+}
+
+function pluginOption(option: string | { value: string; label: string }): { value: string; label: string } {
+  return typeof option === 'string' ? { value: option, label: option } : option;
+}
+
+function formValue(value: unknown): string | number {
+  return typeof value === 'string' || typeof value === 'number' ? value : '';
+}
 
 // Build timezone options for display with region grouping
 const getTimezoneOptions = (): { value: string; label: string; hint?: string; isGroup?: boolean }[] => {
@@ -1569,20 +1490,19 @@ export function WidgetSettingsPanel({
               </div>
 
               {/* Dynamic settings from plugin's settingsSchema */}
-              {(template.defaultConfig as any)?.settingsSchema?.map((field: any) => (
+              {pluginSettingsSchema(template.defaultConfig.settingsSchema).map((field) => (
                 <div key={field.key}>
                   <label className="block text-xs font-medium text-text-secondary mb-1">{field.label || field.key}</label>
                   {field.type === 'select' ? (
                     <select
-                      value={(widget.config[field.key] as string) || field.default || ''}
+                      value={formValue(widget.config[field.key] ?? field.default)}
                       onChange={(e) => updateConfig(field.key, e.target.value)}
                       className="w-full px-3 py-1.5 text-sm rounded-lg border border-border-default bg-bg-page text-text-primary"
                     >
                       <option value="">Select...</option>
-                      {(field.options || []).map((opt: any) => {
-                        const val = typeof opt === 'object' ? opt.value : opt;
-                        const lbl = typeof opt === 'object' ? opt.label : opt;
-                        return <option key={val} value={val}>{lbl}</option>;
+                      {(field.options || []).map((option) => {
+                        const { value, label } = pluginOption(option);
+                        return <option key={value} value={value}>{label}</option>;
                       })}
                     </select>
                   ) : field.type === 'toggle' ? (
@@ -1598,14 +1518,14 @@ export function WidgetSettingsPanel({
                   ) : field.type === 'number' ? (
                     <input
                       type="number"
-                      value={(widget.config[field.key] as number) ?? field.default ?? ''}
+                      value={formValue(widget.config[field.key] ?? field.default)}
                       onChange={(e) => updateConfig(field.key, e.target.value ? Number(e.target.value) : '')}
                       className="w-full px-3 py-1.5 text-sm rounded-lg border border-border-default bg-bg-page text-text-primary"
                     />
                   ) : (
                     <input
                       type={field.encrypted ? 'password' : 'text'}
-                      value={(widget.config[field.key] as string) || field.default || ''}
+                      value={formValue(widget.config[field.key] ?? field.default)}
                       onChange={(e) => updateConfig(field.key, e.target.value)}
                       placeholder={field.encrypted ? 'Enter secret...' : ''}
                       className="w-full px-3 py-1.5 text-sm rounded-lg border border-border-default bg-bg-page text-text-primary"
@@ -2090,7 +2010,7 @@ function ImageWidgetSettings({
           {uploadInfo && (
             <p className="text-xs text-status-success-text">
               Uploaded: {formatFileSize(uploadInfo.size)}
-              {uploadInfo.compressed && ' (auto-compressed for e-ink)'}
+              {uploadInfo.compressed && ' (optimized)'}
             </p>
           )}
         </div>
@@ -2115,17 +2035,14 @@ function ImageWidgetSettings({
         />
       </Field>
 
-      {/* Preview - shown as 1-bit e-ink display */}
+      {/* Full-color source preview. */}
       {currentUrl && (
-        <Field label="Preview (1-bit e-ink)">
+        <Field label="Color Preview">
           <div className="w-full h-24 bg-bg-card rounded-lg overflow-hidden flex items-center justify-center border border-border-light">
             <img
               src={currentUrl}
               alt="Widget preview"
               className="max-w-full max-h-full object-contain"
-              style={{
-                filter: 'grayscale(100%) contrast(1.5)',
-              }}
               onError={(e) => {
                 (e.target as HTMLImageElement).style.display = 'none';
               }}
@@ -2147,7 +2064,7 @@ function ImageWidgetSettings({
       </Field>
 
       <p className="text-xs text-text-muted">
-        Image is converted to 1-bit (black/white) with Floyd-Steinberg dithering, max 90KB.
+        The color source is retained. E-ink devices receive an automatically converted black-and-white variant.
       </p>
     </div>
   );
@@ -2457,29 +2374,37 @@ function PluginSettingsPanel({
   plugin,
   onAddToCanvas,
 }: {
-  plugin: any;
+  plugin: Plugin;
   onAddToCanvas: (instanceId: number, pluginId: number, pluginSlug: string) => void;
 }) {
-  const [instances, setInstances] = useState<any[]>([]);
+  const [instances, setInstances] = useState<PluginInstance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [settings, setSettings] = useState<Record<string, any>>({});
+  const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [instanceName, setInstanceName] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  const settingsSchema: any[] = plugin.settingsSchema || [];
+  const settingsSchema = useMemo(() => pluginSettingsSchema(plugin.settingsSchema), [plugin.settingsSchema]);
 
-  // Load existing instances for this plugin
-  useEffect(() => {
-    loadInstances();
-  }, [plugin.id]);
+  const initDefaultSettings = useCallback(() => {
+    const defaults: Record<string, unknown> = {};
+    for (const field of settingsSchema) {
+      if (field.default !== undefined) defaults[field.key] = field.default;
+      else {
+        const firstOption = field.options?.[0];
+        if (firstOption !== undefined) defaults[field.key] = pluginOption(firstOption).value;
+      }
+    }
+    setSettings(defaults);
+    setInstanceName(`${plugin.name}`);
+  }, [plugin.name, settingsSchema]);
 
-  async function loadInstances() {
+  const loadInstances = useCallback(async () => {
     setIsLoading(true);
     try {
       const all = await pluginService.getAllInstances();
-      const pluginInstances = all.filter((inst: any) => inst.pluginId === plugin.id);
+      const pluginInstances = all.filter((instance) => instance.pluginId === plugin.id);
       setInstances(pluginInstances);
       if (pluginInstances.length > 0) {
         setSelectedInstanceId(pluginInstances[0].id);
@@ -2494,17 +2419,12 @@ function PluginSettingsPanel({
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [initDefaultSettings, plugin.id]);
 
-  function initDefaultSettings() {
-    const defaults: Record<string, any> = {};
-    for (const field of settingsSchema) {
-      if (field.default !== undefined) defaults[field.key] = field.default;
-      else if (field.options?.length > 0) defaults[field.key] = field.options[0];
-    }
-    setSettings(defaults);
-    setInstanceName(`${plugin.name}`);
-  }
+  // Load existing instances for this plugin.
+  useEffect(() => {
+    void loadInstances();
+  }, [loadInstances]);
 
   async function handleAdd() {
     if (isCreating) {
@@ -2576,7 +2496,7 @@ function PluginSettingsPanel({
               }}
               className="w-full px-3 py-2 text-sm bg-bg-muted border border-border-light rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
             >
-              {instances.map((inst: any) => (
+              {instances.map((inst) => (
                 <option key={inst.id} value={inst.id}>
                   {inst.name || `Instance #${inst.id}`}
                 </option>
@@ -2601,7 +2521,7 @@ function PluginSettingsPanel({
             </div>
 
             {/* Dynamic settings from schema */}
-            {settingsSchema.map((field: any) => (
+            {settingsSchema.map((field) => (
               <div key={field.key}>
                 <label className="block text-xs font-medium text-text-secondary mb-1.5">
                   {field.label || field.key}
@@ -2609,15 +2529,14 @@ function PluginSettingsPanel({
                 </label>
                 {field.type === 'select' ? (
                   <select
-                    value={settings[field.key] || ''}
+                    value={String(settings[field.key] ?? '')}
                     onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })}
                     className="w-full px-3 py-2 text-sm bg-bg-muted border border-border-light rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
                   >
                     <option value="">Select...</option>
-                    {(field.options || []).map((opt: any) => {
-                      const val = typeof opt === 'object' ? opt.value : opt;
-                      const lbl = typeof opt === 'object' ? opt.label : opt;
-                      return <option key={val} value={val}>{lbl}</option>;
+                    {(field.options || []).map((option) => {
+                      const { value, label } = pluginOption(option);
+                      return <option key={value} value={value}>{label}</option>;
                     })}
                   </select>
                 ) : field.type === 'toggle' ? (
@@ -2633,14 +2552,14 @@ function PluginSettingsPanel({
                 ) : field.type === 'number' ? (
                   <input
                     type="number"
-                    value={settings[field.key] || ''}
+                    value={formValue(settings[field.key])}
                     onChange={(e) => setSettings({ ...settings, [field.key]: Number(e.target.value) })}
                     className="w-full px-3 py-2 text-sm bg-bg-muted border border-border-light rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
                   />
                 ) : (
                   <input
                     type={field.encrypted ? 'password' : 'text'}
-                    value={settings[field.key] || ''}
+                    value={formValue(settings[field.key])}
                     onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })}
                     placeholder={field.encrypted ? 'API key' : ''}
                     className="w-full px-3 py-2 text-sm bg-bg-muted border border-border-light rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"

@@ -10,9 +10,8 @@ import { OutboxStore } from './outbox.store';
 import { OutboxRedisService, OutboxJob } from './outbox-redis.service';
 import { OUTBOX_POLICY as POLICY } from './outbox.types';
 import { PlaybackService } from '../playback/playback.service';
-import { PLAYBACK_DUE } from '../playback/playback.events';
-import { RenderCacheService, RENDER_REQUESTED } from '../render-cache/render-cache.service';
-import { MaintenanceService, MAINTENANCE_DUE } from '../jobs/maintenance.service';
+import { RenderCacheService } from '../render-cache/render-cache.service';
+import { MaintenanceService } from '../jobs/maintenance.service';
 import { QUEUE_POLICIES, type QueueName } from '../jobs/queue-policy';
 import { queueEventFilter, queueForEvent } from '../jobs/queue-routing';
 import type { OutboxEvent, Prisma } from '@prisma/client';
@@ -25,8 +24,8 @@ import { SOURCE_REFRESH } from '../sources/source-job';
 import { TimerWorkerService } from '../timers/timer-worker.service';
 import { TIMER_DUE } from '../timers/timer-scheduling';
 import { RemoteWorkerService } from '../federation/remote-worker.service';
-import { REMOTE_SYNC } from '../federation/remote-job';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
+import { createOutboxDomainHandlers, type OutboxDomainHandler } from './outbox-domain-handlers';
 
 @Injectable()
 export class OutboxDispatcher
@@ -43,6 +42,7 @@ export class OutboxDispatcher
   private timerReconcileAt = 0;
   private stopTask?: Promise<void>;
   private readonly counts = { claimed: 0, delivered: 0, failed: 0, stale: 0 };
+  private readonly domainHandlers: ReadonlyMap<string, OutboxDomainHandler>;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -54,7 +54,16 @@ export class OutboxDispatcher
     private readonly sources: SourceWorkerService,
     private readonly timers: TimerWorkerService,
     private readonly remotes: RemoteWorkerService,
-  ) {}
+  ) {
+    this.domainHandlers = createOutboxDomainHandlers({
+      maintenance,
+      playback,
+      renderCache,
+      sources,
+      timers,
+      remotes,
+    });
+  }
 
   async onApplicationBootstrap() {
     await this.timers.reconcile(true);
@@ -166,39 +175,10 @@ export class OutboxDispatcher
       try {
         if (queue && queue !== expectedQueue) { this.counts.stale++; outcome = 'stale'; return; }
         signal.throwIfAborted();
-        if (event.eventType === REMOTE_SYNC) {
-          const remoteOutcome = await this.remotes.execute(event, signal);
-          if (remoteOutcome === 'failed') { this.counts.failed++; return; }
-          outcome = await this.acknowledge(event, signal);
-          return;
-        }
-        if (event.eventType === TIMER_DUE) {
-          await this.timers.completeDue(event, signal);
-          signal.throwIfAborted();
-          outcome = await this.acknowledge(event, signal);
-          return;
-        }
-        if (event.eventType === SOURCE_REFRESH) {
-          const sourceOutcome = await this.sources.execute(event, signal);
-          if (sourceOutcome === 'failed') { this.counts.failed++; return; }
-          outcome = await this.acknowledge(event, signal);
-          return;
-        }
-        if (event.eventType === RENDER_REQUESTED) {
-          await this.renderCache.render(event, undefined, signal);
-          signal.throwIfAborted();
-          outcome = await this.acknowledge(event, signal);
-          return;
-        }
-        if (event.eventType === MAINTENANCE_DUE) {
-          await this.maintenance.execute(event, signal);
-          signal.throwIfAborted();
-          outcome = await this.acknowledge(event, signal);
-          return;
-        }
-        if (event.eventType === PLAYBACK_DUE) {
-          await this.playback.advanceDue(event, signal);
-          signal.throwIfAborted();
+        const domainHandler = this.domainHandlers.get(event.eventType);
+        if (domainHandler) {
+          const result = await domainHandler(event, signal);
+          if (result === 'failed') { this.counts.failed++; return; }
           outcome = await this.acknowledge(event, signal);
           return;
         }

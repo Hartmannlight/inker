@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, ServiceUnavailableException } from '@nes
 import type { SourceDefinition, SourceSnapshot } from '@prisma/client';
 import { parseSourceDefinition, parseSourceSnapshot, type JsonValue } from '@inker/contracts';
 import { PrismaService } from '../prisma/prisma.service';
-import { canonicalJson, sha256 } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 
 export function publicDefinition(source: SourceDefinition) {
   const result = {

@@ -10,12 +10,14 @@ import { ScreenRendererService } from './screen-renderer.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CustomWidgetsService } from '../../custom-widgets/custom-widgets.service';
 import { SettingsService } from '../../settings/settings.service';
+import { PluginRendererService } from '../../plugins/plugin-renderer.service';
+import type { ModuleRef } from '@nestjs/core';
 
 type Design = Parameters<ScreenRendererService['renderDesignAsHtml']>[0];
 type Widget = Design['widgets'][number];
 type InternalRenderer = {
   renderWidget(widget: Widget): Promise<Buffer>;
-  generateWidgetHtml(widget: Widget): Promise<string>;
+  generateWidgetHtml(widget: Widget, deviceContext?: { foregroundColor?: string; backgroundColor?: string }): Promise<string>;
   renderImageFromUrl(url: string, width: number, height: number): Promise<Buffer>;
   processImageForEink(url: string): Promise<string>;
   processImageForEinkHtml(url: string): Promise<string>;
@@ -90,6 +92,11 @@ describe('legacy renderer persisted-input boundary', () => {
     service = new ScreenRendererService(
       { plugin: { findUnique: findPlugin } } as unknown as PrismaService, { getWithData } as unknown as CustomWidgetsService,
       new ConfigService(), {} as SettingsService,
+      {
+        get: () => new PluginRendererService({
+          get: () => service,
+        } as unknown as ModuleRef),
+      } as unknown as ModuleRef,
     );
     internal = service as unknown as InternalRenderer;
   });
@@ -155,11 +162,24 @@ describe('legacy renderer persisted-input boundary', () => {
       const buffer = await internal.renderWidget(widget('image', { url }));
       const metadata = await sharp(buffer).metadata();
       expect([metadata.format, metadata.width, metadata.height]).toEqual(['png', 120, 80]);
-      expect(await internal.generateWidgetHtml(widget('image', { url }))).toContain('data:image/png;base64,');
+      const html = await internal.generateWidgetHtml(widget('image', { url }));
+      expect(html).toContain('data:image/png;base64,');
+      expect(html).not.toContain('grayscale');
       expect(await internal.processImageForEink(url)).toStartWith('data:image/png;base64,');
       expect(await internal.processImageForEinkHtml(url)).toStartWith('data:image/png;base64,');
       expect((await sharp(await internal.renderImageFromUrl(url, 64, 32)).metadata()).width).toBe(64);
     }
+  });
+
+  it('applies an LCD device theme to neutral elements without filtering image widgets', async () => {
+    const theme = { foregroundColor: '#ffffff', backgroundColor: '#000000' };
+    const text = await internal.generateWidgetHtml(widget('text', { text: 'Status', color: '#000000', backgroundColor: '#ffffff' }), theme);
+    const image = await internal.generateWidgetHtml(widget('image', { url: localUrl }), theme);
+    expect(text).toContain('color: #ffffff');
+    expect(text).toContain('background-color: #000000');
+    expect(text).not.toContain('background-color: #ffffff');
+    expect(image).toContain('data:image/png;base64,');
+    expect(image).not.toContain('grayscale');
   });
 
   it('rejects missing, traversing, linked-document and malformed assets as failures', async () => {
@@ -232,9 +252,17 @@ describe('legacy renderer persisted-input boundary', () => {
     expect((await (await service.getBrowser()).pages()).length).toBe(1);
   }, 20000);
 
-  it('also rejects network dependencies in full design CSS without outbound requests', async () => {
-    const configured = widget('text', { text: 'LOCAL', fontWeight: `normal;background-image:url('${remote}')` });
-    await unavailable(service.renderDesignAsHtml(design([configured])));
+  it('drops injected style fragments before a full design reaches the browser', async () => {
+    const configured = widget('text', {
+      text: 'LOCAL',
+      fontWeight: `normal;background-image:url('${remote}')`,
+      fontFamily: `sans-serif;background-image:url('${remote}')`,
+      textAlign: `left;background-image:url('${remote}')`,
+    });
+    const html = await internal.generateWidgetHtml(configured);
+    expect(html).not.toContain('background-image');
+    expect(html).not.toContain(remote);
+    expect((await service.renderDesignAsHtml(design([configured]))).length).toBeGreaterThan(0);
     expect(requests).toBe(0);
   }, 20000);
 

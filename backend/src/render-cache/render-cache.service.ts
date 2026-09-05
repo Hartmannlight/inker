@@ -2,13 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type OutboxEvent, type PublicationRevision, type RenderRequest } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveDeviceConfiguration } from '../device-platform/device-configuration';
-import { canonicalJson, sha256, type PublishedArtifact } from '../publications/publication-content';
+import type { PublishedArtifact } from '../publications/publication-content';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 import { ArtifactStore } from './artifact-store';
 import { RENDERER_VERSION, renderKey, targetFor, type RenderTarget } from './render-input';
 import { renderSnapshot, validateRenderedArtifact } from './snapshot-renderer';
 import { intentCorrelationId, outboxCorrelation } from '../events/outbox-correlation';
 import { observeRender, emitStructuredEvent } from '../observability/runtime-observability';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 export const RENDER_REQUESTED = 'render.requested';
 export const RENDER_READY = 'render.artifact.ready';

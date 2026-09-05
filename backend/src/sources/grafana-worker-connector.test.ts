@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createServer, type Server } from 'node:http';
-import * as sharpModule from 'sharp';
-import type sharpFactory from 'sharp';
 import { runGrafanaConnector } from './grafana-worker-connector';
+import { sharp } from '../common/utils/sharp.util';
 
-const sharp = ((sharpModule as unknown as { default?: typeof sharpFactory }).default ?? sharpModule) as typeof sharpFactory;
 let server: Server | undefined;
 
 afterEach(async () => { if (server) await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; });

@@ -38,16 +38,16 @@ describe('legacy navigation redirects', () => {
     ['/plugins/installed', 'Extensions route'],
     ['/data-sources', 'Integrations route'],
     ['/plugins/instances/42/generate', 'Integrations route'],
-  ])('redirects %s semantically', (path, expected) => {
+  ])('redirects %s semantically', async (path, expected) => {
     window.history.replaceState({}, '', path);
     render(<App />);
-    expect(screen.getByText(expected)).toBeInTheDocument();
+    expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 
-  it('keeps pairing on the common start page', () => {
+  it('keeps pairing on the common start page', async () => {
     window.history.replaceState({}, '', '/display/pair');
     render(<App />);
-    expect(screen.getByText('Landing')).toBeInTheDocument();
+    expect(await screen.findByText('Landing')).toBeInTheDocument();
     expect(window.location.search).toBe('?mode=pair');
   });
 });

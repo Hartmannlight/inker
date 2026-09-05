@@ -1,15 +1,20 @@
-import { Injectable, NotAcceptableException, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parseDeviceServerMessage, type WebDisplayManifest } from '@inker/contracts';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveDeviceConfiguration } from './device-configuration';
 import type { DeliveryContext } from '../events/outbox.types';
-import { publicationArtifacts } from '../publications/publication-content';
-import { RenderCacheService } from '../render-cache/render-cache.service';
+import { DeviceArtifactResolverService } from './device-artifact-resolver.service';
+import { PullArtifactLeaseService } from './pull-artifact-lease.service';
+import { readDisplayControl } from './display-control';
 
 @Injectable()
 export class PresentationService {
-  constructor(private readonly prisma: PrismaService, @Optional() private readonly cache?: RenderCacheService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly artifacts: DeviceArtifactResolverService,
+    private readonly leases: PullArtifactLeaseService,
+  ) {}
 
   async getForDevice(deviceId: number, context?: DeliveryContext): Promise<WebDisplayManifest> {
     if (!context) return this.build(deviceId, this.prisma);
@@ -33,8 +38,9 @@ export class PresentationService {
   }
 
   async artifact(deviceId: number, hash: string) {
-      const { artifact } = await this.read(deviceId, this.prisma);
-      if (!artifact || artifact.sha256 !== hash) throw new NotFoundException('Published artifact not found');
+      const current = await this.read(deviceId, this.prisma);
+      const artifact = current.artifact?.sha256 === hash ? current.artifact : this.leases.read(deviceId, hash);
+      if (!artifact) throw new NotFoundException('Published artifact not found');
       return artifact;
   }
 
@@ -54,20 +60,20 @@ export class PresentationService {
       profile: true, deliveryPolicy: true, publicationState: { include: { desiredRevision: true } },
     } });
     if (!device || !device.externalId) throw new NotFoundException('Display device not found');
-    const display = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride).capabilities.display;
     const desired = device.publicationState?.desiredRevision;
-    const cached = desired ? await this.cache?.read(device, desired, database) : null;
-    const revision = cached?.revision ?? desired;
-    const artifacts = cached ? [cached.artifact] : revision ? publicationArtifacts(revision) : [];
-    const artifact = display.renderFormats.flatMap(format => artifacts.filter(a => a.format === format && display.mimeTypes.includes(a.mimeType)))[0];
-    // Browser scales an immutable image to its viewport. Pull continues to
-    // require an exact hardware variant, including dimensions/depth/rotation.
-    if (revision && !artifact) throw new NotAcceptableException('No compatible published browser artifact');
-    return { device, display, revision, artifact };
+    if (!desired) {
+      const configuration = resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride);
+      return { device, display: configuration.capabilities.display, revision: undefined, artifact: undefined };
+    }
+    const resolved = await this.artifacts.resolve(device, desired, database, false);
+    const display = resolved.configuration.capabilities.display;
+    const background = display.colorSpace === 'rgb' ? readDisplayControl(device.configuration).backgroundColor : '#ffffff';
+    return { device, display, background, revision: resolved.revision, artifact: resolved.artifact };
   }
 
   private async build(deviceId: number, database: Prisma.TransactionClient): Promise<WebDisplayManifest> {
-    const { device, display, revision, artifact } = await this.read(deviceId, database);
+    const { device, display, background = '#ffffff', revision, artifact } = await this.read(deviceId, database);
+    if (artifact) this.leases.issue(device.id, artifact);
     return this.validate({
       deviceId: device.id, externalId: device.externalId,
       // Pointer and assignment sequence come from the same state row/read.
@@ -76,7 +82,7 @@ export class PresentationService {
       renderRevision: device.renderRevision,
       generatedAt: (revision?.publishedAt ?? device.createdAt).toISOString(),
       nextTransitionAt: null,
-      content: { kind: 'image', fit: 'contain', background: '#ffffff',
+      content: { kind: 'image', fit: 'contain', background,
         title: revision ? 'Published content' : 'No publication assigned',
         url: artifact ? `/api/web-displays/${device.externalId}/artifacts/${artifact.sha256}` : '/assets/publication-unassigned.svg' },
       viewport: { width: display.width, height: display.height },

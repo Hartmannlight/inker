@@ -6,7 +6,7 @@ import { PublicationCleanupService } from '../publications/publication-cleanup.s
 import { LogCleanupService } from './services/log-cleanup.service';
 import { JOB_VERSION, jobId } from './queue-policy';
 import { intentCorrelationId } from '../events/outbox-correlation';
-import { sqliteWrite } from '../sources/source-writes';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 export const MAINTENANCE_DUE = 'maintenance.cleanup.due';
 const HOUR_MS = 3_600_000;

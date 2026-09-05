@@ -84,7 +84,7 @@ apiClient.interceptors.response.use(
 );
 
 // Helper function to extract error message
-function getErrorMessage(error: unknown): string {
+export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     return error.response?.data?.message || error.response?.data?.error || error.message;
   }
@@ -94,14 +94,20 @@ function getErrorMessage(error: unknown): string {
   return 'An unexpected error occurred';
 }
 
+async function withApiError<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
 // Authentication Service - simplified for PIN-based auth
 export const authService = {
   async login(password: string): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.post('/auth/login', { password });
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async logout(): Promise<void> {
@@ -116,28 +122,22 @@ export const authService = {
   },
 
   async validate(): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.get('/auth/session');
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async listSessions(): Promise<AdminSessionSummary[]> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<AdminSessionSummary[]>>('/auth/sessions');
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async revokeSession(sessionId: string): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/auth/sessions/${encodeURIComponent(sessionId)}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async logoutAll(): Promise<void> {
@@ -167,6 +167,19 @@ export interface DeviceEnrollment {
   createdAt: string;
 }
 
+export interface DisplayControlSettings {
+  brightness: number;
+  scheduleEnabled: boolean;
+  dimStartAt: string;
+  dimStopAt: string;
+  dimBrightness: number;
+  timezone: string;
+  foregroundColor: string;
+  backgroundColor: string;
+}
+
+export type DisplayTechnology = 'lcd' | 'eink';
+
 export type ContentAssignment =
   | { kind: 'none' }
   | { kind: 'screen'; screenId: number; expectedUpdatedAt: string }
@@ -183,65 +196,54 @@ export interface ContentAssignmentChoices {
   target?: { width: number; height: number; renderFormats: Array<'html' | 'png' | 'jpeg' | 'bmp1'>; backgroundColor: string };
   screens: Array<{ id: number; name: string; source: 'upload' | 'design'; updatedAt: string; width: number | null; height: number | null; compatibility: { kind: 'exact' | 'adaptable' | 'risky' | 'unknown'; reason: string } }>;
   playlists: Array<{ playlistRevisionId: string; playlistId: number; name: string; revision: number; publishedAt: string }>;
+  unpublishedPlaylists: Array<{ playlistId: number; name: string; draftHash: string }>;
 }
 
 export const deviceService = {
   async getAll(page = 1, limit = 20): Promise<PaginatedResponse<Device>> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<PaginatedResponse<Device>>>(
         `/devices?page=${page}&limit=${limit}`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getById(id: string): Promise<Device> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<Device>>(`/devices/${id}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async create(data: DeviceFormData): Promise<Device> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<Device>>('/devices', data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async update(id: string, data: Partial<DeviceFormData>): Promise<Device> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.put<ApiResponse<Device>>(`/devices/${id}`, data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async delete(id: string): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/devices/${id}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async assignPlaylist(deviceId: string, playlistId: string): Promise<Device> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.patch<ApiResponse<Device>>(
         `/devices/${deviceId}`,
         { playlistId: parseInt(playlistId, 10) }
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async unassignPlaylist(deviceId: string): Promise<{
@@ -264,23 +266,43 @@ export const deviceService = {
   },
 
   async getLogs(deviceId: string): Promise<DeviceLog[]> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<DeviceLog[]>>(`/devices/${deviceId}/logs`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async refresh(deviceId: string): Promise<{ message: string; deviceId: number }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<{ message: string; deviceId: number }>>(
         `/devices/${deviceId}/refresh`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
+  },
+
+  async getDisplayControl(id: string): Promise<DisplayControlSettings> {
+    return withApiError(async () => {
+      const response = await apiClient.get<ApiResponse<DisplayControlSettings>>(`/devices/${id}/display-control`);
+      return response.data.data;
+    });
+  },
+
+  async updateDisplayControl(id: string, settings: DisplayControlSettings): Promise<DisplayControlSettings> {
+    return withApiError(async () => {
+      const response = await apiClient.put<ApiResponse<DisplayControlSettings>>(`/devices/${id}/display-control`, settings);
+      return response.data.data;
+    });
+  },
+
+  async updateDisplayTechnology(id: string, technology: DisplayTechnology): Promise<{ technology: DisplayTechnology; device: Device }> {
+    return withApiError(async () => {
+      const response = await apiClient.put<ApiResponse<{ technology: DisplayTechnology; device: Device }>>(
+        `/devices/${id}/display-technology`,
+        { technology },
+      );
+      return response.data.data;
+    });
   },
 
   async getPublishedPreview(id: string): Promise<Blob | null> {
@@ -294,16 +316,14 @@ export const deviceService = {
   },
 
   async getContentAssignmentChoices(id: string): Promise<ContentAssignmentChoices> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<ContentAssignmentChoices>>(`/devices/${id}/content-assignment`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async assignContent(id: string, expectedDesiredRevisionId: string | null, expectedPlaybackVersion: number, assignment: ContentAssignment) {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.put<ApiResponse<unknown>>(`/devices/${id}/content-assignment`, {
         version: 1,
         expectedDesiredRevisionId,
@@ -311,75 +331,63 @@ export const deviceService = {
         assignment,
       });
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async createEnrollment(deviceId: string): Promise<DeviceEnrollment> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<DeviceEnrollment>>(
         `/devices/${deviceId}/enrollments`,
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   // Change a device's model / image format (e.g. og_png -> og_bmp for issue #31)
   async setModel(deviceId: string, modelId: number): Promise<Device> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.patch<ApiResponse<Device>>(
         `/devices/${deviceId}`,
         { modelId }
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 };
 
 // Device Model Service — list available display models (dimensions + PNG/BMP format)
 export const modelService = {
   async getAll(): Promise<DeviceModel[]> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<DeviceModel[]>>('/models');
       // /models is public and may return either a wrapped ApiResponse or a raw array.
       const body = response.data as unknown;
       if (Array.isArray(body)) return body as DeviceModel[];
       return (response.data.data ?? []) as DeviceModel[];
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 };
 
 // Screen Service
 export const screenService = {
   async getAll(page = 1, limit = 20): Promise<PaginatedResponse<Screen>> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<PaginatedResponse<Screen>>>(
         `/screens?page=${page}&limit=${limit}`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
-  async getById(id: string): Promise<Screen> {
-    try {
+  async getById(id: string | number): Promise<Screen> {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<Screen>>(`/screens/${id}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async create(data: ScreenFormData): Promise<Screen> {
-    try {
+    return withApiError(async () => {
       const formData = new FormData();
       formData.append('name', data.name);
       if (data.description) {
@@ -392,13 +400,11 @@ export const screenService = {
         headers: csrfHeadersFor('post'),
       });
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
-  async update(id: string, data: Partial<ScreenFormData>): Promise<Screen> {
-    try {
+  async update(id: string | number, data: Partial<ScreenFormData>): Promise<Screen> {
+    return withApiError(async () => {
       const formData = new FormData();
       if (data.name) formData.append('name', data.name);
       if (data.description) formData.append('description', data.description);
@@ -409,107 +415,85 @@ export const screenService = {
         headers: csrfHeadersFor('put'),
       });
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
-  async delete(id: string): Promise<void> {
-    try {
+  async delete(id: string | number): Promise<void> {
+    return withApiError(async () => {
       await apiClient.delete(`/screens/${id}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 };
 
 // Playlist Service
 export const playlistService = {
   async getPlaybackDraft(id: string): Promise<{ draftHash: string }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<{ draftHash: string }>>(`/playback/playlists/${id}/draft`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
   async publishFromDraft(id: string, idempotencyKey: string, expectedDraftHash: string): Promise<{ playlistRevisionId: string; revision: number; contentHash: string }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<{ playlistRevisionId: string; revision: number; contentHash: string }>>(`/playback/playlists/${id}/publish-from-draft`, { version: 1, idempotencyKey, expectedDraftHash });
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
   async getAll(page = 1, limit = 20): Promise<PaginatedResponse<Playlist>> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<PaginatedResponse<Playlist>>>(
         `/playlists?page=${page}&limit=${limit}`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
-  async getById(id: string): Promise<Playlist> {
-    try {
+  async getById(id: string | number): Promise<Playlist> {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<Playlist>>(`/playlists/${id}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async create(data: PlaylistFormData): Promise<Playlist> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<Playlist>>('/playlists', data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
-  async update(id: string, data: Partial<PlaylistFormData>): Promise<Playlist> {
-    try {
+  async update(id: string | number, data: Partial<PlaylistFormData>): Promise<Playlist> {
+    return withApiError(async () => {
       const response = await apiClient.patch<ApiResponse<Playlist>>(`/playlists/${id}`, data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async delete(id: string | number, force = false): Promise<{ message: string; unassignedDevices?: number }> {
-    try {
+    return withApiError(async () => {
       const url = force ? `/playlists/${id}?force=true` : `/playlists/${id}`;
       const response = await apiClient.delete<ApiResponse<{ message: string; unassignedDevices?: number }>>(url);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async addScreen(playlistId: string, screenData: PlaylistScreen): Promise<Playlist> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<Playlist>>(
         `/playlists/${playlistId}/screens`,
         screenData
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async removeScreen(playlistId: string, screenId: string): Promise<Playlist> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.delete<ApiResponse<Playlist>>(
         `/playlists/${playlistId}/screens/${screenId}`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async addItem(playlistId: string, screenId: string, duration = 60): Promise<unknown> {
@@ -575,11 +559,6 @@ export const dashboardService = {
     const response = await apiClient.get<ApiResponse<VersionCheck>>('/dashboard/version-check');
     return response.data.data;
   },
-
-  async performUpdate(): Promise<{ success: boolean; message: string }> {
-    const response = await apiClient.post<ApiResponse<{ success: boolean; message: string }>>('/dashboard/update');
-    return response.data.data;
-  },
 };
 
 /**
@@ -622,15 +601,13 @@ export const welcomeScreenService = {
    * Save welcome screen configuration
    */
   async saveConfig(config: WelcomeScreenConfig): Promise<WelcomeScreenConfig> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.put<ApiResponse<WelcomeScreenConfig>>(
         '/settings/welcome-screen',
         config
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   /**
@@ -638,28 +615,24 @@ export const welcomeScreenService = {
    * Returns the count of devices that were updated
    */
   async regenerateAll(): Promise<{ count: number }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<{ count: number }>>(
         '/settings/welcome-screen/regenerate'
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   /**
    * Get the current default welcome screen image URL
    */
   async getDefaultScreenUrl(): Promise<{ url: string }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<{ url: string }>>(
         '/settings/welcome-screen/preview'
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 };
 
@@ -683,49 +656,39 @@ export const screenDesignerService = {
   },
 
   async getById(id: number): Promise<ScreenDesign> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<ScreenDesign>>(`/screen-designs/${id}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async create(data: Partial<ScreenDesign>): Promise<ScreenDesign> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<ScreenDesign>>('/screen-designs', data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async update(id: number, data: Partial<ScreenDesign>): Promise<ScreenDesign> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.put<ApiResponse<ScreenDesign>>(`/screen-designs/${id}`, data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async delete(id: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/screen-designs/${id}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async refreshDevices(id: number): Promise<{ message: string; deviceCount: number }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<{ message: string; deviceCount: number }>>(
         `/screen-designs/${id}/refresh-devices`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   /**
@@ -734,14 +697,12 @@ export const screenDesignerService = {
    * and saves the result for direct device display.
    */
   async captureForDevice(id: number): Promise<{ captureUrl: string; filename: string; size: number }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<{ captureUrl: string; filename: string; size: number }>>(
         `/screen-designs/${id}/capture`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   /**
@@ -836,52 +797,42 @@ export const screenDesignerService = {
 
   // Widgets
   async addWidget(designId: number, widget: Partial<ScreenWidget>): Promise<ScreenWidget> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<ScreenWidget>>(
         `/screen-designs/${designId}/widgets`,
         widget
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async updateWidget(designId: number, widgetId: number, data: Partial<ScreenWidget>): Promise<ScreenWidget> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.put<ApiResponse<ScreenWidget>>(
         `/screen-designs/${designId}/widgets/${widgetId}`,
         data
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async removeWidget(designId: number, widgetId: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/screen-designs/${designId}/widgets/${widgetId}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   // Device Assignment
   async assignToDevice(designId: number, deviceId: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.post(`/screen-designs/${designId}/assign`, { deviceId });
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async unassignFromDevice(designId: number, deviceId: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/screen-designs/${designId}/assign/${deviceId}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   // Widget Templates
@@ -1104,7 +1055,7 @@ function getDefaultWidgetTemplates(): WidgetTemplate[] {
  */
 export const dataSourceService = {
   async getAll(page = 1, limit = 20, activeOnly = false): Promise<PaginatedResponse<DataSource>> {
-    try {
+    return withApiError(async () => {
       const params = new URLSearchParams({
         page: String(page),
         limit: String(limit),
@@ -1112,73 +1063,57 @@ export const dataSourceService = {
       });
       const response = await apiClient.get<ApiResponse<PaginatedResponse<DataSource>>>(`/data-sources?${params}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getById(id: number): Promise<DataSource> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<DataSource>>(`/data-sources/${id}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async create(data: DataSourceFormData): Promise<DataSource> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<DataSource>>('/data-sources', data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async update(id: number, data: Partial<DataSourceFormData>): Promise<DataSource> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.patch<ApiResponse<DataSource>>(`/data-sources/${id}`, data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async delete(id: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/data-sources/${id}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async testFetch(id: number): Promise<DataSourceTestResult> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<DataSourceTestResult>>(`/data-sources/${id}/test`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async refresh(id: number): Promise<{ success: boolean; data: unknown; dataSource: DataSource }> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<{ success: boolean; data: unknown; dataSource: DataSource }>>(
         `/data-sources/${id}/refresh`
       );
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getCachedData(id: number): Promise<unknown> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<unknown>>(`/data-sources/${id}/data`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   /**
@@ -1186,12 +1121,10 @@ export const dataSourceService = {
    * This is useful for discovering what fields are available from an API.
    */
   async testUrl(data: TestUrlRequest): Promise<DataSourceTestResult> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<DataSourceTestResult>>('/data-sources/test-url', data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 };
 
@@ -1201,56 +1134,44 @@ export const dataSourceService = {
  */
 export const customWidgetService = {
   async getAll(page = 1, limit = 20): Promise<PaginatedResponse<CustomWidget>> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<PaginatedResponse<CustomWidget>>>(`/custom-widgets?page=${page}&limit=${limit}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getById(id: number): Promise<CustomWidget> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<CustomWidget>>(`/custom-widgets/${id}`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async create(data: CustomWidgetFormData): Promise<CustomWidget> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post<ApiResponse<CustomWidget>>('/custom-widgets', data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async update(id: number, data: Partial<CustomWidgetFormData>): Promise<CustomWidget> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.patch<ApiResponse<CustomWidget>>(`/custom-widgets/${id}`, data);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async delete(id: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/custom-widgets/${id}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getPreview(id: number): Promise<CustomWidgetPreview> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<CustomWidgetPreview>>(`/custom-widgets/${id}/preview`);
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getAsTemplates(): Promise<WidgetTemplate[]> {
@@ -1270,28 +1191,22 @@ export const customWidgetService = {
  */
 export const settingsService = {
   async getAll(): Promise<Record<string, string | null>> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get<ApiResponse<Record<string, string | null>>>('/settings');
       return response.data.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async update(key: string, value: string): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.put(`/settings/${key}`, { value });
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async delete(key: string): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/settings/${key}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
 };
@@ -1299,65 +1214,51 @@ export const settingsService = {
 // Plugin service
 export const pluginService = {
   async getAll(): Promise<Plugin[]> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get('/plugins');
       return response.data.data || response.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getById(id: number): Promise<Plugin> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get(`/plugins/${id}`);
       return response.data.data || response.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getAllInstances(): Promise<PluginInstance[]> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get('/plugins/instances/all');
       return response.data.data || response.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async getInstance(id: number): Promise<PluginInstance> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.get(`/plugins/instances/${id}`);
       return response.data.data || response.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async createInstance(data: { pluginId: number; name?: string; settings?: Record<string, unknown> }): Promise<PluginInstance> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.post('/plugins/instances', data);
       return response.data.data || response.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async updateInstance(id: number, data: { name?: string; settings?: Record<string, unknown> }): Promise<PluginInstance> {
-    try {
+    return withApiError(async () => {
       const response = await apiClient.put(`/plugins/instances/${id}`, data);
       return response.data.data || response.data;
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   async deleteInstance(id: number): Promise<void> {
-    try {
+    return withApiError(async () => {
       await apiClient.delete(`/plugins/instances/${id}`);
-    } catch (error) {
-      throw new Error(getErrorMessage(error));
-    }
+    });
   },
 
   getRenderUrl(id: number, mode: string = 'preview'): string {

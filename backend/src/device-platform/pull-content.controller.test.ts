@@ -18,7 +18,8 @@ import { DeliveryPolicyRegistry } from './delivery-policy.registry';
 import { ConnectedDeliveryPolicy, ResponsivePullDeliveryPolicy, SleepyDeliveryPolicy } from './delivery-policies';
 import { HttpPullTransportAdapter } from './http-pull.transport-adapter';
 import { TransportAdapterRegistry } from './transport-adapter.registry';
-import { PullContentController, matchesIfNoneMatch } from './pull-content.controller';
+import { PullContentController } from './pull-content.controller';
+import { matchesIfNoneMatch } from '../common/utils/http-cache.util';
 import { PullContentService } from './pull-content.service';
 import { PullDeviceAuthService } from './pull-device-auth.service';
 import { PullLastSeenService } from './pull-last-seen.service';
@@ -27,6 +28,7 @@ import { TimersController } from './timers.controller';
 import { TimerService } from '../timers/timer.service';
 import { PullTelemetryService } from './pull-telemetry.service';
 import { PullArtifactLeaseService } from './pull-artifact-lease.service';
+import { DeviceArtifactResolverService } from './device-artifact-resolver.service';
 
 @Injectable()
 @RegisterTransportAdapter()
@@ -83,11 +85,17 @@ describe('versioned device pull HTTP boundary', () => {
     adminValidate = mock(async () => { throw new Error('Device secrets must never enter admin authentication'); });
     timerFeed = { protocolVersion: '1.0', serverTime: '2026-08-28T12:00:00.000Z', timers: [] };
     timers = { listForAuthenticatedDevice: mock(async () => structuredClone(timerFeed)) };
+    const artifactResolver = new DeviceArtifactResolverService(
+      prisma,
+      { read: mock(async () => null) } as never,
+      { render: mock(async () => undefined) } as never,
+    );
     log = spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const module = await Test.createTestingModule({
       imports: [DiscoveryModule], controllers: [PullContentController, TimersController],
       providers: [PullContentService, PullDeviceAuthService, PullLastSeenService, PullTelemetryService, PullArtifactLeaseService, ProfileResolverService,
         DeviceConfigurationService, HttpPullTransportAdapter, FixturePullAdapter, TransportAdapterRegistry,
+        { provide: DeviceArtifactResolverService, useValue: artifactResolver },
         { provide: PrismaService, useValue: prisma },
         { provide: TimerService, useValue: timers },
         { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy(), new ConnectedDeliveryPolicy()]) },

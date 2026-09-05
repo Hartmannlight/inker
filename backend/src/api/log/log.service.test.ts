@@ -53,6 +53,20 @@ describe('LogService', () => {
       expect(mockPrisma.deviceLog.create.calls).toHaveLength(3);
     });
 
+    it('bounds batch fields and discards non-JSON metadata', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({ id: 1, name: 'Device1' });
+      mockPrisma.deviceLog.create.mockResolvedValue({ id: 1 });
+
+      await service.createLog('valid-key', {
+        logs: [{ level: 'x'.repeat(30), message: 'm'.repeat(6000), metadata: undefined }],
+      });
+
+      const persisted = mockPrisma.deviceLog.create.calls[0][0].data;
+      expect(persisted.level).toHaveLength(20);
+      expect(persisted.message).toHaveLength(5000);
+      expect(persisted.metadata).toEqual({});
+    });
+
     it('should update device battery and wifi when metadata is provided', async () => {
       mockPrisma.device.findFirst.mockResolvedValue({ id: 5, name: 'Device5' });
       mockPrisma.deviceLog.create.mockResolvedValue({ id: 1, level: 'info', message: '' });
@@ -69,6 +83,17 @@ describe('LogService', () => {
       expect(updateCall.data.battery).toBe(85);
       expect(updateCall.data.wifi).toBe(-42);
       expect(updateCall.data.lastSeenAt).toBeInstanceOf(Date);
+    });
+
+    it('does not persist non-finite telemetry measurements', async () => {
+      mockPrisma.device.findFirst.mockResolvedValue({ id: 5, name: 'Device5', telemetry: {} });
+      mockPrisma.deviceLog.create.mockResolvedValue({ id: 1, level: 'info', message: '' });
+
+      await service.createLog('valid-key', {
+        level: 'info', message: 'status', metadata: { battery: Number.NaN, wifi: 'strong' },
+      });
+
+      expect(mockPrisma.device.update.calls).toHaveLength(0);
     });
   });
 });

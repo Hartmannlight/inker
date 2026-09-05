@@ -1,5 +1,5 @@
 import type { Prisma, RemoteSubscription } from '@prisma/client';
-import { sha256 } from '../publications/publication-content';
+import { sha256 } from '../common/utils/content-hash.util';
 import { intentCorrelationId } from '../events/outbox-correlation';
 
 export const REMOTE_SYNC = 'remote.sync.due';

@@ -15,14 +15,30 @@ function loadLiquidBrowser(): Promise<string> {
   return liquidBrowserSource ??= readFile(join(dirname(installed.resolve('liquidjs')), 'liquid.browser.umd.js'), 'utf8');
 }
 
-declare const createLiquidEngine: () => any;
+interface GuestRequest {
+  kind: 'javascript' | 'liquid';
+  code: string;
+  data: string;
+}
+
+interface GuestLimits {
+  depth: number;
+  htmlBytes: number;
+  outputBytes: number;
+}
+
+interface GuestLiquidEngine {
+  parseAndRenderSync(template: string, data: Record<string, unknown>): unknown;
+}
+
+declare const createLiquidEngine: () => GuestLiquidEngine;
 
 /**
  * This trusted function's source runs only inside QuickJS. Do not capture host
  * functions/imports. Its primordials are lexical and inaccessible to the guest's
  * separately compiled Function. Objects never cross the boundary as live handles.
  */
-function executeGuest(request: any, program: string, limits: any): string {
+function executeGuest(request: GuestRequest, program: string, limits: GuestLimits): string {
   'use strict';
   const compile = Function;
   const parse = JSON.parse, quote = JSON.stringify;
@@ -44,7 +60,7 @@ function executeGuest(request: any, program: string, limits: any): string {
     Object.freeze(prototype);
   }
 
-  let value: any;
+  let value: unknown;
   try {
     const data = parse(request.data);
     if (request.kind === 'liquid') {
@@ -60,7 +76,7 @@ function executeGuest(request: any, program: string, limits: any): string {
 
   let bytes = 0;
   const budget = request.kind === 'liquid' ? limits.htmlBytes : limits.outputBytes;
-  const ancestors: any[] = [];
+  const ancestors: unknown[] = [];
   function add(text: string): string {
     for (let index = 0; index < text.length; index++) {
       const code = apply(charCodeAt, text, [index]);
@@ -74,7 +90,7 @@ function executeGuest(request: any, program: string, limits: any): string {
     }
     return text;
   }
-  function serialize(input: any, depth: number): string {
+  function serialize(input: unknown, depth: number): string {
     if (input === null) return add('null');
     if (typeof input === 'boolean') return add(input ? 'true' : 'false');
     if (typeof input === 'string') {
@@ -105,8 +121,10 @@ function executeGuest(request: any, program: string, limits: any): string {
     } else {
       result = add('{');
       for (let index = 0; index < keys.length; index++) {
-        const key = keys[index], property = descriptors[key as any];
-        if (typeof key !== 'string' || key === '__proto__' || key === 'constructor' || key === 'prototype'
+        const key = keys[index];
+        if (typeof key !== 'string') throw invalid;
+        const property = descriptors[key];
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype'
           || key === 'toJSON' || key === 'toString' || key === 'valueOf'
           || !property.enumerable || !('value' in property)) throw invalid;
         if (index) result += add(',');

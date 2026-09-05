@@ -1,5 +1,10 @@
 import type { DeviceStatus } from '@inker/contracts';
-import { resolveDeviceConfiguration } from '../../device-platform/device-configuration';
+import {
+  resolveDeviceConfiguration,
+  type PersistedDeliveryPolicy,
+  type PersistedDeviceProfile,
+} from '../../device-platform/device-configuration';
+export { isNewerVersion } from '../../common/utils/version.util';
 
 export type { DeviceStatus } from '@inker/contracts';
 
@@ -87,33 +92,6 @@ export function calculateDeviceStatus(device: {
  * @param current - the baseline version (e.g. device's current firmware)
  * @returns true only if candidate is strictly newer than current
  */
-export function isNewerVersion(candidate?: string | null, current?: string | null): boolean {
-  if (!candidate || !current) {
-    return false;
-  }
-
-  const parse = (v: string): number[] | null => {
-    const parts = v.trim().replace(/^v/i, '').split('.');
-    const nums = parts.map((p) => parseInt(p, 10));
-    return nums.some((n) => isNaN(n)) ? null : nums;
-  };
-
-  const a = parse(candidate);
-  const b = parse(current);
-  if (!a || !b) {
-    return false;
-  }
-
-  const len = Math.max(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    const ai = a[i] ?? 0;
-    const bi = b[i] ?? 0;
-    if (ai > bi) return true;
-    if (ai < bi) return false;
-  }
-  return false;
-}
-
 /**
  * Serialized device type with computed fields
  */
@@ -158,8 +136,8 @@ export function serializeDevice<T extends { isActive: boolean; lastSeenAt: Date 
   const online = isDeviceOnline(device);
   const source = device as T & {
     apiKey?: string;
-    profile?: any;
-    deliveryPolicy?: any;
+    profile?: PersistedDeviceProfile;
+    deliveryPolicy?: PersistedDeliveryPolicy;
     capabilitiesOverride?: unknown;
     credentials?: Array<Record<string, unknown>>;
     enrollments?: Array<Record<string, unknown>>;

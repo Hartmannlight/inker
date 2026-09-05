@@ -1,5 +1,5 @@
 import type { LoggerService, LogLevel } from '@nestjs/common';
-import type { Logger } from 'winston';
+import type { Logger, LogEntry } from 'winston';
 import { types } from 'node:util';
 import { writeSync } from 'node:fs';
 import { currentCorrelation } from '../observability/correlation-context';
@@ -12,6 +12,7 @@ export const SAFE_LOG_LIMITS = Object.freeze({ messageBytes: 8192, recordBytes: 
 const LEVEL = Symbol.for('level');
 const levels = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'] as const;
 type Level = typeof levels[number];
+type SafeLogEntry = LogEntry & Record<string | symbol, unknown>;
 const eventCodes = new Set<string>([...STRUCTURED_EVENT_CODES, 'LOG_EVENT', 'LOG_ERROR', 'LOG_REDACTED',
   'API_START_FAILED', 'WORKER_START_FAILED', 'WORKER_STARTED', 'WORKER_SHUTDOWN_FAILED',
   'OUTBOX_CONSUMER_FAILED', 'OUTBOX_ADAPTER_FAILED', 'OUTBOX_REDIS_UNAVAILABLE', 'OUTBOX_POLL_FAILED',
@@ -36,7 +37,12 @@ export function redactLogText(value: string): string {
 }
 
 /** No untrusted object reaches Nest-Winston, Winston's overloads or formatters. */
-export function safeLogRecord(input: unknown, role: LogRole = 'api', forcedLevel?: Level, context?: unknown) {
+export function safeLogRecord(
+  input: unknown,
+  role: LogRole = 'api',
+  forcedLevel?: Level,
+  context?: unknown,
+): SafeLogEntry {
   let rawCode: unknown;
   let nativeError = false;
   if (input && typeof input === 'object' && !types.isProxy(input)) {
@@ -52,7 +58,7 @@ export function safeLogRecord(input: unknown, role: LogRole = 'api', forcedLevel
     ? projected as Record<string, unknown> : {};
   const selected = forcedLevel ?? (typeof safe.level === 'string' && (levels as readonly string[]).includes(safe.level) ? safe.level as Level : 'info');
   const code = nativeError ? 'LOG_ERROR' : isLogEventCode(rawCode) ? rawCode : rawCode === undefined ? 'LOG_EVENT' : 'LOG_REDACTED';
-  const result: Record<string | symbol, unknown> = {
+  const result: SafeLogEntry = {
     protocolVersion: '1.0', timestamp: new Date().toISOString(), level: selected, role, code,
     message: nativeError ? 'LOG_ERROR' : code === 'LOG_REDACTED' ? '[REDACTED]' : typeof projected === 'string' ? redactLogText(projected)
       : typeof safe.message === 'string' ? redactLogText(safe.message) : code,
@@ -92,7 +98,7 @@ export class SafeLogger implements LoggerService {
     // are deliberately not interpolated or forwarded to any formatter.
     const context = parameters.length <= 4 && (level !== 'error' || parameters.length >= 2)
       ? parameters[parameters.length - 1] : undefined;
-    try { this.sink.log(safeLogRecord(input, this.role, level, context) as any); }
+    try { this.sink.log(safeLogRecord(input, this.role, level, context)); }
     catch { /* Logging cannot break an HTTP response or a fenced job. */ }
   }
   log(message: unknown, ...parameters: unknown[]): void { this.write(undefined, message, parameters); }

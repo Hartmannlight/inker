@@ -50,12 +50,6 @@ module.exports = [
     },
   },
   {
-    // This legacy, explicitly unsupported self-update helper still uses dynamic
-    // CommonJS loading. Keep the rule enabled elsewhere while it is retired.
-    files: ['src/dashboard/dashboard.service.ts'],
-    rules: { '@typescript-eslint/no-require-imports': 'off' },
-  },
-  {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.js'],
   },
 ];

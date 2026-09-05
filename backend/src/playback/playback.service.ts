@@ -31,7 +31,7 @@ import {
 } from "./playback.events";
 import { effectKey } from "../events/outbox.types";
 import { QUEUE_POLICIES } from "../jobs/queue-policy";
-import { sqliteWrite } from "../sources/source-writes";
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 type Tx = Prisma.TransactionClient;
 const positive = (v: unknown): v is number =>
@@ -132,7 +132,7 @@ export class PlaybackService {
     );
   }
 
-  /** Publish every uploaded screen draft to an explicit immutable revision,
+  /** Publish every uploaded or designer screen draft to an explicit immutable revision,
    * then publish the playlist binding. Failed publication never starts or
    * changes playback, so the last desired image remains in place. */
   async publishFromDraft(playlistId: number, body: unknown) {
@@ -154,12 +154,17 @@ export class PlaybackService {
     if (previous) return replay(previous);
     const draft = await this.draft(playlistId);
     if (draft.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
-    if (!draft.items.length || draft.items.some(item => !item.screenId || item.screenDesignId || item.pluginInstanceId))
-      throw new BadRequestException('Only uploaded-screen playlist items can be published from this picker');
+    if (!draft.items.length || draft.items.some(item => item.pluginInstanceId || Number(Boolean(item.screenId)) + Number(Boolean(item.screenDesignId)) !== 1))
+      throw new BadRequestException('Only uploaded-screen or designer-screen playlist items can be published from this picker');
     const prepared = await Promise.all(draft.items.map(async item => {
-      const screen = await this.prisma.screen.findUnique({ where: { id: item.screenId! }, select: { updatedAt: true } });
+      const screen = item.screenDesignId
+        ? await this.prisma.screenDesign.findUnique({ where: { id: item.screenDesignId }, select: { updatedAt: true } })
+        : await this.prisma.screen.findUnique({ where: { id: item.screenId! }, select: { updatedAt: true } });
       if (!screen) throw new NotFoundException('Playlist screen not found');
-      return { item, expectedUpdatedAt: screen.updatedAt.toISOString(), prepared: await this.publisher.snapshotDraft({ screenId: item.screenId!, expectedUpdatedAt: screen.updatedAt.toISOString() }) };
+      const screenDraft = item.screenDesignId
+        ? { screenDesignId: item.screenDesignId, expectedUpdatedAt: screen.updatedAt.toISOString() }
+        : { screenId: item.screenId!, expectedUpdatedAt: screen.updatedAt.toISOString() };
+      return { item, screenDraft, prepared: await this.publisher.snapshotDraft(screenDraft) };
     }));
     try {
       return await sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
@@ -168,9 +173,9 @@ export class PlaybackService {
         if (receipt.result || receipt.requestHash !== requestHash) return replay(receipt);
         const current = await this.draft(playlistId, tx);
         if (current.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
-        const bindings = await Promise.all(prepared.map(async ({ item, expectedUpdatedAt, prepared }) => ({
+        const bindings = await Promise.all(prepared.map(async ({ item, screenDraft, prepared }) => ({
           itemId: item.itemId,
-          publicationRevisionId: (await this.publisher.publishUploadedScreenInTransaction(tx, item.screenId!, expectedUpdatedAt, prepared)).publicationRevisionId,
+          publicationRevisionId: (await this.publisher.publishScreenDraftInTransaction(tx, screenDraft, prepared)).publicationRevisionId,
         })));
         const latest = await tx.publishedPlaylist.findFirst({ where: { playlistId }, orderBy: { revision: 'desc' } });
         const result = await this.publishPlaylistInTransaction(tx, playlistId, latest?.revision ?? 0, current.draftHash, bindings);

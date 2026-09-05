@@ -1,9 +1,10 @@
 import { ServiceUnavailableException } from '@nestjs/common';
-import { createHash } from 'node:crypto';
 import { FEDERATION_LIMITS, parseFederationPublicationFeed, parseProtocolVersion, type AllowedAction, type FederationPublicationFeed, type RenderFormat } from '@inker/contracts';
-import type { PublicationRevision } from '@prisma/client';
+import type { Prisma, PublicationRevision } from '@prisma/client';
 import { PULL_FIXTURE_ARTIFACTS } from '../device-platform/pull-fixture-artifacts';
 import { normalizePublicationActions } from './publication-actions';
+import { canonicalJson, sha256 } from '../common/utils/content-hash.util';
+export { canonicalJson, sha256 } from '../common/utils/content-hash.util';
 
 export interface PublishedArtifact {
   format: RenderFormat;
@@ -25,6 +26,35 @@ export type PublishedSourceReference = {
   connectorVersion: string;
 };
 
+export type PublishedDesignWidget = {
+  id: number;
+  screenDesignId: number;
+  templateId: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  config: Prisma.JsonValue;
+  zIndex: number;
+  template: { name: string; label: string };
+};
+
+/**
+ * Immutable render recipe captured alongside a design publication. It contains
+ * only the fields consumed by the renderer; mutable draft timestamps and
+ * relations deliberately stay outside the publication boundary.
+ */
+export type PublishedDesignSnapshot = {
+  version: 1;
+  id: number;
+  name: string;
+  width: number;
+  height: number;
+  background: string;
+  widgets: PublishedDesignWidget[];
+};
+
 export type PublicationContent = (
   | { schemaVersion: 1; fixtureArtifacts: string[] }
   | { schemaVersion: 1; image: { png: string; width: number; height: number; sha256: string } }
@@ -34,7 +64,44 @@ export type PublicationContent = (
   allowedActions?: AllowedAction[];
   clientOverlay?: { kind: 'clock'; timezone: string }; // read compatibility for the short-lived ESP overlay revision
   dynamicDesign?: { screenDesignId: number; expectedUpdatedAt: string; refreshSeconds: number };
+  designSnapshot?: PublishedDesignSnapshot;
 };
+
+export function publicationDesignSnapshot(revision: PublicationRevision): PublishedDesignSnapshot | undefined {
+  const content = revision.content;
+  if (!content || typeof content !== 'object' || Array.isArray(content) ||
+    sha256(canonicalJson(content)) !== revision.contentHash) return undefined;
+  const value = content.designSnapshot;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || canonicalJson(value).length > 262_144 ||
+    Object.keys(value).some(key => !['version', 'id', 'name', 'width', 'height', 'background', 'widgets'].includes(key)) ||
+    value.version !== 1 || !Number.isSafeInteger(value.id) || Number(value.id) < 1 || typeof value.name !== 'string' || value.name.length > 200 ||
+    !Number.isSafeInteger(value.width) || !Number.isSafeInteger(value.height) || Number(value.width) < 1 || Number(value.height) < 1 ||
+    Number(value.width) * Number(value.height) > 16_777_216 || typeof value.background !== 'string' || value.background.length > 64 ||
+    !Array.isArray(value.widgets) || value.widgets.length > 128) return undefined;
+  const widgets: PublishedDesignWidget[] = [];
+  for (const entry of value.widgets) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+      Object.keys(entry).some(key => !['id', 'screenDesignId', 'templateId', 'x', 'y', 'width', 'height', 'rotation', 'config', 'zIndex', 'template'].includes(key)) ||
+      !Number.isSafeInteger(entry.id) || !Number.isSafeInteger(entry.screenDesignId) || Number(entry.screenDesignId) !== Number(value.id) ||
+      !Number.isSafeInteger(entry.templateId) || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) ||
+      !Number.isSafeInteger(entry.width) || !Number.isSafeInteger(entry.height) || Number(entry.width) < 1 || Number(entry.height) < 1 ||
+      !Number.isSafeInteger(entry.rotation) || !Number.isSafeInteger(entry.zIndex) || entry.config === undefined ||
+      !entry.template || typeof entry.template !== 'object' || Array.isArray(entry.template) ||
+      Object.keys(entry.template).some(key => !['name', 'label'].includes(key)) ||
+      typeof entry.template.name !== 'string' || entry.template.name.length > 100 ||
+      typeof entry.template.label !== 'string' || entry.template.label.length > 200) return undefined;
+    widgets.push({
+      id: Number(entry.id), screenDesignId: Number(entry.screenDesignId), templateId: Number(entry.templateId),
+      x: Number(entry.x), y: Number(entry.y), width: Number(entry.width), height: Number(entry.height),
+      rotation: Number(entry.rotation), config: entry.config as Prisma.JsonValue, zIndex: Number(entry.zIndex),
+      template: { name: entry.template.name, label: entry.template.label },
+    });
+  }
+  return {
+    version: 1, id: Number(value.id), name: value.name, width: Number(value.width), height: Number(value.height),
+    background: value.background, widgets,
+  };
+}
 
 export function publicationDynamicDesign(revision: PublicationRevision): PublicationContent['dynamicDesign'] {
   const content = revision.content;
@@ -57,17 +124,6 @@ export function publicationClientOverlay(revision: PublicationRevision): { kind:
     Object.keys(overlay).some(key => !['kind', 'timezone'].includes(key)) || overlay.kind !== 'clock' ||
     typeof overlay.timezone !== 'string' || !/^[A-Za-z_]+(?:\/[A-Za-z_+-]+)+$/.test(overlay.timezone)) return undefined;
   return { kind: 'clock', timezone: overlay.timezone };
-}
-
-export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-
-/** Stable JSON for command identity and content checksums, independent of key order. */
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 export function fixtureIds(value: unknown): string[] | null {

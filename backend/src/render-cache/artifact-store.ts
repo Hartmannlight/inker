@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { link, mkdir, open, readFile, unlink, lstat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { sha256, type PublishedArtifact } from '../publications/publication-content';
+import type { PublishedArtifact } from '../publications/publication-content';
+import { sha256 } from '../common/utils/content-hash.util';
 
 /** Private content-addressed files. Only authenticated delivery services expose bytes. */
 @Injectable()

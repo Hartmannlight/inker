@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { MainLayout } from '../layout';
 import { LoadingSpinner } from '../common';
-import apiClient, { pluginService } from '../../services/api';
+import apiClient, { getErrorMessage, pluginService } from '../../services/api';
 import { useNotification } from '../../contexts/NotificationContext';
 import { config } from '../../config';
+import type { PluginInstance } from '../../types';
 
 interface GrafanaDashboard {
   uid: string;
@@ -44,53 +45,53 @@ export function GrafanaGeneratorPage() {
 
   const [previewInstanceId, setPreviewInstanceId] = useState<number | null>(null);
   const [previewTimestamp, setPreviewTimestamp] = useState(Date.now());
-  const [childScreens, setChildScreens] = useState<any[]>([]);
+  const [childScreens, setChildScreens] = useState<PluginInstance[]>([]);
   const savedRef = useRef(false);
 
   const fetchChildScreens = useCallback(async () => {
     try {
       const all = await pluginService.getAllInstances();
-      const children = all.filter((i: any) => i.settings?.parentInstanceId === instanceId);
+      const children = all.filter((i) => i.settings.parentInstanceId === instanceId);
       for (const child of children) {
         if (child.name === '__preview__') {
           try { await pluginService.deleteInstance(child.id); } catch { /* ignore */ }
         }
       }
-      setChildScreens(children.filter((i: any) => i.name !== '__preview__'));
+      setChildScreens(children.filter((i) => i.name !== '__preview__'));
     } catch { /* ignore */ }
   }, [instanceId]);
 
   useEffect(() => { fetchChildScreens(); }, [fetchChildScreens]);
 
-  const fetchDashboards = async () => {
+  const fetchDashboards = useCallback(async () => {
     setLoadingDashboards(true);
     setError('');
     setDashboards([]);
     setPanels([]);
     try {
-      const resp = await apiClient.post('/plugins/grafana/dashboards', { instanceId });
-      const data = resp.data.data || resp.data;
+      const resp = await apiClient.post<{ data: GrafanaDashboard[] }>('/plugins/grafana/dashboards', { instanceId });
+      const data = resp.data.data;
       setDashboards(data);
       if (data.length === 0) setError('No dashboards found in Grafana');
-    } catch (e: any) {
-      setError(e.response?.data?.message || e.message || 'Failed to connect to Grafana');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Failed to connect to Grafana');
     } finally {
       setLoadingDashboards(false);
     }
-  };
+  }, [instanceId]);
 
-  useEffect(() => { fetchDashboards(); }, []);
+  useEffect(() => { void fetchDashboards(); }, [fetchDashboards]);
 
   const fetchPanels = async (uid: string) => {
     if (!uid) { setPanels([]); return; }
     setLoadingPanels(true);
     setPanels([]);
     try {
-      const resp = await apiClient.post('/plugins/grafana/panels', { instanceId, dashboard_uid: uid });
-      const data = resp.data.data || resp.data;
+      const resp = await apiClient.post<{ data: GrafanaPanel[] }>('/plugins/grafana/panels', { instanceId, dashboard_uid: uid });
+      const data = resp.data.data;
       setPanels(data);
-    } catch (e: any) {
-      setError(e.response?.data?.message || 'Failed to load panels');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Failed to load panels');
     } finally {
       setLoadingPanels(false);
     }
@@ -112,7 +113,7 @@ export function GrafanaGeneratorPage() {
             settings: { parentInstanceId: instanceId, dashboard_uid: screenDashboard, panel_id: panelId, time_range: screenTimeRange, screen_width: screenWidth, screen_height: screenHeight },
           });
         } else {
-          const resp = await apiClient.post('/plugins/grafana/generate-screen', {
+          const resp = await apiClient.post<{ data: { id: number } }>('/plugins/grafana/generate-screen', {
             parentInstanceId: instanceId,
             dashboard_uid: screenDashboard,
             panel_id: panelId,
@@ -121,14 +122,13 @@ export function GrafanaGeneratorPage() {
             screen_height: screenHeight,
             name: '__preview__',
           });
-          const data = resp.data.data || resp.data;
-          setPreviewInstanceId(data.id);
+          setPreviewInstanceId(resp.data.data.id);
         }
         setPreviewTimestamp(Date.now());
       } catch { /* ignore preview errors */ }
     }, 500);
     return () => clearTimeout(timer);
-  }, [screenDashboard, screenPanel, screenTimeRange, screenWidth, screenHeight]);
+  }, [instanceId, previewInstanceId, screenDashboard, screenPanel, screenTimeRange, screenWidth, screenHeight]);
 
   const handleGenerate = async () => {
     if (!screenDashboard || !screenPanel) return;
@@ -159,8 +159,8 @@ export function GrafanaGeneratorPage() {
       savedRef.current = true;
       setPreviewInstanceId(null);
       navigate('/screens');
-    } catch (e: any) {
-      notification.error(e.response?.data?.message || 'Failed to generate screen');
+    } catch (error: unknown) {
+      notification.error(getErrorMessage(error) || 'Failed to generate screen');
     } finally {
       setGenerating(false);
     }
@@ -332,13 +332,13 @@ export function GrafanaGeneratorPage() {
                   <span className="ml-2 text-xs font-normal text-text-muted">({childScreens.length})</span>
                 </h3>
                 <div className="rounded-lg border border-border-light overflow-hidden divide-y divide-border-light">
-                  {childScreens.map((child: any) => {
+                  {childScreens.map((child) => {
                     const name = child.name || 'Grafana Screen';
                     const parts = name.split(' — ');
                     const dashboard = parts[0];
                     const panel = parts.length > 1 ? parts.slice(1).join(' — ') : null;
-                    const timeRange = child.settings?.time_range || 'now-6h';
-                    const resolution = child.settings?.screen_width && child.settings?.screen_height
+                    const timeRange = String(child.settings.time_range || 'now-6h');
+                    const resolution = child.settings.screen_width && child.settings.screen_height
                       ? `${child.settings.screen_width}x${child.settings.screen_height}`
                       : null;
 

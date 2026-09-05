@@ -6,6 +6,7 @@
 import * as dns from 'dns';
 import * as http from 'http';
 import * as https from 'https';
+import type { LookupFunction } from 'net';
 import { promisify } from 'util';
 
 const dnsResolve4 = promisify(dns.resolve4);
@@ -114,6 +115,45 @@ export async function validateUrlSafety(url: string, options?: UrlSafetyOptions)
   }
 }
 
+function createPrivateNetworkBlockingLookup(): LookupFunction {
+  return (hostname, lookupOptions, callback) => {
+    const reject = (error: NodeJS.ErrnoException) => {
+      callback(error, lookupOptions.all ? [] : '', 4);
+    };
+    const accept = (address: string, family: number) => {
+      if (isPrivateIp(address)) {
+        reject(Object.assign(
+          new Error(`DNS resolved to private IP: ${address}`),
+          { code: 'ECONNREFUSED' },
+        ));
+        return;
+      }
+
+      callback(
+        null,
+        lookupOptions.all ? [{ address, family }] : address,
+        family,
+      );
+    };
+
+    dns.resolve4(hostname, (resolveError, addresses) => {
+      if (!resolveError && addresses.length > 0) {
+        accept(addresses[0], 4);
+        return;
+      }
+
+      // Fall back to dns.lookup for hosts without an A-record response.
+      dns.lookup(hostname, { family: 4 }, (lookupError, address, family) => {
+        if (lookupError) {
+          reject(lookupError);
+          return;
+        }
+        accept(address, family);
+      });
+    });
+  };
+}
+
 /**
  * Create an http.Agent that validates DNS resolution against private IPs.
  * This prevents DNS rebinding attacks (TOCTOU between validateUrlSafety and actual fetch).
@@ -122,34 +162,7 @@ export function createSafeHttpAgent(options?: UrlSafetyOptions): http.Agent {
   if (options?.allowLocalNetwork) {
     return new http.Agent();
   }
-  return new http.Agent({
-    lookup: (hostname: string, options: dns.LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
-      dns.resolve4(hostname, (err, addresses) => {
-        if (err) {
-          // Fall back to dns.lookup for non-A-record hostnames
-          dns.lookup(hostname, { family: 4 }, (lookupErr, addr, fam) => {
-            if (lookupErr) return callback(lookupErr, '', 4);
-            if (isPrivateIp(addr)) {
-              return callback(
-                Object.assign(new Error(`DNS resolved to private IP: ${addr}`), { code: 'ECONNREFUSED' }),
-                '', 4,
-              );
-            }
-            callback(null, addr, fam);
-          });
-          return;
-        }
-        const addr = addresses[0];
-        if (isPrivateIp(addr)) {
-          return callback(
-            Object.assign(new Error(`DNS resolved to private IP: ${addr}`), { code: 'ECONNREFUSED' }),
-            '', 4,
-          );
-        }
-        callback(null, addr, 4);
-      });
-    },
-  } as any);
+  return new http.Agent({ lookup: createPrivateNetworkBlockingLookup() });
 }
 
 /**
@@ -159,31 +172,5 @@ export function createSafeHttpsAgent(options?: UrlSafetyOptions): https.Agent {
   if (options?.allowLocalNetwork) {
     return new https.Agent();
   }
-  return new https.Agent({
-    lookup: (hostname: string, options: dns.LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
-      dns.resolve4(hostname, (err, addresses) => {
-        if (err) {
-          dns.lookup(hostname, { family: 4 }, (lookupErr, addr, fam) => {
-            if (lookupErr) return callback(lookupErr, '', 4);
-            if (isPrivateIp(addr)) {
-              return callback(
-                Object.assign(new Error(`DNS resolved to private IP: ${addr}`), { code: 'ECONNREFUSED' }),
-                '', 4,
-              );
-            }
-            callback(null, addr, fam);
-          });
-          return;
-        }
-        const addr = addresses[0];
-        if (isPrivateIp(addr)) {
-          return callback(
-            Object.assign(new Error(`DNS resolved to private IP: ${addr}`), { code: 'ECONNREFUSED' }),
-            '', 4,
-          );
-        }
-        callback(null, addr, 4);
-      });
-    },
-  } as any);
+  return new https.Agent({ lookup: createPrivateNetworkBlockingLookup() });
 }

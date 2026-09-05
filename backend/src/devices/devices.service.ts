@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsService } from '../events/events.service';
@@ -15,9 +16,12 @@ import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { serializeDevice, serializeDevices, isNewerVersion } from './entities/device.entity';
 import { FirmwareService } from '../firmware/firmware.service';
 import { DeliveryPolicyRegistry } from '../device-platform/delivery-policy.registry';
-import type { ResolvedDeviceConfiguration } from '../device-platform/device-configuration';
+import type { DeviceCapabilitiesOverride, ResolvedDeviceConfiguration } from '../device-platform/device-configuration';
 import { ProfileResolverService } from '../device-platform/profile-resolver.service';
 import { TransportAdapterRegistry } from '../device-platform/transport-adapter.registry';
+import { parseDisplayControlInput, readDisplayControl } from '../device-platform/display-control';
+import type { DisplayControlDto } from './dto/display-control.dto';
+import { RenderCacheService } from '../render-cache/render-cache.service';
 
 @Injectable()
 export class DevicesService {
@@ -30,6 +34,7 @@ export class DevicesService {
     private profileResolver: ProfileResolverService,
     private deliveryPolicies: DeliveryPolicyRegistry,
     private transportAdapters: TransportAdapterRegistry,
+    @Optional() private renderCache?: RenderCacheService,
   ) {}
 
   /**
@@ -316,6 +321,100 @@ export class DevicesService {
     });
   }
 
+  async getDisplayControl(id: number) {
+    const device = await this.prisma.device.findUnique({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    return readDisplayControl(device.configuration);
+  }
+
+  async updateDisplayTechnology(id: number, technology: 'lcd' | 'eink') {
+    const device = await this.prisma.device.findUnique({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    if (device.deviceType !== 'web-display') {
+      throw new BadRequestException('Display technology can only be selected for web-connected devices');
+    }
+
+    const base = await this.profileResolver.resolveForCreate({
+      profileId: device.profileId,
+      deliveryPolicyId: device.deliveryPolicyId,
+    });
+    if (technology === 'lcd' && base.capabilities.display.colorSpace !== 'rgb') {
+      throw new BadRequestException('The selected device profile does not support LCD/color output');
+    }
+    const current = await this.profileResolver.resolveForCreate({
+      profileId: device.profileId,
+      deliveryPolicyId: device.deliveryPolicyId,
+      capabilitiesOverride: device.capabilitiesOverride as DeviceCapabilitiesOverride | null,
+    });
+    const nextOverride = structuredClone(current.capabilitiesOverride ?? {}) as DeviceCapabilitiesOverride;
+    const display = { ...(nextOverride.display ?? {}) };
+    if (technology === 'eink') {
+      display.colorSpace = 'monochrome';
+      display.bitDepth = 1;
+      display.eInk = { partialRefreshSupported: false };
+    } else {
+      delete display.colorSpace;
+      delete display.bitDepth;
+      delete display.eInk;
+    }
+    if (Object.keys(display).length) nextOverride.display = display;
+    else delete nextOverride.display;
+
+    const resolved = await this.profileResolver.resolveForCreate({
+      profileId: device.profileId,
+      deliveryPolicyId: device.deliveryPolicyId,
+      capabilitiesOverride: nextOverride,
+    });
+    const updated = await this.prisma.$transaction(async tx => {
+      const saved = await tx.device.update({
+        where: { id },
+        data: {
+          capabilitiesOverride: nextOverride as unknown as Prisma.InputJsonValue,
+          capabilities: resolved.capabilities as unknown as Prisma.InputJsonValue,
+          width: resolved.capabilities.display.width,
+          height: resolved.capabilities.display.height,
+          refreshPending: true,
+        },
+        include: { profile: true, deliveryPolicy: true },
+      });
+      await this.eventsService.notifyDevicesRefresh([id], tx);
+      return saved;
+    });
+    await this.renderCache?.request(id);
+    return { technology, device: serializeDevice(updated) };
+  }
+
+  async updateDisplayControl(id: number, input: DisplayControlDto) {
+    let displayControl;
+    try {
+      displayControl = parseDisplayControlInput(input);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : 'Invalid display control settings');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const device = await tx.device.findUnique({ where: { id } });
+      if (!device) throw new NotFoundException('Device not found');
+      const capabilities = device.capabilities && typeof device.capabilities === 'object' && !Array.isArray(device.capabilities)
+        ? device.capabilities as Record<string, unknown> : {};
+      const display = capabilities.display && typeof capabilities.display === 'object' && !Array.isArray(capabilities.display)
+        ? capabilities.display as Record<string, unknown> : {};
+      if (display.colorSpace !== 'rgb') {
+        throw new BadRequestException('Brightness controls are only available for LCD/RGB hardware devices');
+      }
+      const configuration = device.configuration && typeof device.configuration === 'object' && !Array.isArray(device.configuration)
+        ? device.configuration as Record<string, unknown> : {};
+      await tx.device.update({
+        where: { id },
+        data: {
+          configuration: { ...configuration, displayControl } as unknown as Prisma.InputJsonValue,
+          refreshPending: true,
+        },
+      });
+      await this.eventsService.notifyDevicesRefresh([id], tx);
+      return displayControl;
+    });
+  }
+
   /**
    * Delete device
    * Adds MAC address to blocked_devices to prevent auto-re-provisioning
@@ -473,7 +572,7 @@ export class DevicesService {
     deviceId: number,
     level: string,
     message: string,
-    metadata?: any,
+    metadata?: Prisma.InputJsonValue,
   ) {
     return this.prisma.deviceLog.create({
       data: {
