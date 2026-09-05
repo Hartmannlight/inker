@@ -30,6 +30,12 @@ export class UpdateCustomWidgetDto {
   @IsInt()
   dataSourceId?: number;
 
+  @ApiPropertyOptional({ description: 'Worker-owned source definition ID' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  sourceDefinitionId?: string;
+
   @ApiPropertyOptional({
     example: 'value',
     enum: ['value', 'list', 'script', 'grid'],

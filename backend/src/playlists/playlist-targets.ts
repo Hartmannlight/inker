@@ -1,4 +1,4 @@
-export type PlaylistTargetKind = 'design' | 'regular' | 'plugin';
+export type PlaylistTargetKind = 'design' | 'regular' | 'plugin' | 'recipe';
 
 export interface PlaylistTargetInput {
   screenId: string | number;
@@ -8,7 +8,7 @@ export interface PlaylistTargetInput {
 
 export interface ParsedPlaylistTarget {
   kind: PlaylistTargetKind;
-  id: number;
+  id: number | string;
   order: number;
   duration: number | null;
   source: string;
@@ -19,6 +19,7 @@ export interface ParsedPlaylistTargets {
   designIds: number[];
   regularIds: number[];
   pluginIds: number[];
+  recipeIds: string[];
   invalid: string[];
 }
 
@@ -26,6 +27,7 @@ export interface PlaylistTargetExistence {
   designIds: ReadonlySet<number>;
   regularIds: ReadonlySet<number>;
   pluginIds: ReadonlySet<number>;
+  recipeIds: ReadonlySet<string>;
 }
 
 export type PlaylistItemCreate = {
@@ -35,6 +37,7 @@ export type PlaylistItemCreate = {
   screenId?: number;
   screenDesignId?: number;
   pluginInstanceId?: number;
+  recipeBindingId?: string;
 };
 
 const MAX_DATABASE_ID = 2_147_483_647;
@@ -52,19 +55,23 @@ export function parsePlaylistTargets(inputs: readonly PlaylistTargetInput[]): Pa
     designIds: [],
     regularIds: [],
     pluginIds: [],
+    recipeIds: [],
     invalid: [],
   };
 
   inputs.forEach((input, index) => {
     const source = String(input.screenId);
-    const prefixed = typeof input.screenId === 'string'
+    const recipe = typeof input.screenId === 'string' ? /^recipe:(.+)$/.exec(input.screenId) : null;
+    const prefixed = !recipe && typeof input.screenId === 'string'
       ? /^(design|plugin)-(.+)$/.exec(input.screenId)
       : null;
-    const kind: PlaylistTargetKind = prefixed?.[1] === 'design'
+    const kind: PlaylistTargetKind = recipe ? 'recipe' : prefixed?.[1] === 'design'
       ? 'design'
       : prefixed?.[1] === 'plugin' ? 'plugin' : 'regular';
-    const rawId = prefixed ? prefixed[2] : input.screenId;
-    const id = parseDatabaseId(rawId);
+    const rawId = recipe ? recipe[1] : prefixed ? prefixed[2] : input.screenId;
+    const id = kind === 'recipe'
+      ? (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(String(rawId)) ? String(rawId) : null)
+      : parseDatabaseId(rawId);
     if (id === null) {
       result.invalid.push(source);
       return;
@@ -78,9 +85,10 @@ export function parsePlaylistTargets(inputs: readonly PlaylistTargetInput[]): Pa
       source,
     };
     result.targets.push(target);
-    if (kind === 'design') result.designIds.push(id);
-    else if (kind === 'plugin') result.pluginIds.push(id);
-    else result.regularIds.push(id);
+    if (kind === 'design') result.designIds.push(Number(id));
+    else if (kind === 'plugin') result.pluginIds.push(Number(id));
+    else if (kind === 'recipe') result.recipeIds.push(String(id));
+    else result.regularIds.push(Number(id));
   });
 
   return result;
@@ -96,10 +104,12 @@ export function materializePlaylistItems(
 
   for (const target of parsed.targets) {
     const exists = target.kind === 'design'
-      ? existing.designIds.has(target.id)
+      ? existing.designIds.has(Number(target.id))
       : target.kind === 'plugin'
-        ? existing.pluginIds.has(target.id)
-        : existing.regularIds.has(target.id);
+        ? existing.pluginIds.has(Number(target.id))
+        : target.kind === 'recipe'
+          ? existing.recipeIds.has(String(target.id))
+          : existing.regularIds.has(Number(target.id));
     if (!exists) {
       missing.push(target);
       continue;
@@ -107,10 +117,12 @@ export function materializePlaylistItems(
 
     const base = { playlistId, order: target.order, duration: target.duration };
     items.push(target.kind === 'design'
-      ? { ...base, screenDesignId: target.id }
+      ? { ...base, screenDesignId: Number(target.id) }
       : target.kind === 'plugin'
-        ? { ...base, pluginInstanceId: target.id }
-        : { ...base, screenId: target.id });
+        ? { ...base, pluginInstanceId: Number(target.id) }
+        : target.kind === 'recipe'
+          ? { ...base, recipeBindingId: String(target.id) }
+          : { ...base, screenId: Number(target.id) });
   }
 
   return { items, missing };

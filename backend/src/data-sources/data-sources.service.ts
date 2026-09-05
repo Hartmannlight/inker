@@ -4,6 +4,7 @@ import {
   Logger,
   BadRequestException,
   ServiceUnavailableException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDataSourceDto } from './dto/create-data-source.dto';
@@ -12,6 +13,8 @@ import { TestUrlDto } from './dto/test-url.dto';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { SettingsService } from '../settings/settings.service';
 import { Prisma } from '@prisma/client';
+import { SourcesService } from '../sources/sources.service';
+import { SourceReadService } from '../sources/source-read.service';
 
 export const SOURCE_REFRESH_REQUIRES_CONNECTOR = 'SOURCE_REFRESH_REQUIRES_CONNECTOR';
 export const SOURCE_SNAPSHOT_UNAVAILABLE = 'SOURCE_SNAPSHOT_UNAVAILABLE';
@@ -39,12 +42,34 @@ export class DataSourcesService {
   constructor(
     private prisma: PrismaService,
     _settingsService: SettingsService,
+    @Optional() private readonly sources?: SourcesService,
+    @Optional() private readonly sourceReads?: SourceReadService,
   ) {}
+
+  private sourceBody(value: {
+    name: string; type: string; url: string; method?: string; headers?: unknown;
+    refreshInterval?: number; jsonPath?: string | null; isActive?: boolean;
+  }, expectedDefinitionVersion?: number) {
+    const headers = value.headers && typeof value.headers === 'object' && !Array.isArray(value.headers)
+      ? value.headers : null;
+    return {
+      protocolVersion: '1.0', name: value.name,
+      connectorType: value.type === 'rss' ? 'http-feed' : 'http-json', schemaVersion: '1',
+      configuration: { url: value.url, format: value.type === 'rss' ? 'rss' : 'json',
+        method: ['GET', 'POST'].includes(String(value.method).toUpperCase()) ? String(value.method).toUpperCase() : 'GET',
+        ...(value.jsonPath ? { jsonPath: value.jsonPath } : {}), allowLocalNetwork: false },
+      secret: headers && Object.keys(headers).length ? JSON.stringify(headers) : null,
+      refreshIntervalSeconds: Math.max(1, Math.min(86400, value.refreshInterval ?? 300)),
+      timeoutMs: 7500, concurrencyGroup: 'legacy-http', enabled: value.isActive !== false,
+      ...(expectedDefinitionVersion ? { expectedDefinitionVersion } : {}),
+    };
+  }
 
   /**
    * Preserve legacy configuration without provider access in the API process.
    */
   async create(createDataSourceDto: CreateDataSourceDto) {
+    const createdSource = this.sources ? await this.sources.create(this.sourceBody(createDataSourceDto)) : null;
     const dataSource = await this.prisma.dataSource.create({
       data: {
         name: createDataSourceDto.name,
@@ -58,10 +83,13 @@ export class DataSourcesService {
         isActive: createDataSourceDto.isActive ?? true,
       },
     });
+    if (createdSource) await this.prisma.sourceDefinition.update({ where: { sourceDefinitionId: createdSource.definition.sourceDefinitionId },
+      data: { legacyDataSourceId: dataSource.id } });
 
     this.logger.log(`Data source created: ${dataSource.name}`);
 
-    return { ...dataSource, headers: this.maskSensitiveHeaders(dataSource.headers as Record<string, string> | null) };
+    return { ...dataSource, ...(createdSource ? { sourceDefinitionId: createdSource.definition.sourceDefinitionId } : {}),
+      headers: this.maskSensitiveHeaders(dataSource.headers as Record<string, string> | null) };
   }
 
   /**
@@ -335,6 +363,17 @@ export class DataSourcesService {
       updateDataSourceDto.headers as Record<string, string> | null,
       dataSource.headers as Record<string, string> | null,
     );
+    const source = this.sources ? await this.prisma.sourceDefinition.findUnique({ where: { legacyDataSourceId: id } }) : null;
+    if (source && this.sources) await this.sources.update(source.sourceDefinitionId, this.sourceBody({
+      name: updateDataSourceDto.name ?? dataSource.name,
+      type: updateDataSourceDto.type ?? dataSource.type,
+      url: updateDataSourceDto.url ?? dataSource.url,
+      method: updateDataSourceDto.method ?? dataSource.method,
+      headers: headers ?? dataSource.headers,
+      refreshInterval: updateDataSourceDto.refreshInterval ?? dataSource.refreshInterval,
+      jsonPath: updateDataSourceDto.jsonPath === undefined ? dataSource.jsonPath : updateDataSourceDto.jsonPath,
+      isActive: updateDataSourceDto.isActive ?? dataSource.isActive,
+    }, source.definitionVersion));
 
     const updatedDataSource = await this.prisma.dataSource.update({
       where: { id },
@@ -389,12 +428,22 @@ export class DataSourcesService {
   }
 
   /** No arbitrary legacy provider is registered in the Foundation connector set. */
-  async testFetch(_id: number): Promise<never> {
-    return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
+  async testFetch(_id: number): Promise<unknown> {
+    if (!this.sources || !this.prisma.sourceDefinition) {
+      return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
+    }
+    const source = await this.prisma.sourceDefinition.findUnique({ where: { legacyDataSourceId: _id } });
+    if (!source) return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
+    return this.sources.refresh(source.sourceDefinitionId);
   }
 
-  async refresh(_id: number): Promise<never> {
-    return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
+  async refresh(_id: number): Promise<unknown> {
+    if (!this.sources || !this.prisma.sourceDefinition) {
+      return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
+    }
+    const source = await this.prisma.sourceDefinition.findUnique({ where: { legacyDataSourceId: _id } });
+    if (!source) return unavailable(SOURCE_REFRESH_REQUIRES_CONNECTOR);
+    return this.sources.refresh(source.sourceDefinitionId);
   }
 
   async fetchDataFromSource(_dataSource: {
@@ -594,6 +643,10 @@ export class DataSourcesService {
    * The optional argument remains source-compatible; all reads now skip fetch.
    */
   async getCachedData(id: number, _skipFetch = false): Promise<unknown> {
+    const source = this.sourceReads
+      ? await this.prisma.sourceDefinition.findUnique({ where: { legacyDataSourceId: id }, select: { sourceDefinitionId: true } })
+      : null;
+    if (source && this.sourceReads) return this.sourceReads.latestValidData(source.sourceDefinitionId);
     const dataSource = await this.prisma.dataSource.findUnique({
       where: { id },
       select: { lastData: true },

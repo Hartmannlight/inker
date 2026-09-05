@@ -280,12 +280,9 @@ async function main() {
   for (const { profile, defaultCapabilities } of BUILTIN_DEVICE_PROFILES) {
     await prisma.deviceProfile.upsert({
       where: { profileId: profile.profileId },
-      update: {
-        protocolVersion: profile.protocolVersion,
-        label: profile.label,
-        definition: profile as unknown as Prisma.InputJsonValue,
-        defaultCapabilities: defaultCapabilities as unknown as Prisma.InputJsonValue,
-      },
+      // Seeding initializes missing built-ins; it must not overwrite an
+      // administrator's persisted profile customization on every restart.
+      update: {},
       create: {
         profileId: profile.profileId,
         protocolVersion: profile.protocolVersion,
@@ -299,11 +296,7 @@ async function main() {
   for (const policy of BUILTIN_DELIVERY_POLICIES) {
     await prisma.deliveryPolicy.upsert({
       where: { policyId: policy.policyId },
-      update: {
-        protocolVersion: policy.protocolVersion,
-        mode: policy.mode,
-        definition: policy as unknown as Prisma.InputJsonValue,
-      },
+      update: {},
       create: {
         policyId: policy.policyId,
         protocolVersion: policy.protocolVersion,

@@ -34,6 +34,7 @@ import { configuration } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { FederationModule } from './federation/federation.module';
 import { OperationsModule } from './observability/operations.module';
+import { RecipesModule } from './recipes/recipes.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { OperationsModule } from './observability/operations.module';
     FederationModule,
     SettingsModule,
     PluginsModule,
+    RecipesModule,
     ModelsModule,
   ],
   controllers: [],

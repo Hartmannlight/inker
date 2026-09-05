@@ -11,8 +11,9 @@ import { PublicationPersistenceService } from './publication-persistence.service
 import { canonicalJson, fixtureIds, publicationArtifacts, sha256, type PublicationContent, type PublishedDesignSnapshot } from './publication-content';
 import { normalizePublicationActions } from './publication-actions';
 import { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
+import { RecipesService } from '../recipes/recipes.service';
 
-export type PublicationDraft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string } | { screenDesignId: number; expectedUpdatedAt: string } | { sourceSnapshotId: string };
+export type PublicationDraft = { fixtureArtifacts: string[] } | { screenId: number; expectedUpdatedAt: string } | { screenDesignId: number; expectedUpdatedAt: string } | { recipeBindingId: string; expectedUpdatedAt: string } | { sourceSnapshotId: string };
 type PublishInput = { idempotencyKey: string; expectedRevision: number; draft: PublicationDraft; deviceIds: number[]; allowedActions: AllowedAction[] };
 
 function object(value: unknown): Record<string, unknown> {
@@ -23,6 +24,7 @@ function keys(value: Record<string, unknown>, allowed: string[]) {
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new BadRequestException('Unknown publication command field');
 }
 function positive(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) > 0; }
+function identifier(value: unknown): value is string { return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value); }
 
 @Injectable()
 export class PublishService {
@@ -30,6 +32,7 @@ export class PublishService {
     private readonly prisma: PrismaService,
     private readonly persistence: PublicationPersistenceService,
     private readonly screenRenderer: ScreenRendererService,
+    private readonly recipes: RecipesService,
   ) {}
 
   async publish(publicationKey: string, body: unknown) {
@@ -61,6 +64,10 @@ export class PublishService {
         if ('screenDesignId' in input.draft) {
           const design = await tx.screenDesign.findUnique({ where: { id: input.draft.screenDesignId } });
           if (!design || design.updatedAt.toISOString() !== input.draft.expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');
+        }
+        if ('recipeBindingId' in input.draft) {
+          const binding = await tx.recipeBinding.findUnique({ where: { recipeBindingId: input.draft.recipeBindingId } });
+          if (!binding || binding.updatedAt.toISOString() !== input.draft.expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');
         }
         if (await tx.device.count({ where: { id: { in: input.deviceIds }, isActive: true } }) !== input.deviceIds.length) throw new NotFoundException('Target device not found');
         const content = { ...prepared.content, ...actions };
@@ -150,6 +157,23 @@ export class PublishService {
     }, tx)).revision;
   }
 
+  async publishRecipeDraftInTransaction(
+    tx: Prisma.TransactionClient,
+    draft: { recipeBindingId: string; expectedUpdatedAt: string },
+    prepared: { content: PublicationContent },
+  ) {
+    const binding = await tx.recipeBinding.findUnique({ where: { recipeBindingId: draft.recipeBindingId } });
+    if (!binding) throw new NotFoundException('Recipe binding not found');
+    if (binding.updatedAt.toISOString() !== draft.expectedUpdatedAt) throw new ConflictException('Draft changed; reload before publishing');
+    const contentHash = sha256(canonicalJson(prepared.content));
+    const existing = await tx.publicationRevision.findFirst({ where: { contentHash }, orderBy: { publishedAt: 'desc' } });
+    if (existing) return existing;
+    return (await this.persistence.createPublication({
+      publicationKey: `recipe-assignment-${randomUUID()}`, protocolVersion: '1.0',
+      content: prepared.content as unknown as Prisma.InputJsonValue, contentHash,
+    }, tx)).revision;
+  }
+
   private replay(receipt: { requestHash: string; result: Prisma.JsonValue }, requestHash: string) {
     if (receipt.requestHash !== requestHash) throw new ConflictException('Idempotency key already used for a different command');
     if (!receipt.result) throw new ServiceUnavailableException('Publication command incomplete');
@@ -176,6 +200,11 @@ export class PublishService {
       keys(draft, ['sourceSnapshotId']);
       if (typeof draft.sourceSnapshotId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(draft.sourceSnapshotId)) throw new BadRequestException('Invalid source snapshot reference');
       parsed = { sourceSnapshotId: draft.sourceSnapshotId };
+    } else if ('recipeBindingId' in draft) {
+      keys(draft, ['recipeBindingId', 'expectedUpdatedAt']);
+      if (!identifier(draft.recipeBindingId) || typeof draft.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(draft.expectedUpdatedAt)
+        || !Number.isFinite(Date.parse(draft.expectedUpdatedAt))) throw new BadRequestException('Invalid recipe binding draft');
+      parsed = { recipeBindingId: draft.recipeBindingId, expectedUpdatedAt: draft.expectedUpdatedAt };
     } else if ('screenId' in draft) {
       keys(draft, ['screenId', 'expectedUpdatedAt']);
       if (!positive(draft.screenId) || typeof draft.expectedUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(draft.expectedUpdatedAt) || !Number.isFinite(Date.parse(draft.expectedUpdatedAt))) throw new BadRequestException('Only fixture or uploaded screen drafts are publishable');
@@ -223,6 +252,16 @@ export class PublishService {
         return { content: { schemaVersion: 1, image: { png: normalized.data.toString('base64'), width: normalized.info.width, height: normalized.info.height,
           sha256: sha256(normalized.data) }, sourceSnapshot } };
       } catch { throw new BadRequestException('Grafana image snapshot invalid'); }
+    }
+    if ('recipeBindingId' in draft) {
+      const rendered = await this.recipes.snapshotBinding(draft.recipeBindingId, draft.expectedUpdatedAt);
+      try {
+        const normalized = await sharp(rendered.bytes, { limitInputPixels: 4_194_304, animated: false })
+          .rotate().toColourspace('srgb').png().toBuffer({ resolveWithObject: true });
+        if (normalized.info.width !== rendered.width || normalized.info.height !== rendered.height || normalized.data.length > 2 * 1024 * 1024) throw new Error();
+        return { content: { schemaVersion: 1, image: { png: normalized.data.toString('base64'), width: normalized.info.width,
+          height: normalized.info.height, sha256: sha256(normalized.data) }, ...(rendered.sourceSnapshot ? { sourceSnapshot: rendered.sourceSnapshot } : {}) } };
+      } catch { throw new BadRequestException('Recipe capture unavailable or unsupported'); }
     }
     const isDesign = 'screenDesignId' in draft;
     const id = isDesign ? draft.screenDesignId : draft.screenId;

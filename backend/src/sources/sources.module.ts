@@ -5,5 +5,10 @@ import { SourceReadService } from './source-read.service';
 import { SourcesService } from './sources.service';
 import { SourcesController } from './sources.controller';
 
-@Module({ imports: [PrismaModule, CommonModule], controllers: [SourcesController], providers: [SourcesService, SourceReadService], exports: [SourceReadService] })
+@Module({
+  imports: [PrismaModule, CommonModule],
+  controllers: [SourcesController],
+  providers: [SourcesService, SourceReadService],
+  exports: [SourcesService, SourceReadService],
+})
 export class SourcesModule {}

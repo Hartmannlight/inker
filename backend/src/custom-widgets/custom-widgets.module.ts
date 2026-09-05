@@ -4,9 +4,10 @@ import { CustomWidgetsService } from './custom-widgets.service';
 import { ScriptExecutorService } from './services/script-executor.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { DataSourcesModule } from '../data-sources/data-sources.module';
+import { SourcesModule } from '../sources/sources.module';
 
 @Module({
-  imports: [PrismaModule, DataSourcesModule],
+  imports: [PrismaModule, DataSourcesModule, SourcesModule],
   controllers: [CustomWidgetsController],
   providers: [CustomWidgetsService, ScriptExecutorService],
   exports: [CustomWidgetsService],

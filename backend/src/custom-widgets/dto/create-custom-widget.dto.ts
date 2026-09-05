@@ -21,12 +21,19 @@ export class CreateCustomWidgetDto {
   @MaxLength(1000)
   description?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 1,
     description: 'ID of the data source to use',
   })
+  @IsOptional()
   @IsInt()
-  dataSourceId: number;
+  dataSourceId?: number;
+
+  @ApiPropertyOptional({ description: 'Worker-owned source definition ID' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  sourceDefinitionId?: string;
 
   @ApiProperty({
     example: 'value',

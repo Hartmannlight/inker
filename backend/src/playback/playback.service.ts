@@ -90,6 +90,7 @@ export class PlaybackService {
       screenId: i.screenId,
       screenDesignId: i.screenDesignId,
       pluginInstanceId: i.pluginInstanceId,
+      recipeBindingId: i.recipeBindingId,
     }));
     const content = { playlistId, items };
     return { ...content, draftHash: sha256(canonicalJson(content)) };
@@ -154,14 +155,19 @@ export class PlaybackService {
     if (previous) return replay(previous);
     const draft = await this.draft(playlistId);
     if (draft.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
-    if (!draft.items.length || draft.items.some(item => item.pluginInstanceId || Number(Boolean(item.screenId)) + Number(Boolean(item.screenDesignId)) !== 1))
-      throw new BadRequestException('Only uploaded-screen or designer-screen playlist items can be published from this picker');
+    if (!draft.items.length || draft.items.some(item => item.pluginInstanceId
+      || Number(Boolean(item.screenId)) + Number(Boolean(item.screenDesignId)) + Number(Boolean(item.recipeBindingId)) !== 1))
+      throw new BadRequestException('Only uploaded-screen, designer-screen, or recipe playlist items can be published from this picker');
     const prepared = await Promise.all(draft.items.map(async item => {
-      const screen = item.screenDesignId
+      const screen = item.recipeBindingId
+        ? await this.prisma.recipeBinding.findUnique({ where: { recipeBindingId: item.recipeBindingId }, select: { updatedAt: true } })
+        : item.screenDesignId
         ? await this.prisma.screenDesign.findUnique({ where: { id: item.screenDesignId }, select: { updatedAt: true } })
         : await this.prisma.screen.findUnique({ where: { id: item.screenId! }, select: { updatedAt: true } });
       if (!screen) throw new NotFoundException('Playlist screen not found');
-      const screenDraft = item.screenDesignId
+      const screenDraft = item.recipeBindingId
+        ? { recipeBindingId: item.recipeBindingId, expectedUpdatedAt: screen.updatedAt.toISOString() }
+        : item.screenDesignId
         ? { screenDesignId: item.screenDesignId, expectedUpdatedAt: screen.updatedAt.toISOString() }
         : { screenId: item.screenId!, expectedUpdatedAt: screen.updatedAt.toISOString() };
       return { item, screenDraft, prepared: await this.publisher.snapshotDraft(screenDraft) };
@@ -173,10 +179,14 @@ export class PlaybackService {
         if (receipt.result || receipt.requestHash !== requestHash) return replay(receipt);
         const current = await this.draft(playlistId, tx);
         if (current.draftHash !== expectedDraftHash) throw new ConflictException("Playlist draft changed");
-        const bindings = await Promise.all(prepared.map(async ({ item, screenDraft, prepared }) => ({
-          itemId: item.itemId,
-          publicationRevisionId: (await this.publisher.publishScreenDraftInTransaction(tx, screenDraft, prepared)).publicationRevisionId,
-        })));
+        const bindings = await Promise.all(prepared.map(async ({ item, screenDraft, prepared }) => {
+          const revision = typeof screenDraft.recipeBindingId === 'string'
+            ? await this.publisher.publishRecipeDraftInTransaction(tx, {
+              recipeBindingId: screenDraft.recipeBindingId, expectedUpdatedAt: screenDraft.expectedUpdatedAt,
+            }, prepared)
+            : await this.publisher.publishScreenDraftInTransaction(tx, screenDraft, prepared);
+          return { itemId: item.itemId, publicationRevisionId: revision.publicationRevisionId };
+        }));
         const latest = await tx.publishedPlaylist.findFirst({ where: { playlistId }, orderBy: { revision: 'desc' } });
         const result = await this.publishPlaylistInTransaction(tx, playlistId, latest?.revision ?? 0, current.draftHash, bindings);
         await tx.playlistDraftPublishCommand.update({ where: { keyHash }, data: { result } });

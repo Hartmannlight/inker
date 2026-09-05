@@ -56,6 +56,14 @@ export class SourceReadService {
     if (!row) throw new NotFoundException('SOURCE_SNAPSHOT_NOT_FOUND');
     return publicSnapshot(row);
   }
+  async latestValidData(id: string) {
+    const source = await this.prisma.sourceDefinition.findUnique({
+      where: { sourceDefinitionId: id }, include: { latestValidSnapshot: true },
+    });
+    if (!source) throw new NotFoundException('SOURCE_NOT_FOUND');
+    if (!source.latestValidSnapshot) throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE');
+    return publicSnapshot(source.latestValidSnapshot).data;
+  }
   private project(source: SourceDefinition & { latestSnapshot: SourceSnapshot | null }) {
     return { definition: publicDefinition(source), enabled: source.enabled,
       state: { nextRefreshAt: source.nextRefreshAt.toISOString(), lastAttemptAt: source.lastAttemptAt?.toISOString() ?? null,

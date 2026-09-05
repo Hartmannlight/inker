@@ -15,12 +15,12 @@ This fork is based on [`usetrmnl/inker` commit `83c72b0`](https://github.com/use
 | Direct single-screen assignment and deterministic playlists | available |
 | Worker-only encrypted provider credentials and source snapshots | available |
 | Grafana panel source | beta |
-| Declarative TRMNL recipe compatibility | limited — UX-09 is Limited Go |
-| Recipe importer, marketplace, remote updates, foreign guest runtimes | planned / not included |
+| Declarative TRMNL recipe compatibility | limited — immutable local manifests, bindings, and legacy migration |
+| Remote recipe catalog, marketplace, automatic updates, foreign guest runtimes | planned / not included |
 
 ## Compatibility and limitations
 
-TRMNL pull devices and browser displays are supported. Native Ruby, PHP, Python, and Node guest runtimes are not supported. No recipe catalog, marketplace, or automatic installer is included. Hardware coverage varies by device profile.
+TRMNL pull devices and browser displays are supported. Native Ruby, PHP, Python, and Node guest runtimes are not supported. Safe Liquid recipes can be installed through the local recipe API; there is no remote catalog, marketplace, or automatic installer. See [recipe compatibility](docs/operations/RECIPES.md). Hardware coverage varies by device profile.
 
 Grafana is beta. Use a new, minimally privileged Viewer token only after revoking any exposed token. Inker encrypts it; only the connector worker can decrypt it. Renderers, templates, browsers, and devices never receive provider secrets.
 

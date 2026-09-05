@@ -568,6 +568,7 @@ model SourceSecret {
 model SourceDefinition {
   sourceDefinitionId String @id @default(uuid()) @map("source_definition_id")
   legacyPluginInstanceId Int? @unique @map("legacy_plugin_instance_id")
+  legacyDataSourceId Int? @unique @map("legacy_data_source_id")
   definitionVersion Int @default(1) @map("definition_version")
   name String
   connectorType String @map("connector_type")
@@ -594,6 +595,8 @@ model SourceDefinition {
   latestValidSnapshot SourceSnapshot? @relation("LatestValidSourceSnapshot", fields: [latestValidSnapshotId], references: [snapshotId], onDelete: Restrict)
   snapshots SourceSnapshot[] @relation("SourceSnapshots")
   refreshJobs SourceRefreshJob[]
+  customWidgets CustomWidget[]
+  recipeBindings RecipeBinding[]
   @@index([enabled, nextRefreshAt])
   @@index([concurrencyGroup, connectorType])
   @@map("source_definitions")
@@ -763,12 +766,15 @@ model PlaylistItem {
   createdAt      DateTime @default(now()) @map("created_at")
 
   pluginInstanceId Int? @map("plugin_instance_id")
+  recipeBindingId String? @map("recipe_binding_id")
 
   playlist       Playlist        @relation(fields: [playlistId], references: [id], onDelete: Cascade)
   screen         Screen?         @relation(fields: [screenId], references: [id], onDelete: Cascade)
   screenDesign   ScreenDesign?   @relation(fields: [screenDesignId], references: [id], onDelete: Cascade)
   pluginInstance PluginInstance? @relation(fields: [pluginInstanceId], references: [id], onDelete: Cascade)
+  recipeBinding RecipeBinding? @relation(fields: [recipeBindingId], references: [recipeBindingId], onDelete: Restrict)
 
+  @@index([recipeBindingId])
   @@map("playlist_items")
 }
 
@@ -817,7 +823,8 @@ model CustomWidget {
   id           Int      @id @default(autoincrement())
   name         String
   description  String?
-  dataSourceId Int      @map("data_source_id")
+  dataSourceId Int?     @map("data_source_id")
+  sourceDefinitionId String? @map("source_definition_id")
   displayType  String // "template" | "value" | "list" | "title-value"
   template     String? // Template string for "template" display type
   config       Json // Layout config (fontSize, alignment, etc.) — defaulted to {} in app code (SQLite rejects DB-level Json default)
@@ -826,7 +833,8 @@ model CustomWidget {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  dataSource DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  dataSource DataSource? @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
+  sourceDefinition SourceDefinition? @relation(fields: [sourceDefinitionId], references: [sourceDefinitionId], onDelete: Restrict)
 
   @@map("custom_widgets")
 }
@@ -996,6 +1004,7 @@ model Plugin {
   version     String?
 
   instances PluginInstance[]
+  recipeDefinition RecipeDefinition?
   createdAt DateTime         @default(now()) @map("created_at")
   updatedAt DateTime         @updatedAt @map("updated_at")
 
@@ -1023,9 +1032,77 @@ model PluginInstance {
 
   plugin        Plugin         @relation(fields: [pluginId], references: [id], onDelete: Cascade)
   playlistItems PlaylistItem[]
+  recipeBinding RecipeBinding?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("plugin_instances")
+}
+
+// A recipe is imported metadata, not executable foreign application code.
+// Every published/rendered binding pins one immutable revision.
+model RecipeDefinition {
+  recipeDefinitionId String @id @default(uuid()) @map("recipe_definition_id")
+  slug String @unique
+  name String
+  description String?
+  source String @default("inker")
+  sourceUrl String? @map("source_url")
+  license String?
+  legacyPluginId Int? @unique @map("legacy_plugin_id")
+  activeRevisionId String? @unique @map("active_revision_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  legacyPlugin Plugin? @relation(fields: [legacyPluginId], references: [id], onDelete: Restrict)
+  activeRevision RecipeRevision? @relation("ActiveRecipeRevision", fields: [activeRevisionId], references: [recipeRevisionId], onDelete: Restrict)
+  revisions RecipeRevision[] @relation("RecipeRevisions")
+  bindings RecipeBinding[]
+
+  @@map("recipe_definitions")
+}
+
+model RecipeRevision {
+  recipeRevisionId String @id @default(uuid()) @map("recipe_revision_id")
+  recipeDefinitionId String @map("recipe_definition_id")
+  revision Int
+  manifestVersion Int @default(1) @map("manifest_version")
+  contentHash String @map("content_hash")
+  manifest Json
+  layouts Json
+  partials Json
+  settingsSchema Json @map("settings_schema")
+  requiredConnectorType String? @map("required_connector_type")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  definition RecipeDefinition @relation("RecipeRevisions", fields: [recipeDefinitionId], references: [recipeDefinitionId], onDelete: Restrict)
+  activeFor RecipeDefinition? @relation("ActiveRecipeRevision")
+  bindings RecipeBinding[]
+
+  @@unique([recipeDefinitionId, revision])
+  @@index([recipeDefinitionId, contentHash])
+  @@map("recipe_revisions")
+}
+
+model RecipeBinding {
+  recipeBindingId String @id @default(uuid()) @map("recipe_binding_id")
+  recipeDefinitionId String @map("recipe_definition_id")
+  recipeRevisionId String @map("recipe_revision_id")
+  sourceDefinitionId String? @map("source_definition_id")
+  legacyPluginInstanceId Int? @unique @map("legacy_plugin_instance_id")
+  name String?
+  settings Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  definition RecipeDefinition @relation(fields: [recipeDefinitionId], references: [recipeDefinitionId], onDelete: Restrict)
+  revision RecipeRevision @relation(fields: [recipeRevisionId], references: [recipeRevisionId], onDelete: Restrict)
+  sourceDefinition SourceDefinition? @relation(fields: [sourceDefinitionId], references: [sourceDefinitionId], onDelete: Restrict)
+  legacyPluginInstance PluginInstance? @relation(fields: [legacyPluginInstanceId], references: [id], onDelete: Restrict)
+  playlistItems PlaylistItem[]
+
+  @@index([recipeDefinitionId])
+  @@index([sourceDefinitionId])
+  @@map("recipe_bindings")
 }

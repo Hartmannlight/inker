@@ -332,9 +332,12 @@ Live-Abfragen ab:
   Ergebnissen gelesen. Fehlende Ergebnisse führen zu 503. Legacy-Plugin-Widgets
   ohne Instanz-/Snapshotbindung erlauben nur statisches Markup; `polling` und
   `webhook` werden abgewiesen. Templates erhalten keine Provider-Credentials.
-- Alte DataSource-Test-/Refreshpfade, Provider-/Recipe-Abfragen und
-  URL-Screenshotpfade außerhalb des Snapshot-Renderers liefern **503
-  `SOURCE_REFRESH_REQUIRES_CONNECTOR`**. Nicht freigegebene Plugin-Ausführung kann
+- Alte DataSource-Test-/Refreshpfade delegieren nach der Compatibility-Migration
+  an den worker-owned `http-json`- beziehungsweise `http-feed`-Connector. Solange
+  noch keine zugehörige SourceDefinition vorhanden ist, liefern sie **503
+  `SOURCE_REFRESH_REQUIRES_CONNECTOR`**. Die alte Remote-Recipe-Gallery und
+  URL-Screenshotpfade außerhalb des Snapshot-Renderers bleiben geschlossen.
+  Nicht freigegebene Plugin-Ausführung kann
   **503 `PLUGIN_ISOLATION_REQUIRED`** liefern. Diese Pfade nicht durch direkte
   HTTP-Aufrufe oder Aktivierung alter Poller wieder öffnen.
 

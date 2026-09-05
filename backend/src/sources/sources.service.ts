@@ -29,7 +29,7 @@ export class SourcesService {
     const allowed = ['protocolVersion', 'name', 'connectorType', 'schemaVersion', 'configuration', 'transformationCode', 'secret', 'refreshIntervalSeconds', 'timeoutMs', 'concurrencyGroup', 'enabled', ...(update ? ['expectedDefinitionVersion'] : [])];
     if (Object.keys(value).some(key => !allowed.includes(key)) || value.protocolVersion !== '1.0'
       || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 120
-      || !['fixture', 'slow', 'failure', 'grafana'].includes(String(value.connectorType)) || value.schemaVersion !== '1'
+      || !['fixture', 'slow', 'failure', 'grafana', 'http-json', 'http-feed'].includes(String(value.connectorType)) || value.schemaVersion !== '1'
       || (value.enabled !== undefined && typeof value.enabled !== 'boolean')
       || (value.transformationCode !== undefined && value.transformationCode !== null
         && (typeof value.transformationCode !== 'string' || value.transformationCode.length > 10_000))

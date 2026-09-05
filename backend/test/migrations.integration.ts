@@ -508,6 +508,59 @@ describe("Prisma migration baseline", () => {
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
   });
+
+  test('recipe bridge preserves legacy content and adds immutable revision targets', async () => {
+    const databasePath = join(createTemporaryDirectory(), 'recipe-bridge-upgrade.db');
+    const migrations = join(prismaDirectory, 'migrations');
+    const latest = '20260909000000_recipe_and_legacy_source_bridge';
+    applySql(databasePath, migrationNames(migrations, name => name < latest)
+      .map(name => join(migrations, name, 'migration.sql')));
+    const database = new Database(databasePath, { strict: true });
+    try {
+      database.exec(`PRAGMA foreign_keys=ON;
+        INSERT INTO data_sources(id,name,type,url,method,headers,refresh_interval,is_active,updated_at)
+          VALUES(41,'Legacy JSON','json','https://example.test/data','GET','{"Authorization":"secret"}',300,1,CURRENT_TIMESTAMP);
+        INSERT INTO custom_widgets(id,name,data_source_id,"displayType",config,updated_at)
+          VALUES(42,'Legacy widget',41,'value','{}',CURRENT_TIMESTAMP);
+        INSERT INTO playlists(id,name,is_active,updated_at) VALUES(43,'Legacy playlist',1,CURRENT_TIMESTAMP);
+        INSERT INTO playlist_items(id,playlist_id,"order",duration) VALUES(44,43,0,60);`);
+      const dataSource = database.query('SELECT * FROM data_sources WHERE id=41').get();
+      database.exec(readFileSync(join(migrations, latest, 'migration.sql'), 'utf8'));
+
+      expect(database.query('SELECT * FROM data_sources WHERE id=41').get()).toEqual(dataSource);
+      expect(database.query('SELECT data_source_id,source_definition_id FROM custom_widgets WHERE id=42').get())
+        .toEqual({ data_source_id: 41, source_definition_id: null });
+      expect(database.query('SELECT recipe_binding_id FROM playlist_items WHERE id=44').get())
+        .toEqual({ recipe_binding_id: null });
+      expect(database.query('SELECT legacy_data_source_id FROM source_definitions').all()).toEqual([]);
+      expect(database.query('SELECT * FROM recipe_definitions').all()).toEqual([]);
+      expect(database.query('SELECT * FROM recipe_revisions').all()).toEqual([]);
+      expect(database.query('SELECT * FROM recipe_bindings').all()).toEqual([]);
+
+      const manifest = JSON.stringify({ protocolVersion: '1.0', slug: 'upgrade-test', name: 'Upgrade test',
+        description: null, source: 'inker', sourceUrl: null, license: null,
+        layouts: { full: '<div>ok</div>', halfHorizontal: null, halfVertical: null, quadrant: null },
+        partials: {}, settingsSchema: [], requiredConnectorType: null });
+      const layouts = JSON.stringify({ full: '<div>ok</div>', halfHorizontal: null, halfVertical: null, quadrant: null });
+      database.query(`INSERT INTO recipe_definitions(recipe_definition_id,slug,name,updated_at)
+        VALUES('recipe','upgrade-test','Upgrade test',CURRENT_TIMESTAMP)`).run();
+      database.query(`INSERT INTO recipe_revisions(recipe_revision_id,recipe_definition_id,revision,content_hash,manifest,layouts,partials,settings_schema)
+        VALUES('revision','recipe',1,?,?,?,?,?)`).run('a'.repeat(64), manifest, layouts, '{}', '[]');
+      database.exec(`UPDATE recipe_definitions SET active_revision_id='revision' WHERE recipe_definition_id='recipe';
+        INSERT INTO recipe_bindings(recipe_binding_id,recipe_definition_id,recipe_revision_id,settings,updated_at)
+          VALUES('binding','recipe','revision','{}',CURRENT_TIMESTAMP);
+        UPDATE playlist_items SET recipe_binding_id='binding' WHERE id=44;`);
+      expect(() => database.exec("UPDATE recipe_revisions SET layouts='{}' WHERE recipe_revision_id='revision'"))
+        .toThrow('recipe_revision_immutable');
+      expect(() => database.exec("DELETE FROM recipe_revisions WHERE recipe_revision_id='revision'"))
+        .toThrow('recipe_revision_immutable');
+      expect(() => database.exec(`INSERT INTO custom_widgets(name,"displayType",config,updated_at)
+        VALUES('Unbound','value','{}',CURRENT_TIMESTAMP)`)).toThrow();
+      expect(database.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally { database.close(); }
+    const comparison = await compareWithDatamodel(databasePath);
+    expect(comparison.exitCode, comparison.output).toBe(0);
+  });
   test('WP-18 upgrades WP-17 without adopting drafts or changing desired state, credentials or outbox', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp18-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
@@ -685,6 +738,7 @@ describe("Prisma migration baseline", () => {
         "20260906000000_observability",
         "20260907000000_foundation_batch_checkpoints",
         "20260908000000_migrate_legacy_grafana_plugin_instances",
+        "20260909000000_recipe_and_legacy_source_bridge",
       ]);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM device_profiles").get()?.count,

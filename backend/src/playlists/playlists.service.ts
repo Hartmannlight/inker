@@ -56,9 +56,28 @@ interface ProjectablePlaylistItem {
     settings: Prisma.JsonValue;
     plugin: null | { name: string; description: string | null };
   };
+  recipeBinding: null | {
+    recipeBindingId: string;
+    name: string | null;
+    settings: Prisma.JsonValue;
+    definition: { name: string; description: string | null };
+  };
 }
 
 function projectPlaylistItem(item: ProjectablePlaylistItem) {
+  if (item.recipeBinding) {
+    const previewUrl = `/api/recipes/bindings/${item.recipeBinding.recipeBindingId}/render?mode=preview`;
+    return {
+      itemId: item.id, id: `recipe:${item.recipeBinding.recipeBindingId}`,
+      screenId: `recipe:${item.recipeBinding.recipeBindingId}`,
+      name: item.recipeBinding.name || item.recipeBinding.definition.name,
+      description: item.recipeBinding.definition.description,
+      thumbnailUrl: previewUrl, imageUrl: previewUrl, duration: item.duration, order: item.order,
+      isDesigned: false, isPlugin: true, isRecipe: true,
+      width: getJsonNumber(item.recipeBinding.settings, 'screen_width', 800),
+      height: getJsonNumber(item.recipeBinding.settings, 'screen_height', 480),
+    };
+  }
   if (item.pluginInstance) {
     const previewUrl = `/api/plugins/instances/${item.pluginInstance.id}/render?mode=preview`;
     return {
@@ -126,7 +145,7 @@ export class PlaylistsService {
     const parsed = parsePlaylistTargets(screens);
     parsed.invalid.forEach((source) => this.logger.warn(`Invalid playlist target: ${source}`));
 
-    const [designs, regularScreens, plugins] = await Promise.all([
+    const [designs, regularScreens, plugins, recipes] = await Promise.all([
       parsed.designIds.length
         ? database.screenDesign.findMany({ where: { id: { in: parsed.designIds } }, select: { id: true } })
         : Promise.resolve([]),
@@ -136,11 +155,15 @@ export class PlaylistsService {
       parsed.pluginIds.length
         ? database.pluginInstance.findMany({ where: { id: { in: parsed.pluginIds } }, select: { id: true } })
         : Promise.resolve([]),
+      parsed.recipeIds.length
+        ? database.recipeBinding.findMany({ where: { recipeBindingId: { in: parsed.recipeIds } }, select: { recipeBindingId: true } })
+        : Promise.resolve([]),
     ]);
     const result = materializePlaylistItems(playlistId, parsed, {
       designIds: new Set(designs.map(({ id }) => id)),
       regularIds: new Set(regularScreens.map(({ id }) => id)),
       pluginIds: new Set(plugins.map(({ id }) => id)),
+      recipeIds: new Set(recipes.map(({ recipeBindingId }) => recipeBindingId)),
     });
     result.missing.forEach(({ kind, id }) => this.logger.warn(`Playlist ${kind} target not found: ${id}`));
 
@@ -168,6 +191,8 @@ export class PlaylistsService {
           include: {
             screen: true,
             screenDesign: true,
+            pluginInstance: { include: { plugin: true } },
+            recipeBinding: { include: { definition: true } },
           },
           orderBy: {
             order: 'asc',
@@ -188,6 +213,8 @@ export class PlaylistsService {
             include: {
               screen: true,
               screenDesign: true,
+              pluginInstance: { include: { plugin: true } },
+              recipeBinding: { include: { definition: true } },
             },
             orderBy: {
               order: 'asc',
@@ -252,6 +279,7 @@ export class PlaylistsService {
             pluginInstance: {
               include: { plugin: true },
             },
+            recipeBinding: { include: { definition: true } },
           },
           orderBy: {
             order: 'asc',
@@ -352,6 +380,7 @@ export class PlaylistsService {
                 screen: true,
                 screenDesign: true,
                 pluginInstance: { include: { plugin: true } },
+                recipeBinding: { include: { definition: true } },
               },
               orderBy: {
                 order: 'asc',

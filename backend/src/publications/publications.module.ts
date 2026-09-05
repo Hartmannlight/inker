@@ -5,9 +5,10 @@ import { PublicationsController } from './publications.controller';
 import { CustomWidgetsModule } from '../custom-widgets/custom-widgets.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ScreenRendererService } from '../screen-designer/services/screen-renderer.service';
+import { RecipesModule } from '../recipes/recipes.module';
 
 @Module({
-  imports: [PublicationsCoreModule, CustomWidgetsModule, SettingsModule],
+  imports: [PublicationsCoreModule, CustomWidgetsModule, SettingsModule, RecipesModule],
   controllers: [PublicationsController],
   providers: [PublishService, ScreenRendererService],
   exports: [PublicationsCoreModule, PublishService],

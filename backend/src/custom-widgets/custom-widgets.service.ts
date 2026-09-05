@@ -4,6 +4,7 @@ import {
   Logger,
   BadRequestException,
   ServiceUnavailableException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DataSourcesService } from '../data-sources/data-sources.service';
@@ -13,6 +14,7 @@ import { CreateCustomWidgetDto } from './dto/create-custom-widget.dto';
 import { UpdateCustomWidgetDto } from './dto/update-custom-widget.dto';
 import { wrapPaginatedResponse } from '../common/utils/response.util';
 import { CUSTOM_WIDGET_TEMPLATE_OFFSET } from '../common/constants/widget.constants';
+import { SourceReadService } from '../sources/source-read.service';
 
 /** Safe dataSource select — never exposes headers to the frontend */
 const SAFE_DATASOURCE_SELECT = {
@@ -22,6 +24,10 @@ const SAFE_DATASOURCE_SELECT = {
   isActive: true,
   lastFetchedAt: true,
   lastError: true,
+} as const;
+const SAFE_SOURCE_SELECT = {
+  sourceDefinitionId: true, name: true, connectorType: true, enabled: true,
+  lastAttemptAt: true, lastSuccessAt: true, consecutiveFailures: true,
 } as const;
 
 @Injectable()
@@ -33,18 +39,23 @@ export class CustomWidgetsService {
     private dataSourcesService: DataSourcesService,
     private eventsService: EventsService,
     private scriptExecutor: ScriptExecutorService,
+    @Optional() private sourceReads?: SourceReadService,
   ) {}
 
   /**
    * Create a new custom widget
    */
   async create(createCustomWidgetDto: CreateCustomWidgetDto) {
-    // Verify data source exists
-    const dataSource = await this.prisma.dataSource.findUnique({
-      where: { id: createCustomWidgetDto.dataSourceId },
-    });
-
-    if (!dataSource) {
+    if (!createCustomWidgetDto.sourceDefinitionId && !createCustomWidgetDto.dataSourceId) {
+      throw new BadRequestException('Source definition is required');
+    }
+    const source = createCustomWidgetDto.sourceDefinitionId || this.sourceReads
+      ? createCustomWidgetDto.sourceDefinitionId
+        ? await this.prisma.sourceDefinition.findUnique({ where: { sourceDefinitionId: createCustomWidgetDto.sourceDefinitionId } })
+        : await this.prisma.sourceDefinition.findUnique({ where: { legacyDataSourceId: createCustomWidgetDto.dataSourceId } })
+      : null;
+    if ((createCustomWidgetDto.sourceDefinitionId || this.sourceReads) && !source) throw new BadRequestException('Source definition not found');
+    if (!source && createCustomWidgetDto.dataSourceId && !await this.prisma.dataSource.findUnique({ where: { id: createCustomWidgetDto.dataSourceId } })) {
       throw new BadRequestException('Data source not found');
     }
 
@@ -53,6 +64,7 @@ export class CustomWidgetsService {
         name: createCustomWidgetDto.name,
         description: createCustomWidgetDto.description,
         dataSourceId: createCustomWidgetDto.dataSourceId,
+        sourceDefinitionId: source?.sourceDefinitionId,
         displayType: createCustomWidgetDto.displayType,
         template: createCustomWidgetDto.template,
         config: (createCustomWidgetDto.config || {}) as object,
@@ -61,6 +73,7 @@ export class CustomWidgetsService {
       },
       include: {
         dataSource: { select: SAFE_DATASOURCE_SELECT },
+        sourceDefinition: { select: SAFE_SOURCE_SELECT },
       },
     });
 
@@ -79,6 +92,7 @@ export class CustomWidgetsService {
       this.prisma.customWidget.findMany({
         include: {
           dataSource: { select: SAFE_DATASOURCE_SELECT },
+          sourceDefinition: { select: SAFE_SOURCE_SELECT },
         },
         orderBy: {
           createdAt: 'desc',
@@ -100,6 +114,7 @@ export class CustomWidgetsService {
       where: { id },
       include: {
         dataSource: { select: SAFE_DATASOURCE_SELECT },
+        sourceDefinition: { select: SAFE_SOURCE_SELECT },
       },
     });
 
@@ -122,15 +137,17 @@ export class CustomWidgetsService {
       throw new NotFoundException('Custom widget not found');
     }
 
-    // Verify new data source exists if changing
-    if (updateCustomWidgetDto.dataSourceId) {
-      const dataSource = await this.prisma.dataSource.findUnique({
-        where: { id: updateCustomWidgetDto.dataSourceId },
-      });
-
-      if (!dataSource) {
-        throw new BadRequestException('Data source not found');
-      }
+    let sourceDefinitionId = updateCustomWidgetDto.sourceDefinitionId;
+    if (this.sourceReads && !sourceDefinitionId && updateCustomWidgetDto.dataSourceId) {
+      sourceDefinitionId = (await this.prisma.sourceDefinition.findUnique({
+        where: { legacyDataSourceId: updateCustomWidgetDto.dataSourceId }, select: { sourceDefinitionId: true },
+      }))?.sourceDefinitionId;
+    }
+    if (this.sourceReads && (updateCustomWidgetDto.sourceDefinitionId || updateCustomWidgetDto.dataSourceId) && !sourceDefinitionId) {
+      throw new BadRequestException('Source definition not found');
+    }
+    if (!this.sourceReads && updateCustomWidgetDto.dataSourceId && !await this.prisma.dataSource.findUnique({ where: { id: updateCustomWidgetDto.dataSourceId } })) {
+      throw new BadRequestException('Data source not found');
     }
 
     const updatedWidget = await this.prisma.customWidget.update({
@@ -139,6 +156,7 @@ export class CustomWidgetsService {
         name: updateCustomWidgetDto.name,
         description: updateCustomWidgetDto.description,
         dataSourceId: updateCustomWidgetDto.dataSourceId,
+        sourceDefinitionId,
         displayType: updateCustomWidgetDto.displayType,
         template: updateCustomWidgetDto.template,
         config: updateCustomWidgetDto.config as object | undefined,
@@ -147,6 +165,7 @@ export class CustomWidgetsService {
       },
       include: {
         dataSource: { select: SAFE_DATASOURCE_SELECT },
+        sourceDefinition: { select: SAFE_SOURCE_SELECT },
       },
     });
 
@@ -217,6 +236,7 @@ export class CustomWidgetsService {
       where: { id },
       include: {
         dataSource: { select: SAFE_DATASOURCE_SELECT },
+        sourceDefinition: { select: SAFE_SOURCE_SELECT },
       },
     });
 
@@ -225,10 +245,11 @@ export class CustomWidgetsService {
     }
 
     // The data-source boundary reads persisted snapshots only.
-    const data = await this.dataSourcesService.getCachedData(
-      customWidget.dataSourceId,
-      skipFetch,
-    );
+    const data = customWidget.sourceDefinitionId && this.sourceReads
+      ? await this.sourceReads.latestValidData(customWidget.sourceDefinitionId)
+      : customWidget.dataSourceId
+        ? await this.dataSourcesService.getCachedData(customWidget.dataSourceId, skipFetch)
+        : (() => { throw new ServiceUnavailableException('SOURCE_SNAPSHOT_UNAVAILABLE'); })();
 
     // Render the data based on display type
     const renderedContent = await this.renderContent(
@@ -564,6 +585,7 @@ export class CustomWidgetsService {
             isActive: true,
           },
         },
+        sourceDefinition: { select: SAFE_SOURCE_SELECT },
       },
     });
 
@@ -572,7 +594,7 @@ export class CustomWidgetsService {
       id: CUSTOM_WIDGET_TEMPLATE_OFFSET + widget.id,
       name: `custom-${widget.id}`,
       label: widget.name,
-      description: widget.description || `Custom widget using ${widget.dataSource.name}`,
+      description: widget.description || `Custom widget using ${widget.sourceDefinition?.name ?? widget.dataSource?.name ?? 'source'}`,
       category: 'custom',
       defaultConfig: {
         // Store the actual widget ID for fetching preview data

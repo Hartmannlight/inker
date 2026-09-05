@@ -19,6 +19,7 @@ const DISPLAY_ITEM_INCLUDE = {
   screen: true,
   screenDesign: { include: { widgets: { include: { template: true } } } },
   pluginInstance: { include: { plugin: true } },
+  recipeBinding: { include: { definition: true } },
 } satisfies Prisma.PlaylistItemInclude;
 
 type DisplayPlaylistItem = Prisma.PlaylistItemGetPayload<{ include: typeof DISPLAY_ITEM_INCLUDE }>;
@@ -30,6 +31,7 @@ interface SelectedPlaylistItem {
 }
 
 function itemScreenId(item: DisplayPlaylistItem): string | null {
+  if (item.recipeBinding) return `recipe:${item.recipeBinding.recipeBindingId}`;
   if (item.screenDesign) return `design-${item.screenDesign.id}`;
   if (item.screen) return `screen-${item.screen.id}`;
   if (item.pluginInstance?.plugin) return `plugin-${item.pluginInstance.id}`;
@@ -380,6 +382,8 @@ export class DisplayService {
       ? `design-${currentScreen.screenDesign.id}`
       : currentScreen.screen
         ? `screen-${currentScreen.screen.id}`
+        : currentScreen.recipeBinding
+          ? `recipe:${currentScreen.recipeBinding.recipeBindingId}`
         : currentScreen.pluginInstance?.plugin
           ? `plugin-${currentScreen.pluginInstance.id}`
           : null;
@@ -511,6 +515,17 @@ export class DisplayService {
         refresh_at: finalRefreshAt,
         battery: updatedDevice.battery,
         wifi: updatedDevice.wifi,
+      };
+    } else if (currentScreen.recipeBinding) {
+      const binding = currentScreen.recipeBinding;
+      const timestamp = Date.now();
+      const renderUrl = `${apiUrl}/api/recipes/bindings/${binding.recipeBindingId}/render?mode=device&t=${timestamp}`;
+      return {
+        status: 0, image_url: renderUrl, filename: `recipe-${binding.definition.slug}-${timestamp}.png`,
+        image_url_timeout: 0, image_data: undefined, firmware_url: firmwareUrl,
+        update_firmware: !!firmwareUrl, refresh_rate: finalRefreshRate, reset_firmware: false,
+        special_function: '', temperature_profile: 'default', maximum_compatibility: screenChanged,
+        refresh_at: finalRefreshAt, battery: updatedDevice.battery, wifi: updatedDevice.wifi,
       };
     } else if (currentScreen.pluginInstance?.plugin) {
       // Plugin instance - render via plugin engine
@@ -933,6 +948,7 @@ export class DisplayService {
                     plugin: true,
                   },
                 },
+                recipeBinding: { include: { definition: true } },
               },
               orderBy: {
                 order: 'asc',
