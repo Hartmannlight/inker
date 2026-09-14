@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -39,6 +39,12 @@ test('real Redis and two Node adapter processes recover crashes and lost subscri
         new Response(child.stderr).text(),
         child.exited,
       ]);
+      if (code !== 0) {
+        const progress = join(directory, 'progress.txt');
+        const { stages } = require('./foundation-diagnostics.cjs');
+        const stage = existsSync(progress) ? readFileSync(progress, 'utf8') : 'start';
+        if (Object.hasOwn(stages, stage)) console.error(`FOUNDATION_DIAGNOSTIC ${stages[stage]}`);
+      }
       expect(code, out + err).toBe(0);
       console.info(out.trim());
     } finally {

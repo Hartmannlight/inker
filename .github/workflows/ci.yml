@@ -27,7 +27,8 @@ jobs:
     - name: Install locked Puppeteer browser and Linux dependencies
       run: |
         sudo apt-get update
-        sudo env "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" "$(command -v node)" backend/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
+        cli="$(node -e "const p=require('./backend/node_modules/puppeteer/package.json'); console.log('backend/node_modules/puppeteer/'+(typeof p.bin==='string'?p.bin:p.bin.puppeteer))")"
+        sudo env "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" "$(command -v node)" "$cli" browsers install chrome --install-deps
     - name: Contracts, backend and frontend typechecks, tests and builds
       run: node backend/test/run-foundation-checks.cjs --phase static
     - name: Build exact production image

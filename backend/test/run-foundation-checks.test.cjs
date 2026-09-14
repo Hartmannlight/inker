@@ -111,3 +111,13 @@ test('hung subprocess has a real deadline instead of a fabricated success', asyn
   expect(result.outcome).toBe('timeout');
   expect(result.durationMs).toBeLessThan(5000);
 });
+
+
+test('only allowlisted fixture stages survive diagnostics, never arbitrary error values', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('FOUNDATION_DIAGNOSTIC OUTBOX_WORKER_CONNECTION_READINESS\n'));
+  reader.write(Buffer.from('FOUNDATION_DIAGNOSTIC PRIVATE_SECRET\nFOUNDATION_DIAGNOSTIC OUTBOX_START token=secret\n'));
+  expect(reader.counts.diagnostic).toBe('OUTBOX_WORKER_CONNECTION_READINESS');
+  expect(JSON.stringify(reader.counts)).not.toContain('secret');
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+});

@@ -19,6 +19,7 @@ const E2E = [
   ['remote-container-fixture.cjs', 'smoke'], ['operations-container-fixture.cjs', 'smoke'],
   ['foundation-load.cjs'], ['foundation-backup-restore.cjs'],
 ];
+const { codes: diagnosticCodes } = require('./foundation-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '../..');
 function fail(code) { throw new Error(code); }
 function imageValid(image) {
@@ -122,6 +123,8 @@ function summaryReader() {
     const text = line.replace(ansi, '').trim();
     const match = /^(\d{1,7}) (pass|fail|expect\(\) calls)$/.exec(text);
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);
+    const diagnostic = /^FOUNDATION_DIAGNOSTIC ([A-Z0-9_]+)$/.exec(text);
+    if (diagnostic && diagnosticCodes.has(diagnostic[1])) counts.diagnostic = diagnostic[1];
     line = ''; dropping = false;
   }
   return { counts, write(chunk) {
@@ -143,7 +146,7 @@ function runStep(step, { root, env, node = process.execPath, bun = 'bun', testCo
     child.stderr.on('data', chunk => readers[1].write(chunk));
     const finish = code => {
       if (settled) return; settled = true; clearTimeout(timeout);
-      const counts = Object.fromEntries(Object.keys(readers[0].counts).map(key => [key, readers[1].counts[key] ?? readers[0].counts[key]]));
+      const counts = Object.fromEntries([...new Set(readers.flatMap(reader => Object.keys(reader.counts)))].map(key => [key, readers[1].counts[key] ?? readers[0].counts[key]]));
       resolve({ gate: step.id, outcome: timedOut ? 'timeout' : code === 0 ? 'passed' : 'failed',
         exitCode: Number.isInteger(code) ? code : null, durationMs: Date.now() - started, ...counts });
     };
