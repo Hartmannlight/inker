@@ -129,3 +129,12 @@ test('fixture locations expose bounded line numbers only', () => {
   expect(reader.counts.fixtureLine).toBe(140);
   expect(JSON.stringify(reader.counts)).not.toContain('secret');
 });
+
+
+test('failed test reporting permits repository filenames but never test names or unknown paths', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('test/run-foundation-checks.test.cjs:\n(fail) PRIVATE_SECRET [12ms]\n/secret/path.test.ts:\n(fail) PRIVATE_SECRET\n'));
+  expect(reader.counts.failedFile).toBe('test/run-foundation-checks.test.cjs');
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('/secret');
+});

@@ -117,11 +117,16 @@ function safeEnvironment(env, image) {
   return result;
 }
 function summaryReader() {
-  let line = '', dropping = false;
+  let line = '', dropping = false, currentTestFile;
+  const testFiles = new Set(discover(path.join(ROOT, 'backend'), name => /\.(?:test|spec)\.[cm]?[jt]s$/.test(name))
+    .map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/')));
   const counts = { passed: null, failed: null, assertions: null };
   const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
   function accept() {
     const text = line.replace(ansi, '').trim();
+    const filename = text.endsWith(':') ? text.slice(0, -1).replaceAll('\\', '/') : '';
+    if (testFiles.has(filename)) currentTestFile = filename;
+    if (/^\(fail\) /.test(text) && currentTestFile) counts.failedFile = currentTestFile;
     const match = /^(\d{1,7}) (pass|fail|expect\(\) calls)$/.exec(text);
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);
     const diagnostic = /^FOUNDATION_DIAGNOSTIC ([A-Z0-9_]+)$/.exec(text);
