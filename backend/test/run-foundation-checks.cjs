@@ -89,7 +89,7 @@ function buildPlan(root, config) {
 }
 function typecheckConfig(root) {
   const files = ['backend/src', 'backend/test'].flatMap(directory => discover(path.join(root, directory),
-    name => /(?:\.test|\.spec|\.integration)\.ts$/.test(name)));
+    name => /(?:\.test|\.spec|\.integration|\.d)\.ts$/.test(name)));
   if (!files.length) fail('FOUNDATION_TEST_TYPES_MISSING');
   return { extends: path.join(root, 'backend/tsconfig.json'), files, include: [], exclude: [],
     compilerOptions: { noEmit: true, incremental: false, module: 'ESNext', moduleResolution: 'Node' } };

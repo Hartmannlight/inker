@@ -8,7 +8,7 @@ import { basename, join, resolve, sep } from 'node:path';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { hashToken, generateToken } from '../src/common/utils/crypto.util';
 import { PublicationPersistenceService } from '../src/publications/publication-persistence.service';
-import { PublishService } from '../src/publications/publish.service';
+import { PublishService } from './fixtures/services';
 import { canonicalJson, sha256 } from '../src/publications/publication-content';
 import { PullDeviceAuthService } from '../src/device-platform/pull-device-auth.service';
 import { FederationIdentityService } from '../src/federation/federation-identity.service';

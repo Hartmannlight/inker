@@ -27,7 +27,7 @@ describe('OutboxDispatcher durable observability', () => {
     h.store.ack.mockImplementation(async () => { seen.push(currentCorrelation()); return true; });
     await runWithCorrelation(createCorrelationContext(), () => h.dispatcher.dispatch(h.job, undefined, 'timer'));
     expect(seen).toEqual([outboxCorrelation(h.event), outboxCorrelation(h.event)]);
-    const values = logs.mock.calls.map(call => call[0]);
+    const values = logs.mock.calls.map((call: [Record<string, unknown>, ...unknown[]]) => call[0]);
     expect(values).toContainEqual(expect.objectContaining({ code: 'JOB_STARTED', correlationId: h.event.correlationId, eventId: h.event.eventId }));
     expect(values).toContainEqual(expect.objectContaining({ code: 'JOB_COMPLETED', outcome: 'success', queue: 'timer' }));
     expect(h.store.fail).not.toHaveBeenCalled(); expect(currentCorrelation()).toBeUndefined();
@@ -37,14 +37,14 @@ describe('OutboxDispatcher durable observability', () => {
     await h.dispatcher.dispatch(h.job, undefined, 'timer'); await h.dispatcher.dispatch(h.job, undefined, 'timer');
     expect(seen).toEqual([outboxCorrelation(h.event), outboxCorrelation(h.event)]);
     expect(JSON.stringify(warnings.mock.calls)).not.toContain('bearer-secret-from-provider');
-    expect(warnings.mock.calls.some(call => call[0].code === 'JOB_FAILED')).toBe(true);
+    expect(warnings.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].code === 'JOB_FAILED')).toBe(true);
     expect(h.store.ack).not.toHaveBeenCalled(); expect(h.store.fail).toHaveBeenCalledTimes(2);
   });
   test('a stale ack is observable without reporting successful delivery', async () => {
     const h = setup(async () => {}); h.store.ack.mockResolvedValue(false);
     await h.dispatcher.dispatch(h.job, undefined, 'timer');
-    expect(warnings.mock.calls.some(call => call[0].code === 'JOB_STALE')).toBe(true);
-    expect(logs.mock.calls.some(call => call[0].code === 'JOB_COMPLETED')).toBe(false);
+    expect(warnings.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].code === 'JOB_STALE')).toBe(true);
+    expect(logs.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].code === 'JOB_COMPLETED')).toBe(false);
   });
   test('wrong queue and pre-abort never invoke the domain handler', async () => {
     const h = setup(async () => {});
@@ -52,7 +52,7 @@ describe('OutboxDispatcher durable observability', () => {
     const abort = new AbortController(); abort.abort();
     await h.dispatcher.dispatch(h.job, abort.signal, 'timer');
     expect(h.timer.completeDue).not.toHaveBeenCalled(); expect(h.store.ack).not.toHaveBeenCalled();
-    expect(warnings.mock.calls.some(call => call[0].outcome === 'aborted')).toBe(true);
+    expect(warnings.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].outcome === 'aborted')).toBe(true);
   });
   test('metric exhaustion does not turn a committed acknowledgement into a retry', async () => {
     const metric = spyOn(runtimeMetrics, 'recordJob').mockImplementation(() => { throw new Error('metric limit'); });
@@ -65,7 +65,7 @@ describe('OutboxDispatcher durable observability', () => {
     const h = setup(async () => {});
     h.event.eventType = SOURCE_REFRESH;
     h.event.aggregateId = 'malformed-source-id';
-    const execute = mock(async () => { throw new Error('OUTBOX_INVALID_PAYLOAD'); });
+    const execute = mock(async (_event: OutboxEvent, _signal: AbortSignal) => { throw new Error('OUTBOX_INVALID_PAYLOAD'); });
     (h.dispatcher as unknown as {
       domainHandlers: Map<string, (event: OutboxEvent, signal: AbortSignal) => Promise<'complete'>>;
     }).domainHandlers.set(SOURCE_REFRESH, async (event, signal) => {
@@ -76,7 +76,7 @@ describe('OutboxDispatcher durable observability', () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(h.store.fail).toHaveBeenCalledWith(h.event, 'OUTBOX_INVALID_PAYLOAD');
     expect(h.store.ack).not.toHaveBeenCalled();
-    expect(warnings.mock.calls.some(call => call[0].code === 'JOB_FAILED')).toBe(true);
+    expect(warnings.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].code === 'JOB_FAILED')).toBe(true);
   });
   test('a scheduler refill starts a fresh context instead of inheriting an unrelated completed job', async () => {
     const h = setup(async () => {});

@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Test } from "@nestjs/testing";
-import { PlaybackService } from "../src/playback/playback.service";
+import { PlaybackService } from './fixtures/services';
 import { PublicationPersistenceService } from "../src/publications/publication-persistence.service";
-import { PublishService } from "../src/publications/publish.service";
+import { PublishService } from './fixtures/services';
 import { PublicationCleanupService } from "../src/publications/publication-cleanup.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { OutboxStore } from "../src/events/outbox.store";
@@ -19,7 +19,7 @@ import {
 } from "../src/playback/playback.events";
 import { DevicePlatformModule } from "../src/device-platform/device-platform.module";
 import { EventsModule } from "../src/events/events.module";
-import { PresentationService } from "../src/device-platform/presentation.service";
+import { PresentationService } from './fixtures/services';
 import { PullContentService } from "../src/device-platform/pull-content.service";
 
 const root = resolve(import.meta.dir, "..");

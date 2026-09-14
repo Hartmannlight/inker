@@ -18,7 +18,7 @@ describe('ScreenDesignerController preview', () => {
   test('returns an authenticated PNG thumbnail with a stable ETag', async () => {
     const designs = { getScreenDesign: mock(async () => ({ id: 5 })) };
     const renderer = { renderPreview: mock(async () => Buffer.from('preview-pixels')) };
-    const controller = new ScreenDesignerController(designs as any, {} as any, renderer as any);
+    const controller = new ScreenDesignerController(designs as any, {} as any, renderer as any, {} as any);
     const result = response();
     await controller.getPreview(5, undefined, result);
     expect(result.type).toHaveBeenCalledWith('image/png');
@@ -29,7 +29,7 @@ describe('ScreenDesignerController preview', () => {
   test('honours a matching ETag without sending pixels', async () => {
     const designs = { getScreenDesign: mock(async () => ({ id: 5 })) };
     const renderer = { renderPreview: mock(async () => Buffer.from('preview-pixels')) };
-    const controller = new ScreenDesignerController(designs as any, {} as any, renderer as any);
+    const controller = new ScreenDesignerController(designs as any, {} as any, renderer as any, {} as any);
     const result = response();
     const etag = createHash('sha256').update('preview-pixels').digest('hex');
     await controller.getPreview(5, `W/"${etag}"`, result);

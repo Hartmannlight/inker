@@ -54,7 +54,7 @@ describe('PresentationService', () => {
       contentHash: sha256(canonicalJson(content)), publishedAt: new Date('2026-08-30'), createdAt: new Date('2026-08-30') };
     prisma.device.findUnique.mockResolvedValue({ ...device, configuration: { displayControl: { backgroundColor: '#000000' } },
       publicationState: { desiredSequence: 5, desiredRevision: revision } });
-    const themed = { format: 'png', mimeType: 'image/png', width: 480, height: 480, colorSpace: 'rgb', bitDepth: 24,
+    const themed: import('../publications/publication-content').PublishedArtifact = { format: 'png', mimeType: 'image/png', width: 480, height: 480, colorSpace: 'rgb', bitDepth: 24,
       rotation: 0, bytes: Buffer.from('dark-preview'), sha256: sha256(Buffer.from('dark-preview')) };
     const resolver = { resolve: async (device: any) => ({
       configuration: resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride),

@@ -12,6 +12,7 @@ describe('legacy plugin snapshot boundary', () => {
 
   function harness(lastData: unknown = { temperature: 21 }) {
     const plugin = {
+      createdAt: new Date(0), updatedAt: new Date(0), description: null, icon: null, category: 'custom', dataStrategy: 'polling', dataMethod: 'GET', dataPath: null, markupHalfHorizontal: null, markupHalfVertical: null, markupQuadrant: null, oauthScopes: null, isInstalled: true, isBuiltin: false, source: 'inker', sourceUrl: null, sourceHash: null, version: null,
       id: 1, name: 'Legacy', slug: 'grafana_panel', refreshInterval: 1,
       dataTransform: 'while (true) {}', dataUrl: 'http://127.0.0.1/private',
       dataHeaders: { Authorization: 'Bearer provider-token' },
@@ -19,6 +20,7 @@ describe('legacy plugin snapshot boundary', () => {
       markupFull: '{{ temperature }}', oauthProvider: 'example',
     };
     const instance = {
+      createdAt: new Date(0), updatedAt: new Date(0), oauthExpiresAt: null,
       id: 2, pluginId: 1, name: 'Stored', plugin,
       settings: { title: 'Stored title', customCredential: 'plaintext-value', dashboard_uid: 'd1', panel_id: 1 },
       settingsEncrypted: { customCredential: 'encrypted-value' },
@@ -152,7 +154,7 @@ describe('legacy plugin snapshot boundary', () => {
     const h = harness();
     await expect(h.service.previewPlugin(h.plugin)).rejects.toThrow('SOURCE_SNAPSHOT_UNAVAILABLE');
     expect(h.renderer.renderToPng).not.toHaveBeenCalled();
-    await h.service.previewPlugin({ ...h.plugin, instances: [h.instance] });
+    await h.service.previewPlugin({ ...h.plugin, instances: [{ ...h.instance, lastData: { temperature: 21 } }] });
     expect(h.renderer.renderToPng).toHaveBeenCalledTimes(1);
   });
 });

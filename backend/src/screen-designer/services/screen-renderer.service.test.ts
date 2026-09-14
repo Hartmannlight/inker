@@ -26,18 +26,17 @@ type InternalRenderer = {
 function widget(name: string, config: Widget['config']): Widget {
   return {
     id: 1, screenDesignId: 1, templateId: 1, x: 0, y: 0, width: 120, height: 80,
-    rotation: 0, zIndex: 0, config, createdAt: new Date(0), updatedAt: new Date(0),
+    rotation: 0, zIndex: 0, config,
     template: {
-      id: 1, name, label: name, description: null, category: 'test', defaultConfig: {},
-      minWidth: 1, minHeight: 1, createdAt: new Date(0),
+      name, label: name,
     },
   };
 }
 
 function design(widgets: Widget[]): Design {
   return {
-    id: 1, name: 'isolated renderer test', description: null, width: 120, height: 80,
-    background: '#fff', isTemplate: false, createdAt: new Date(0), updatedAt: new Date(0), widgets,
+    id: 1, name: 'isolated renderer test', width: 120, height: 80,
+    background: '#fff', widgets,
   };
 }
 
@@ -113,7 +112,7 @@ describe('legacy renderer persisted-input boundary', () => {
   });
 
   it('fetches weather and GitHub only from their fixed public capture connectors', async () => {
-    const fetch = spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const fetch = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
       const url = String(input);
       if (url.startsWith('https://api.open-meteo.com/v1/forecast?')) return new Response(JSON.stringify({
         current: { temperature_2m: 21, weather_code: 1, relative_humidity_2m: 55, wind_speed_10m: 8 },
@@ -123,7 +122,7 @@ describe('legacy renderer persisted-input boundary', () => {
         stargazers_count: 42, full_name: 'private-owner/private-repo',
       }), { status: 200 });
       throw new Error(`Unexpected connector URL: ${url}`);
-    });
+    }, { preconnect: () => { throw new Error('Unexpected preconnect'); } }));
     try {
       for (const name of ['weather', 'github']) {
         expect((await internal.renderWidget(widget(name, {}))).length).toBeGreaterThan(0);

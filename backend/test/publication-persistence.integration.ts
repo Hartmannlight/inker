@@ -21,8 +21,8 @@ import { HttpPullTransportAdapter } from '../src/device-platform/http-pull.trans
 import { TransportAdapterRegistry } from '../src/device-platform/transport-adapter.registry';
 import { hashToken } from '../src/common/utils/crypto.util';
 import { randomUUID } from 'node:crypto';
-import { PublishService } from '../src/publications/publish.service';
-import { PresentationService } from '../src/device-platform/presentation.service';
+import { PublishService } from './fixtures/services';
+import { PresentationService, fixtureArtifacts } from './fixtures/services';
 import { canonicalJson, publicationAllowedActions, sha256 } from '../src/publications/publication-content';
 import { normalizePublicationActions } from '../src/publications/publication-actions';
 import { ArtifactStore } from '../src/render-cache/artifact-store';
@@ -212,7 +212,8 @@ describe("publication persistence boundary", () => {
       expect(ready.manifest.allowedActions).toEqual(allowedActions);
       expect(ready.manifest.metadata?.fallback).toBe(false);
       const withoutCache = new PullContentService(prisma as PrismaService, module.get(ProfileResolverService),
-        module.get(DeliveryPolicyRegistry), module.get(TransportAdapterRegistry), module.get(PullLastSeenService));
+        module.get(DeliveryPolicyRegistry), module.get(TransportAdapterRegistry), module.get(PullLastSeenService),
+        fixtureArtifacts(prisma as PrismaService, { read: async () => undefined } as unknown as RenderCacheService));
       expect((await withoutCache.read(await reload())).manifest.allowedActions).toEqual([]);
       const nextActions = [{ action: 'view.next', targetId: 'next-target', payloadSchemaVersion: '1.0' }];
       await publisher.publish('pull-rights', { ...command([device.id], 1), allowedActions: nextActions });
