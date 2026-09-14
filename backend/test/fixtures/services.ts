@@ -1,3 +1,6 @@
+import { ConfigModule } from '@nestjs/config';
+import { join } from 'node:path';
+import { initializeInstanceSecrets } from '../../src/config/instance-secrets';
 /** Real service wiring for fixture-image integration tests. Browser rendering must be explicit. */
 import { PublishService as ProductionPublisher } from '../../src/publications/publish.service';
 import { PlaybackService as ProductionPlayback } from '../../src/playback/playback.service';
@@ -38,4 +41,10 @@ export class PresentationService extends ProductionPresentation {
     super(prisma, new DeviceArtifactResolverService(prisma, cache,
       new DynamicDesignArtifactService(prisma, unsupported('screen renderer'))), new PullArtifactLeaseService());
   }
+}
+
+export function fixtureConfig(directory: string) {
+  const secretPath = join(directory, 'secrets', 'instance.json');
+  initializeInstanceSecrets({ secretPath, databasePath: join(directory, 'test.db'), allowExistingDatabase: true });
+  return ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [() => ({ encryption: { secretPath } })] });
 }

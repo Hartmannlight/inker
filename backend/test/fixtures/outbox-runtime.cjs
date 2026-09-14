@@ -7,6 +7,8 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 }).outputText, filename);
 const { PrismaClient } = require('@prisma/client');
 const { Test } = require('@nestjs/testing');
+const { ConfigModule } = require('@nestjs/config');
+const { initializeInstanceSecrets } = require('../../src/config/instance-secrets');
 const { OutboxModule } = require('../../src/events/outbox.module');
 const { ApiDeliveryModule, ApiDeliveryLifecycle } = require('../../src/device-platform/api-delivery.module');
 const { PublicationsModule } = require('../../src/publications/publications.module');
@@ -23,10 +25,14 @@ const { RenderCacheService } = require('../../src/render-cache/render-cache.serv
 const DESIRED_EVENT = 'device.publication.desired-revision.changed';
 
 async function main() {
+  const databasePath = process.env.DATABASE_URL.slice(5);
+  const secretPath = require('node:path').join(require('node:path').dirname(databasePath), 'secrets', 'instance.json');
+  initializeInstanceSecrets({ secretPath, databasePath, allowExistingDatabase: true });
+  const config = ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [() => ({ encryption: { secretPath } })] });
   const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
   // This adapter fault harness intentionally composes both roles; separate
   // production bootstraps are exercised by the worker/container integration.
-  const module = await Test.createTestingModule({ imports: [OutboxModule, ApiDeliveryModule, PublicationsModule] }).overrideProvider(PrismaService).useValue(p).compile();
+  const module = await Test.createTestingModule({ imports: [config, OutboxModule, ApiDeliveryModule, PublicationsModule] }).overrideProvider(PrismaService).useValue(p).compile();
   const app = module.createNestApplication();
   await app.listen(0, '127.0.0.1');
   process.send({ ready: true, url: `ws://127.0.0.1:${app.getHttpServer().address().port}/api/device-connect` });

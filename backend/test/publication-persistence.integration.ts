@@ -1,3 +1,5 @@
+import { PresentationService as ProductionPresentationService } from '../src/device-platform/presentation.service';
+import { DeviceArtifactResolverService } from '../src/device-platform/device-artifact-resolver.service';
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { PrismaClient } from "@prisma/client";
 import type { PresentationManifest } from '@inker/contracts';
@@ -22,7 +24,7 @@ import { TransportAdapterRegistry } from '../src/device-platform/transport-adapt
 import { hashToken } from '../src/common/utils/crypto.util';
 import { randomUUID } from 'node:crypto';
 import { PublishService } from './fixtures/services';
-import { PresentationService, fixtureArtifacts } from './fixtures/services';
+import { PresentationService, fixtureArtifacts, fixtureConfig } from './fixtures/services';
 import { canonicalJson, publicationAllowedActions, sha256 } from '../src/publications/publication-content';
 import { normalizePublicationActions } from '../src/publications/publication-actions';
 import { ArtifactStore } from '../src/render-cache/artifact-store';
@@ -106,6 +108,7 @@ describe("publication persistence boundary", () => {
   async function target(name = 'browser', pull = false) {
     return prisma.device.create({ data: { name, externalId: name, lastSeenAt: new Date(),
       profileId: pull ? 'trmnl-byod-7.5-mono' : 'browser-hd-1920x1080',
+      capabilitiesOverride: pull ? undefined : { display: { width: 800, height: 480, colorSpace: 'monochrome', bitDepth: 1, renderFormats: ['png'], mimeTypes: ['image/png'] } },
       deliveryPolicyId: pull ? 'reference-sleepy' : 'reference-connected-browser' } });
   }
   function command(deviceIds: number[] = [], expectedRevision = 0) {
@@ -178,7 +181,7 @@ describe("publication persistence boundary", () => {
     expect(await prisma.outboxEvent.count()).toBe(0);
   });
 
-  test('WP-23 actual rendered pull rights are revoked on cache miss, fallback and mismatched revision', async () => {
+  test('WP-23 current immutable pull artifacts retain rights; fallback and mismatched revisions revoke them', async () => {
     const device = await target('action-pull', true);
     const allowedActions = [{ action: 'view.next', payloadSchemaVersion: '1.0' }];
     await publisher.publish('pull-rights', { ...command([device.id]), allowedActions });
@@ -192,6 +195,7 @@ describe("publication persistence boundary", () => {
       PullContentService, PullLastSeenService, ProfileResolverService, DeviceConfigurationService,
       HttpPullTransportAdapter, TransportAdapterRegistry,
       { provide: PrismaService, useValue: prisma }, { provide: RenderCacheService, useValue: cache },
+      { provide: DeviceArtifactResolverService, useValue: fixtureArtifacts(prisma as PrismaService, cache) },
       { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy()]) },
     ] }).compile();
     await module.init();
@@ -206,7 +210,7 @@ describe("publication persistence boundary", () => {
       expect(await store.ack(event!)).toBe(true);
     }
     try {
-      expect((await read()).manifest.allowedActions).toEqual([]);
+      expect((await read()).manifest.allowedActions).toEqual(allowedActions);
       await render();
       const ready = await read();
       expect(ready.manifest.allowedActions).toEqual(allowedActions);
@@ -214,7 +218,7 @@ describe("publication persistence boundary", () => {
       const withoutCache = new PullContentService(prisma as PrismaService, module.get(ProfileResolverService),
         module.get(DeliveryPolicyRegistry), module.get(TransportAdapterRegistry), module.get(PullLastSeenService),
         fixtureArtifacts(prisma as PrismaService, { read: async () => undefined } as unknown as RenderCacheService));
-      expect((await withoutCache.read(await reload())).manifest.allowedActions).toEqual([]);
+      expect((await withoutCache.read(await reload())).manifest.allowedActions).toEqual(allowedActions);
       const nextActions = [{ action: 'view.next', targetId: 'next-target', payloadSchemaVersion: '1.0' }];
       await publisher.publish('pull-rights', { ...command([device.id], 1), allowedActions: nextActions });
       await cache.request(device.id);
@@ -270,12 +274,13 @@ describe("publication persistence boundary", () => {
     try {
       const targetDevice = await target('captured-design');
       const draft = { screenDesignId: design.id, expectedUpdatedAt: design.updatedAt.toISOString() };
-      const result = await publisher.publish('captured-design', { idempotencyKey: randomUUID(), expectedRevision: 0,
+      const designPublisher = new PublishService(prisma as PrismaService, persistence, { renderScreenDesign: async () => png.bytes } as never);
+      const result = await designPublisher.publish('captured-design', { idempotencyKey: randomUUID(), expectedRevision: 0,
         deviceIds: [targetDevice.id], draft }) as any;
       const revision = await prisma.publicationRevision.findUniqueOrThrow({ where: { publicationRevisionId: result.publicationRevisionId } });
       expect(revision.content).toMatchObject({ schemaVersion: 1, image: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
       await prisma.screenDesign.update({ where: { id: design.id }, data: { name: 'Changed after capture' } });
-      await expect(publisher.publish('captured-design-change', { idempotencyKey: randomUUID(), expectedRevision: 0,
+      await expect(designPublisher.publish('captured-design-change', { idempotencyKey: randomUUID(), expectedRevision: 0,
         deviceIds: [], draft })).rejects.toThrow('Draft changed');
     } finally { unlinkSync(capturePath); }
   });
@@ -283,12 +288,12 @@ describe("publication persistence boundary", () => {
   test('WP-17 100 sequential and 100 parallel browser/pull reads perform zero SQL writes', async () => {
     const browser = await target(), pull = await target('pull', true);
     await publisher.publish('stable', command([browser.id, pull.id]));
-    const module = await Test.createTestingModule({ imports: [DevicePlatformModule, EventsModule] })
+    const module = await Test.createTestingModule({ imports: [fixtureConfig(createdDirectories[createdDirectories.length - 1]), DevicePlatformModule, EventsModule] })
       .overrideProvider(PrismaService).useValue(prisma).compile();
     const app = module.createNestApplication(); await app.init();
     try {
       const d = await prisma.device.findUniqueOrThrow({ where: { id: pull.id }, include: { profile: true, deliveryPolicy: true } });
-      const read = async () => [await module.get(PresentationService).getForDevice(browser.id), stableTimerManifest((await module.get(PullContentService).read(d)).manifest)];
+      const read = async () => [await module.get(ProductionPresentationService).getForDevice(browser.id), stableTimerManifest((await module.get(PullContentService).read(d)).manifest)];
       const before = await prisma.device.findMany();
       const reference = await read();
       writes.length = 0;
@@ -341,6 +346,7 @@ describe("publication persistence boundary", () => {
       const screen = await prisma.screen.create({ data: { name: 'secret-metadata-not-copied', imageUrl: `/uploads/screens/${filename}` } });
       const input = { ...command([d.id]), draft: { screenId: screen.id, expectedUpdatedAt: screen.updatedAt.toISOString() } };
       const result = await publisher.publish('upload', input) as any;
+      await prisma.device.update({ where: { id: d.id }, data: { capabilitiesOverride: { display: { width: 800, height: 480, colorSpace: 'rgb', bitDepth: 24, renderFormats: ['png'], mimeTypes: ['image/png'] } } } });
       const service = new PresentationService(prisma as any);
       const manifest = await service.getForDevice(d.id);
       const hash = manifest.content.url.split('/').pop()!;
@@ -402,7 +408,7 @@ describe("publication persistence boundary", () => {
   });
 
   test('WP-17 APIs preserve admin/CSRF, device auth before 304 and isolated read-only manifests', async () => {
-    const module = await Test.createTestingModule({ imports: [DevicePlatformModule, PublicationsModule, EventsModule], providers: [
+    const module = await Test.createTestingModule({ imports: [fixtureConfig(createdDirectories[createdDirectories.length - 1]), DevicePlatformModule, PublicationsModule, EventsModule], providers: [
       { provide: APP_GUARD, useClass: PinAuthGuard },
       { provide: AdminSessionService, useValue: { validate: async (token: string) => token === 'test-session' ? { sessionId: 'session', adminId: 'admin' } : null, verifyCsrf: async (_id: string, token: string) => token === 'test-csrf' } },
     ] }).overrideProvider(PrismaService).useValue(prisma).compile();
@@ -734,6 +740,7 @@ describe("publication persistence boundary", () => {
         PullContentService, PullDeviceAuthService, PullLastSeenService, ProfileResolverService,
         DeviceConfigurationService, HttpPullTransportAdapter, TransportAdapterRegistry,
         { provide: PrismaService, useValue: prisma },
+        { provide: DeviceArtifactResolverService, useValue: fixtureArtifacts(prisma as PrismaService) },
         { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy()]) },
       ] }).compile();
       await module.init();

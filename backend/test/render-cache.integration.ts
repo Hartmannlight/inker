@@ -1,3 +1,5 @@
+import { DeviceArtifactResolverService } from '../src/device-platform/device-artifact-resolver.service';
+import { fixtureArtifacts } from './fixtures/services';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawn } from 'bun';
 import { PrismaClient, type OutboxEvent, type Prisma } from '@prisma/client';
@@ -336,6 +338,7 @@ describe('WP-19 persistent render cache', () => {
     const { key } = await requestAndRender();
     pullModule = await Test.createTestingModule({ imports: [DiscoveryModule], providers: [
       { provide: PrismaService, useValue: prisma }, { provide: RenderCacheService, useValue: cache },
+      { provide: DeviceArtifactResolverService, useValue: fixtureArtifacts(prisma as PrismaService, cache) },
       { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([
         new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy(),
       ]) },
