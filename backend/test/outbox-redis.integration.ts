@@ -44,6 +44,9 @@ test('real Redis and two Node adapter processes recover crashes and lost subscri
         const { stages } = require('./foundation-diagnostics.cjs');
         const stage = existsSync(progress) ? readFileSync(progress, 'utf8') : 'start';
         if (Object.prototype.hasOwnProperty.call(stages, stage)) console.error(`FOUNDATION_DIAGNOSTIC ${stages[stage]}`);
+        // A fixed fixture filename plus bounded line numbers, never exception text.
+        for (const location of err.matchAll(/outbox-redis-integration\.cjs:(\d{1,5}):\d{1,5}/g))
+          console.error(`FOUNDATION_FIXTURE_LINE ${location[1]}`);
       }
       expect(code, out + err).toBe(0);
       console.info(out.trim());

@@ -81,6 +81,7 @@ function buildPlan(root, config) {
   bun('static', 'backend-build', 'backend', 'run', 'build');
   for (const script of ['typecheck', 'test', 'build']) bun('static', `frontend-${script}`, 'frontend', 'run', script);
   add('image', 'production-image', 'docker', '.', ['build', '--tag', config.image, '.'], 2_400_000);
+  integrations.sort((a, b) => Number(b.endsWith('outbox-redis.integration.ts')) - Number(a.endsWith('outbox-redis.integration.ts')));
   for (const file of integrations) {
     const relative = path.relative(path.join(root, 'backend'), file).split(path.sep).join('/');
     bun('integration', relative, 'backend', 'test', `./${relative}`);
@@ -125,6 +126,8 @@ function summaryReader() {
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);
     const diagnostic = /^FOUNDATION_DIAGNOSTIC ([A-Z0-9_]+)$/.exec(text);
     if (diagnostic && diagnosticCodes.has(diagnostic[1])) counts.diagnostic = diagnostic[1];
+    const location = /^FOUNDATION_FIXTURE_LINE ([1-9][0-9]{0,4})$/.exec(text);
+    if (location) counts.fixtureLine = Number(location[1]);
     line = ''; dropping = false;
   }
   return { counts, write(chunk) {

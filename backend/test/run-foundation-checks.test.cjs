@@ -121,3 +121,11 @@ test('only allowlisted fixture stages survive diagnostics, never arbitrary error
   expect(JSON.stringify(reader.counts)).not.toContain('secret');
   expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
 });
+
+
+test('fixture locations expose bounded line numbers only', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('FOUNDATION_FIXTURE_LINE 140\nFOUNDATION_FIXTURE_LINE 999999999\nFOUNDATION_FIXTURE_LINE 141 secret\n'));
+  expect(reader.counts.fixtureLine).toBe(140);
+  expect(JSON.stringify(reader.counts)).not.toContain('secret');
+});

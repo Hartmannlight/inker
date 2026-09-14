@@ -13,3 +13,7 @@ engines and Docker COPY images must stay aligned.
 
 Puppeteer 25.11.0 supersedes the old Chrome 131 baseline. Browser updates may alter
 font metrics; review renderer regression failures instead of disabling them.
+
+Bun runtime updates are grouped across `.bun-version`, package metadata and the
+Docker image. Renovate 44.90.0 supports `engines.bun`; the complete CI checks the
+resulting toolchain together. See [Bun version manager](https://docs.renovatebot.com/modules/manager/bun-version/).
