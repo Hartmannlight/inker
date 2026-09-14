@@ -1,14 +1,6 @@
 name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
 permissions:
   contents: read
-
 jobs:
   foundation:
     runs-on: ubuntu-24.04
@@ -16,30 +8,69 @@ jobs:
     env:
       CI: 'true'
       INKER_SMOKE_IMAGE: inker:ci-${{ github.sha }}
-      PUPPETEER_CACHE_DIR: ${{ runner.temp }}/inker-puppeteer
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: .node-version
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: .bun-version
-      - name: Check gate discovery and runner safety
-        run: |
-          bun test ./backend/test/run-foundation-checks.test.cjs
-          node backend/test/run-foundation-checks.cjs --plan --image "$INKER_SMOKE_IMAGE"
-      - name: Install locked dependencies and generate Prisma client
-        run: node backend/test/run-foundation-checks.cjs --phase prepare
-      - name: Install locked Puppeteer browser and Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo env "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" "$(command -v node)" backend/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
-      - name: Contracts, backend and frontend typechecks, tests and builds
-        run: node backend/test/run-foundation-checks.cjs --phase static
-      - name: Build exact production image
-        run: node backend/test/run-foundation-checks.cjs --phase image --image "$INKER_SMOKE_IMAGE"
-      - name: Every SQLite and real Redis integration
-        run: node backend/test/run-foundation-checks.cjs --phase integration --image "$INKER_SMOKE_IMAGE"
-      - name: Production Docker, load, faults and backup/restore gates
-        run: node backend/test/run-foundation-checks.cjs --phase e2e --image "$INKER_SMOKE_IMAGE"
+    - name: Set browser cache path
+      run: echo "PUPPETEER_CACHE_DIR=$RUNNER_TEMP/inker-puppeteer" >> "$GITHUB_ENV"
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version-file: .node-version
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      with:
+        bun-version-file: .bun-version
+    - name: Check gate discovery and runner safety
+      run: |
+        bun test ./backend/test/run-foundation-checks.test.cjs
+        node backend/test/run-foundation-checks.cjs --plan --image "$INKER_SMOKE_IMAGE"
+    - name: Install locked dependencies and generate Prisma client
+      run: node backend/test/run-foundation-checks.cjs --phase prepare
+    - name: Install locked Puppeteer browser and Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo env "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" "$(command -v node)" backend/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
+    - name: Contracts, backend and frontend typechecks, tests and builds
+      run: node backend/test/run-foundation-checks.cjs --phase static
+    - name: Build exact production image
+      run: node backend/test/run-foundation-checks.cjs --phase image --image "$INKER_SMOKE_IMAGE"
+    - name: Every SQLite and real Redis integration
+      run: node backend/test/run-foundation-checks.cjs --phase integration --image "$INKER_SMOKE_IMAGE"
+    - name: Production Docker, load, faults and backup/restore gates
+      run: node backend/test/run-foundation-checks.cjs --phase e2e --image "$INKER_SMOKE_IMAGE"
+    - uses: Hartmannlight/pipeline-toolkit/actions/scan@abb469f033ee28e00ba1061a47dddfc7d961129a
+      with:
+        image: ${{ env.INKER_SMOKE_IMAGE }}
+    - name: Export tested image
+      run: |-
+        docker tag "$INKER_SMOKE_IMAGE" candidate:gate
+        docker save candidate:gate -o artifacts/image.tar
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: candidate-amd64
+        path: artifacts/
+        compression-level: 0
+        retention-days: 3
+  maintenance-gate:
+    name: ci-gate
+    if: always()
+    needs:
+    - foundation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - name: Require every check
+      env:
+        RESULTS: ${{ toJSON(needs) }}
+      run: |
+        python3 - <<'PY'
+        import json, os
+        results = json.loads(os.environ['RESULTS'])
+        failed = {name: value['result'] for name, value in results.items() if value['result'] not in ('success',)}
+        if failed:
+            raise SystemExit(str(failed))
+        PY
+'on':
+  pull_request:
+    branches:
+    - main
+  workflow_call: null
+  workflow_dispatch: null
