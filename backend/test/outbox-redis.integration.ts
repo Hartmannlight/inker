@@ -43,7 +43,7 @@ test('real Redis and two Node adapter processes recover crashes and lost subscri
         const progress = join(directory, 'progress.txt');
         const { stages } = require('./foundation-diagnostics.cjs');
         const stage = existsSync(progress) ? readFileSync(progress, 'utf8') : 'start';
-        if (Object.hasOwn(stages, stage)) console.error(`FOUNDATION_DIAGNOSTIC ${stages[stage]}`);
+        if (Object.prototype.hasOwnProperty.call(stages, stage)) console.error(`FOUNDATION_DIAGNOSTIC ${stages[stage]}`);
       }
       expect(code, out + err).toBe(0);
       console.info(out.trim());
