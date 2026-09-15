@@ -80,7 +80,11 @@ function buildPlan(root, config) {
   bun('static', 'backend-unit', 'backend', 'test');
   bun('static', 'backend-build', 'backend', 'run', 'build');
   for (const script of ['typecheck', 'test', 'build']) bun('static', `frontend-${script}`, 'frontend', 'run', script);
-  add('image', 'production-image', 'docker', '.', ['build', '--tag', config.image, '.'], 2_400_000);
+  const imageLabels = /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? '') ? [
+    '--label', `org.opencontainers.image.revision=${process.env.GITHUB_SHA}`,
+    '--label', 'org.opencontainers.image.source=https://github.com/Hartmannlight/inker',
+  ] : [];
+  add('image', 'production-image', 'docker', '.', ['build', '--pull', '--no-cache', ...imageLabels, '--tag', config.image, '.'], 2_400_000);
   integrations.sort((a, b) => Number(b.endsWith('outbox-redis.integration.ts')) - Number(a.endsWith('outbox-redis.integration.ts')));
   for (const file of integrations) {
     const relative = path.relative(path.join(root, 'backend'), file).split(path.sep).join('/');
