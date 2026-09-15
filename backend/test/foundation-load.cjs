@@ -722,7 +722,11 @@ async function main() {
   if (failure) throw failure;
   console.log(JSON.stringify(report));
 }
-if (require.main === module) main().catch(error => { console.error(JSON.stringify(diagnose(error))); process.exitCode = 1; });
+if (require.main === module) main().catch(error => {
+  const diagnostic = diagnose(error);
+  if (diagnostic.line) console.error(`FOUNDATION_FIXTURE_LINE ${diagnostic.line}`);
+  console.error(JSON.stringify(diagnostic)); process.exitCode = 1;
+});
 module.exports = { limits, percentile, summary, diagnose, executionOverlap, attachLiveState, acceptTimerFeed,
   exchangeEnrollmentWithRateLimit, close, isRecoverableDeliveryLeaseClose, deliveryLeaseBackoffMs,
   recordDeliveryLeaseClose, completeDeliveryLeaseRecovery, pumpLeaseReconnects, assertNoManualLeaseRecovery };

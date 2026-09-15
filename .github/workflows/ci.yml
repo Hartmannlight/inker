@@ -40,6 +40,14 @@ jobs:
       run: node backend/test/run-foundation-checks.cjs --phase integration --image "$INKER_SMOKE_IMAGE"
     - name: Production Docker, load, faults and backup/restore gates
       run: node backend/test/run-foundation-checks.cjs --phase e2e --image "$INKER_SMOKE_IMAGE"
+    - name: Retain sanitized load acceptance report
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: foundation-load-report
+        path: .tmp/foundation-load-result.json
+        if-no-files-found: ignore
+        retention-days: 3
     - uses: Hartmannlight/pipeline-toolkit/actions/scan@abb469f033ee28e00ba1061a47dddfc7d961129a
       with:
         image: ${{ env.INKER_SMOKE_IMAGE }}
