@@ -118,6 +118,14 @@ function safeEnvironment(env, image) {
 }
 function summaryReader() {
   let line = '', dropping = false, currentTestFile, currentTests = [];
+  const smokeStages = new Map();
+  for (const relative of ['test/websocket-container-smoke.cjs', ...discover(path.join(ROOT, 'backend/test/fixtures'),
+    name => name.endsWith('-container-check.cjs')).map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/'))]) {
+    fs.readFileSync(path.join(ROOT, 'backend', relative), 'utf8').split('\n').forEach((source, index) => {
+      for (const match of source.matchAll(/(?:\bstage\s*=\s*|\bsetStage\(\s*)(['"])(.*?)\1/g))
+        smokeStages.set(match[2], { file: relative, line: index + 1 });
+    });
+  }
   const testFiles = new Set(discover(path.join(ROOT, 'backend'), name => /\.(?:test|spec|integration)\.[cm]?[jt]s$/.test(name))
     .map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/')));
   const counts = { passed: null, failed: null, assertions: null };
@@ -143,6 +151,13 @@ function summaryReader() {
     if (diagnostic && diagnosticCodes.has(diagnostic[1])) counts.diagnostic = diagnostic[1];
     const location = /^FOUNDATION_FIXTURE_LINE ([1-9][0-9]{0,4})$/.exec(text);
     if (location) counts.fixtureLine = Number(location[1]);
+    const smokeStage = /^WP-15 production smoke failed at (.+)$/.exec(text);
+    const knownStage = smokeStage && smokeStages.get(smokeStage[1]);
+    if (knownStage) { counts.smokeStageFile = knownStage.file; counts.smokeStageLine = knownStage.line; }
+    const smokeLocation = /^Smoke source location: ([1-9][0-9]{0,4}):[1-9][0-9]{0,4}$/.exec(text);
+    if (smokeLocation) counts.smokeLine = Number(smokeLocation[1]);
+    const httpAssertion = /^Numeric assertion: actual=([1-5][0-9]{2}) expected=([1-5][0-9]{2})$/.exec(text);
+    if (httpAssertion) counts.httpAssertion = { actual: Number(httpAssertion[1]), expected: Number(httpAssertion[2]) };
     line = ''; dropping = false;
   }
   return { counts, write(chunk) {

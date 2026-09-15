@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, type OutboxEvent } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxStore } from '../events/outbox.store';
@@ -20,7 +20,7 @@ export class SourceWorkerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly store: OutboxStore,
-    private readonly publications: PublicationPersistenceService | undefined,
+    @Inject(PublicationPersistenceService) private readonly publications: PublicationPersistenceService | undefined,
     private readonly encryption: EncryptionService,
   ) {}
   async schedule(now = new Date()) {

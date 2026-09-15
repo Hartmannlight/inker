@@ -147,3 +147,16 @@ test('a failed integration title maps to a static source line without printing i
   expect(reader.counts.failedTestLine).toBeGreaterThan(300);
   expect(JSON.stringify(reader.counts)).not.toContain('snapshots');
 });
+
+test('container smoke diagnostics expose static source locations only', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('WP-15 production smoke failed at explicit publish\nSmoke source location: 131:7\n'));
+  reader.write(Buffer.from('WP-15 production smoke failed at PRIVATE_SECRET\nSmoke source location: 999999999:1\n'));
+  expect(reader.counts.smokeStageFile).toBe('test/websocket-container-smoke.cjs');
+  expect(reader.counts.smokeStageLine).toBeGreaterThan(100);
+  expect(reader.counts.smokeLine).toBe(131);
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('explicit publish');
+  reader.write(Buffer.from('Numeric assertion: actual=500 expected=200\nNumeric assertion: actual=123456 expected=654321\n'));
+  expect(reader.counts.httpAssertion).toEqual({ actual: 500, expected: 200 });
+});

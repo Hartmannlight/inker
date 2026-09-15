@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { execFile, execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 const { WebSocket } = require('ws');
+const { enroll, capabilitiesOverride } = require('./fixtures/device-enrollment-client.cjs');
 const name = `inker-wp25-${randomUUID().slice(0, 8)}`;
 const base = 'http://127.0.0.1:18715';
 const password = randomBytes(24).toString('hex');
@@ -96,20 +97,19 @@ async function main() {
     stage = 'admin';
     const login = await request('/api/auth/login', { method: 'POST', data: { password } }); assert.equal(login.response.status, 200);
     cookie = login.response.headers.get('set-cookie').split(';')[0]; csrf = login.response.headers.get('x-csrf-token'); secrets.push(cookie.split('=')[1], csrf);
-    const blocked = await request('/api/devices', { method: 'POST', data: { name: 'blocked', deviceType: 'web-display' }, headers: { Cookie: cookie } }); assert.equal(blocked.response.status, 403);
-    const created = await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 browser', deviceType: 'web-display' } }); assert.equal(created.response.status, 201);
-    const device = created.body; secrets.push(device.pairingToken);
+    const blocked = await request('/api/devices', { method: 'POST', data: { name: 'blocked', deviceType: 'web-display', capabilitiesOverride }, headers: { Cookie: cookie } }); assert.equal(blocked.response.status, 403);
+    const created = await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP15 browser', deviceType: 'web-display', capabilitiesOverride } }); assert.equal(created.response.status, 201);
+    const device = created.body;
     stage = 'pairing';
-    const pair = await request('/api/web-displays/pair', { method: 'POST', data: { externalId: device.externalId, pairingToken: device.pairingToken } }); assert.equal(pair.response.status, 201);
-    const token = pair.body.credential; secrets.push(token);
+    const token = await enroll(request, device, secrets);
     const http = await request(`/api/web-displays/${device.externalId}/presentation`, { headers: { Authorization: `Bearer ${token}` } }); assert.equal(http.response.status, 200);
     const active = connect(device, token); await until(() => active.messages.some(m => m.type === 'presentation.changed'));
     {
       stage = 'explicit publish';
       const deviceIds = [device.id];
       for (let i = 1; i < 20; i++) {
-        const peer = await request('/api/devices', { method: 'POST', admin: true, data: { name: `WP19 peer ${i}`, deviceType: 'web-display' } });
-        assert.equal(peer.response.status, 201); deviceIds.push(peer.body.id); secrets.push(peer.body.pairingToken);
+        const peer = await request('/api/devices', { method: 'POST', admin: true, data: { name: `WP19 peer ${i}`, deviceType: 'web-display', capabilitiesOverride } });
+        assert.equal(peer.response.status, 201); deviceIds.push(peer.body.id);
       }
       // Pause only our isolated queue to deterministically observe fallback then
       // real render completion; no renderer is mocked or replaced.

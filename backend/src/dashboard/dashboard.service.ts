@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DashboardStatsDto } from './dto/dashboard-stats.dto';
 import * as https from 'https';
-import packageMetadata from '../../package.json';
+import * as packageMetadata from '../../package.json';
 import { isNewerVersion } from '../common/utils/version.util';
 
 const CURRENT_VERSION = packageMetadata.version;
