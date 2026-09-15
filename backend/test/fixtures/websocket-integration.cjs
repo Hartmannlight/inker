@@ -9,6 +9,8 @@ require('reflect-metadata');
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021, experimentalDecorators: true, emitDecoratorMetadata: true, esModuleInterop: true },
 }).outputText, filename);
+const { ConfigModule } = require('@nestjs/config');
+const { initializeInstanceSecrets } = require('../../src/config/instance-secrets');
 const { DevicePlatformModule } = require('../../src/device-platform/device-platform.module');
 const { WebDisplayGateway } = require('../../src/device-platform/web-display.gateway');
 const { PresentationService } = require('../../src/device-platform/presentation.service');
@@ -26,11 +28,15 @@ async function until(predicate) {
 
 async function main() {
   const scenario = process.argv[2];
+  const databasePath = process.argv[3];
+  const secretPath = require('node:path').join(require('node:path').dirname(databasePath), 'secrets', 'instance.json');
+  initializeInstanceSecrets({ secretPath, databasePath, allowExistingDatabase: true });
+  const config = ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [() => ({ encryption: { secretPath } })] });
   const prisma = new PrismaClient({ datasources: { db: { url: `file:${process.argv[3].replaceAll('\\', '/')}` } } });
   let writes = 0;
   const updateMany = prisma.device.updateMany.bind(prisma.device);
   prisma.device.updateMany = args => { if (args.data.lastSeenAt) writes++; return updateMany(args); };
-  const module = await Test.createTestingModule({ imports: [DevicePlatformModule, EventsModule] }).overrideProvider(PrismaService).useValue(prisma).compile();
+  const module = await Test.createTestingModule({ imports: [config, DevicePlatformModule, EventsModule] }).overrideProvider(PrismaService).useValue(prisma).compile();
   const app = module.createNestApplication(); app.useLogger(false);
   await app.listen(0, '127.0.0.1');
   const gateway = app.get(WebDisplayGateway), telemetry = app.get(WebSocketTelemetryService);

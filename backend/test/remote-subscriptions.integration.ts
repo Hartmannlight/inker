@@ -85,6 +85,8 @@ class HookedImporter extends RemoteImportService {
 // sharing a Prisma engine/client, or requiring a second fixture file. No transaction mocks.
 const childProgram = `
 import { PrismaClient } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { EncryptionService } from './src/common/services/encryption.service';
 import { RemoteWorkerService } from './src/federation/remote-worker.service';
 import { RemoteTransport } from './src/federation/remote-transport';
 import { RemoteImportService } from './src/federation/remote-import.service';
@@ -109,7 +111,8 @@ class Transport extends RemoteTransport {
   }
 }
 class Worker extends RemoteWorkerService { createTransport() { return new Transport(); } }
-const store = new OutboxStore(p), worker = new Worker(p, store, new RemoteImportService(p, new PublicationPersistenceService(p)));
+const encryption = new EncryptionService(new ConfigService({ encryption: { secretPath: process.env.INKER_INSTANCE_SECRET_PATH } }));
+const store = new OutboxStore(p), worker = new Worker(p, store, new RemoteImportService(p, new PublicationPersistenceService(p)), encryption);
 try {
   const event = await worker.claim(input.owner);
   if (!event) console.log(JSON.stringify({ claimed: false, requests }));
