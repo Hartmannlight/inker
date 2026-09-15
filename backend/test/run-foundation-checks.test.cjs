@@ -148,6 +148,19 @@ test('a failed integration title maps to a static source line without printing i
   expect(JSON.stringify(reader.counts)).not.toContain('snapshots');
 });
 
+test('fixture JSON retains known source locations without leaking values or paths', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from(JSON.stringify({ stage: 'Redis recovery with real worker samples', secret: 'PRIVATE_SECRET',
+    frames: [{ file: 'operations-container-fixture.cjs', line: 267, column: 'PRIVATE_SECRET' },
+      { file: '/private/secret.cjs', line: 1 }, { file: 'operations-container-fixture.cjs', line: 999999999 }] }) + '\n'));
+  reader.write(Buffer.from('{"stage":"PRIVATE_SECRET","frames":[null],"message":"PRIVATE_SECRET"}\n'));
+  expect(reader.counts.fixtureStageFile).toBe('test/operations-container-fixture.cjs');
+  expect(reader.counts.fixtureStageLine).toBeGreaterThan(200);
+  expect(reader.counts.fixtureFrames).toEqual([{ file: 'test/operations-container-fixture.cjs', line: 267 }]);
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('/private');
+});
+
 test('container smoke diagnostics expose static source locations only', () => {
   const reader = summaryReader();
   reader.write(Buffer.from('WP-15 production smoke failed at explicit publish\nSmoke source location: 131:7\n'));

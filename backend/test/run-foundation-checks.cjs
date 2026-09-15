@@ -122,10 +122,12 @@ function safeEnvironment(env, image) {
 }
 function summaryReader() {
   let line = '', dropping = false, currentTestFile, currentTests = [];
-  const smokeStages = new Map();
-  for (const relative of ['test/websocket-container-smoke.cjs', ...discover(path.join(ROOT, 'backend/test/fixtures'),
+  const smokeStages = new Map(), fixtureFiles = new Map();
+  for (const relative of [...E2E.map(([file]) => `test/${file}`), ...discover(path.join(ROOT, 'backend/test/fixtures'),
     name => name.endsWith('-container-check.cjs')).map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/'))]) {
-    fs.readFileSync(path.join(ROOT, 'backend', relative), 'utf8').split('\n').forEach((source, index) => {
+    const sourceLines = fs.readFileSync(path.join(ROOT, 'backend', relative), 'utf8').split('\n');
+    fixtureFiles.set(path.basename(relative), { file: relative, lines: sourceLines.length });
+    sourceLines.forEach((source, index) => {
       for (const match of source.matchAll(/(?:\bstage\s*=\s*|\bsetStage\(\s*)(['"])(.*?)\1/g))
         smokeStages.set(match[2], { file: relative, line: index + 1 });
     });
@@ -155,6 +157,23 @@ function summaryReader() {
     if (diagnostic && diagnosticCodes.has(diagnostic[1])) counts.diagnostic = diagnostic[1];
     const location = /^FOUNDATION_FIXTURE_LINE ([1-9][0-9]{0,4})$/.exec(text);
     if (location) counts.fixtureLine = Number(location[1]);
+    // Fixture JSON may contain assertion values. Copy only locations validated
+    // against checked-in sources, never arbitrary stage names or error text.
+    if (text.startsWith('{')) {
+      try {
+        const value = JSON.parse(text);
+        const stage = smokeStages.get(value.stage);
+        if (stage) { counts.fixtureStageFile = stage.file; counts.fixtureStageLine = stage.line; }
+        if (Array.isArray(value.frames)) {
+          const frames = value.frames.slice(0, 6).flatMap(frame => {
+            const source = fixtureFiles.get(frame?.file);
+            return source && Number.isInteger(frame.line) && frame.line > 0 && frame.line <= source.lines
+              ? [{ file: source.file, line: frame.line }] : [];
+          });
+          if (frames.length) counts.fixtureFrames = frames;
+        }
+      } catch { /* Invalid or oversized diagnostics remain discarded. */ }
+    }
     const smokeStage = /^WP-15 production smoke failed at (.+)$/.exec(text);
     const knownStage = smokeStage && smokeStages.get(smokeStage[1]);
     if (knownStage) { counts.smokeStageFile = knownStage.file; counts.smokeStageLine = knownStage.line; }
