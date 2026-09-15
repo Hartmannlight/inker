@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Build shared contracts
 # =============================================================================
-FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS contracts-builder
+FROM oven/bun:1.4.2-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f AS contracts-builder
 
 WORKDIR /contracts
 
@@ -17,7 +17,7 @@ RUN bun run build
 # =============================================================================
 # Stage 2: Build frontend
 # =============================================================================
-FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS frontend-builder
+FROM oven/bun:1.4.2-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f AS frontend-builder
 
 WORKDIR /app
 
@@ -33,7 +33,7 @@ RUN bun run build
 # =============================================================================
 # Stage 3: Install backend production dependencies
 # =============================================================================
-FROM oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS backend-install
+FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS backend-install
 
 WORKDIR /app
 
@@ -82,7 +82,7 @@ RUN node --input-type=module -e "import {PUPPETEER_REVISIONS} from 'puppeteer'; 
 # =============================================================================
 # Stage 4: Build backend
 # =============================================================================
-FROM oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS backend-builder
+FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS backend-builder
 
 WORKDIR /app
 
@@ -185,7 +185,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
            /var/cache/debconf/*-old
 
 # Install Bun runtime (copy from build image)
-COPY --from=oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
 # Node.js binary for Prisma CLI (Bun's baseline mode crashes on non-AVX2 hardware)
