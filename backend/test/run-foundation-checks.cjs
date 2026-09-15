@@ -19,6 +19,7 @@ const E2E = [
   ['remote-container-fixture.cjs', 'smoke'], ['operations-container-fixture.cjs', 'smoke'],
   ['foundation-load.cjs'], ['foundation-backup-restore.cjs'],
 ];
+const { codes: diagnosticCodes } = require('./foundation-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '../..');
 function fail(code) { throw new Error(code); }
 function imageValid(image) {
@@ -80,6 +81,7 @@ function buildPlan(root, config) {
   bun('static', 'backend-build', 'backend', 'run', 'build');
   for (const script of ['typecheck', 'test', 'build']) bun('static', `frontend-${script}`, 'frontend', 'run', script);
   add('image', 'production-image', 'docker', '.', ['build', '--tag', config.image, '.'], 2_400_000);
+  integrations.sort((a, b) => Number(b.endsWith('outbox-redis.integration.ts')) - Number(a.endsWith('outbox-redis.integration.ts')));
   for (const file of integrations) {
     const relative = path.relative(path.join(root, 'backend'), file).split(path.sep).join('/');
     bun('integration', relative, 'backend', 'test', `./${relative}`);
@@ -89,7 +91,7 @@ function buildPlan(root, config) {
 }
 function typecheckConfig(root) {
   const files = ['backend/src', 'backend/test'].flatMap(directory => discover(path.join(root, directory),
-    name => /(?:\.test|\.spec|\.integration)\.ts$/.test(name)));
+    name => /(?:\.test|\.spec|\.integration|\.d)\.ts$/.test(name)));
   if (!files.length) fail('FOUNDATION_TEST_TYPES_MISSING');
   return { extends: path.join(root, 'backend/tsconfig.json'), files, include: [], exclude: [],
     compilerOptions: { noEmit: true, incremental: false, module: 'ESNext', moduleResolution: 'Node' } };
@@ -115,13 +117,32 @@ function safeEnvironment(env, image) {
   return result;
 }
 function summaryReader() {
-  let line = '', dropping = false;
+  let line = '', dropping = false, currentTestFile, currentTests = [];
+  const testFiles = new Set(discover(path.join(ROOT, 'backend'), name => /\.(?:test|spec|integration)\.[cm]?[jt]s$/.test(name))
+    .map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/')));
   const counts = { passed: null, failed: null, assertions: null };
   const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
   function accept() {
     const text = line.replace(ansi, '').trim();
+    const filename = text.endsWith(':') ? text.slice(0, -1).replaceAll('\\', '/') : '';
+    if (testFiles.has(filename)) {
+      currentTestFile = filename;
+      currentTests = fs.readFileSync(path.join(ROOT, 'backend', filename), 'utf8').split('\n').flatMap((source, index) => {
+        const title = /\btest\(\s*(['"])(.*?)\1/.exec(source);
+        return title ? [{ title: title[2], line: index + 1 }] : [];
+      });
+    }
+    if (/^\(fail\) /.test(text) && currentTestFile) {
+      counts.failedFile = currentTestFile;
+      const failed = currentTests.find(test => text.includes(test.title));
+      if (failed) counts.failedTestLine = failed.line;
+    }
     const match = /^(\d{1,7}) (pass|fail|expect\(\) calls)$/.exec(text);
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);
+    const diagnostic = /^FOUNDATION_DIAGNOSTIC ([A-Z0-9_]+)$/.exec(text);
+    if (diagnostic && diagnosticCodes.has(diagnostic[1])) counts.diagnostic = diagnostic[1];
+    const location = /^FOUNDATION_FIXTURE_LINE ([1-9][0-9]{0,4})$/.exec(text);
+    if (location) counts.fixtureLine = Number(location[1]);
     line = ''; dropping = false;
   }
   return { counts, write(chunk) {
@@ -143,7 +164,7 @@ function runStep(step, { root, env, node = process.execPath, bun = 'bun', testCo
     child.stderr.on('data', chunk => readers[1].write(chunk));
     const finish = code => {
       if (settled) return; settled = true; clearTimeout(timeout);
-      const counts = Object.fromEntries(Object.keys(readers[0].counts).map(key => [key, readers[1].counts[key] ?? readers[0].counts[key]]));
+      const counts = Object.fromEntries([...new Set(readers.flatMap(reader => Object.keys(reader.counts)))].map(key => [key, readers[1].counts[key] ?? readers[0].counts[key]]));
       resolve({ gate: step.id, outcome: timedOut ? 'timeout' : code === 0 ? 'passed' : 'failed',
         exitCode: Number.isInteger(code) ? code : null, durationMs: Date.now() - started, ...counts });
     };

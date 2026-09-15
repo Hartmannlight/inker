@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import type { IncomingHttpHeaders } from 'node:http';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { PublicationPersistenceService } from '../../src/publications/publication-persistence.service';
-import { PlaybackService } from '../../src/playback/playback.service';
+import { PlaybackService } from './services';
 import { ArtifactStore } from '../../src/render-cache/artifact-store';
 import { RenderCacheService } from '../../src/render-cache/render-cache.service';
 import { InteractionService } from '../../src/interactions/interaction.service';

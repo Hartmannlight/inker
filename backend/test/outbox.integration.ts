@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventsService } from '../src/events/events.service';
 import { OutboxStore } from '../src/events/outbox.store';
-import { PresentationService } from '../src/device-platform/presentation.service';
+import { PresentationService } from './fixtures/services';
 import { ScreensService } from '../src/screens/screens.service';
 import { effectKey, OUTBOX_POLICY } from '../src/events/outbox.types';
 import { PlaylistsService } from '../src/playlists/playlists.service';

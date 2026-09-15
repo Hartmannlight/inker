@@ -1,5 +1,5 @@
 import { HttpAdapterHost } from '@nestjs/core';
-import { BeforeApplicationShutdown, Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown, UnauthorizedException } from '@nestjs/common';
+import { BeforeApplicationShutdown, Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown, UnauthorizedException, NotAcceptableException } from '@nestjs/common';
 import { IncomingMessage, Server as HttpServer } from 'http';
 import { Socket } from 'net';
 import { randomBytes } from 'node:crypto';
@@ -157,7 +157,14 @@ export class WebDisplayGateway implements OnApplicationBootstrap, OnApplicationS
         }
       }
       this.scheduleTransition(deviceId, presentation.nextTransitionAt);
-    } catch {
+    } catch (error) {
+      // A new publication can arrive before its device-sized render. Keep the
+      // authenticated transport alive so the outbox/render-ready event can retry.
+      // The failed attempt must still not be acknowledged as delivered.
+      if (error instanceof NotAcceptableException && !context?.signal.aborted) {
+        if (context) throw new Error('OUTBOX_ARTIFACT_PENDING');
+        return;
+      }
       this.logger.warn('Device presentation delivery failed');
       for (const state of states) this.fail(state);
       if (context) throw new Error('OUTBOX_ADAPTER_FAILED');

@@ -456,6 +456,7 @@ describe('DataSourcesService', () => {
 
       const error = await service.refresh(1).catch(error => error);
       expect(error).toBeInstanceOf(ServiceUnavailableException);
+      if (!(error instanceof ServiceUnavailableException)) throw error;
       expect(error.getResponse()).toMatchObject({ code: SOURCE_REFRESH_REQUIRES_CONNECTOR, statusCode: 503 });
       expect(JSON.stringify(error.getResponse())).not.toContain('super-secret-token-12345');
       expect(mockPrisma.dataSource.findUnique.calls).toHaveLength(0);
@@ -606,6 +607,7 @@ describe('DataSourcesService', () => {
         for (const preview of [false, true]) {
           const error = await service.getCachedData(1, preview).catch(error => error);
           expect(error).toBeInstanceOf(ServiceUnavailableException);
+      if (!(error instanceof ServiceUnavailableException)) throw error;
           if (!(error instanceof ServiceUnavailableException)) throw new Error('Expected unavailable snapshot');
           expect(error.getStatus()).toBe(503);
           expect(error.getResponse()).toMatchObject({ code: SOURCE_SNAPSHOT_UNAVAILABLE });
@@ -631,6 +633,7 @@ describe('DataSourcesService', () => {
         ]) {
           const error = await invoke().catch(error => error);
           expect(error).toBeInstanceOf(ServiceUnavailableException);
+      if (!(error instanceof ServiceUnavailableException)) throw error;
           expect(error.getStatus()).toBe(503);
           expect(error.getResponse()).toMatchObject({ code: SOURCE_REFRESH_REQUIRES_CONNECTOR, message: SOURCE_REFRESH_REQUIRES_CONNECTOR });
           expect(JSON.stringify(error.getResponse())).not.toContain(secret);

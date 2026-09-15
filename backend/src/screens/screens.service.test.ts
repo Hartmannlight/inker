@@ -6,7 +6,7 @@ import { createMock, MockFn } from '../test/mocks/helpers';
 import type { Screen } from '@prisma/client';
 
 const screenFixture = (values: Partial<Screen> = {}): Screen => ({
-  id: 1, name: 'Screen', description: null, imageUrl: '/uploads/fixture.png', thumbnailUrl: null,
+  id: 1, width: null, height: null, name: 'Screen', description: null, imageUrl: '/uploads/fixture.png', thumbnailUrl: null,
   modelId: null, isPublic: false, createdAt: new Date(0), updatedAt: new Date(0), ...values,
 });
 
@@ -103,7 +103,7 @@ describe('ScreensService', () => {
 
     it('should delete screen and notify affected playlists', async () => {
       mockPrisma.screen.findUnique.mockResolvedValue({
-        id: 1,
+        id: 1, width: null, height: null,
         name: 'Screen',
         imageUrl: null,
         thumbnailUrl: null,

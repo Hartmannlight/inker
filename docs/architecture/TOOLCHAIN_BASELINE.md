@@ -7,7 +7,7 @@ Stand: 2026-08-24
 | Werkzeug | Version | Verwendung |
 |---|---:|---|
 | Bun | `1.3.14` | Kanonische Runtime und Paketmanager für Backend und Frontend |
-| Node.js | `22.22.3` | LTS-Hilfsruntime für Prisma im Container; kein Paketmanager |
+| Node.js | `22.23.2` | LTS-Hilfsruntime für Prisma im Container; kein Paketmanager |
 | Prisma CLI/Client | `6.19.3` | Durch `backend/bun.lock` festgelegt |
 | Redis | `8.0.2` (`5:8.0.2-3+deb13u2`) | Im Produktionsimage installierte Queue-Runtime |
 | Docker Engine | `28.5.2` | Referenzversion für Build und Smoke-Test |

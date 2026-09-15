@@ -14,11 +14,12 @@ describe('PublishService design snapshots', () => {
           background: '#ffffff', updatedAt, widgets: [] })),
       },
     };
-    const service = new PublishService(prisma as never, {} as never, { renderScreenDesign } as never);
+    const service = new PublishService(prisma as never, {} as never, { renderScreenDesign } as never, {} as never);
 
     const snapshot = await service.snapshotDraft({ screenDesignId: 987654, expectedUpdatedAt: updatedAt.toISOString() });
 
     expect(renderScreenDesign).toHaveBeenCalledWith(987654, undefined, 'preview');
+    if (!('image' in snapshot.content)) throw new Error('Expected published image');
     expect(snapshot.content.image).toMatchObject({ width: 1, height: 1 });
     expect(snapshot.content.dynamicDesign).toEqual({
       screenDesignId: 987654,

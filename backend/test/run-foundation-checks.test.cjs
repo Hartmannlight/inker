@@ -111,3 +111,39 @@ test('hung subprocess has a real deadline instead of a fabricated success', asyn
   expect(result.outcome).toBe('timeout');
   expect(result.durationMs).toBeLessThan(5000);
 });
+
+
+test('only allowlisted fixture stages survive diagnostics, never arbitrary error values', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('FOUNDATION_DIAGNOSTIC OUTBOX_WORKER_CONNECTION_READINESS\n'));
+  reader.write(Buffer.from('FOUNDATION_DIAGNOSTIC PRIVATE_SECRET\nFOUNDATION_DIAGNOSTIC OUTBOX_START token=secret\n'));
+  expect(reader.counts.diagnostic).toBe('OUTBOX_WORKER_CONNECTION_READINESS');
+  expect(JSON.stringify(reader.counts)).not.toContain('secret');
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+});
+
+
+test('fixture locations expose bounded line numbers only', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('FOUNDATION_FIXTURE_LINE 140\nFOUNDATION_FIXTURE_LINE 999999999\nFOUNDATION_FIXTURE_LINE 141 secret\n'));
+  expect(reader.counts.fixtureLine).toBe(140);
+  expect(JSON.stringify(reader.counts)).not.toContain('secret');
+});
+
+
+test('failed test reporting permits repository filenames but never test names or unknown paths', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('test/run-foundation-checks.test.cjs:\n(fail) PRIVATE_SECRET [12ms]\n/secret/path.test.ts:\n(fail) PRIVATE_SECRET\n'));
+  expect(reader.counts.failedFile).toBe('test/run-foundation-checks.test.cjs');
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('/secret');
+});
+
+
+test('a failed integration title maps to a static source line without printing its text', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('test/publication-persistence.integration.ts:\n(fail) publication persistence boundary > WP-17 retry snapshots never mint revisions and preserve their original content after a new publish [12ms]\n'));
+  expect(reader.counts.failedFile).toBe('test/publication-persistence.integration.ts');
+  expect(reader.counts.failedTestLine).toBeGreaterThan(300);
+  expect(JSON.stringify(reader.counts)).not.toContain('snapshots');
+});

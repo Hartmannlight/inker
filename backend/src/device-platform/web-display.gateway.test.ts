@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import { Logger, UnauthorizedException, NotAcceptableException } from '@nestjs/common';
 import { WebDisplayGateway } from './web-display.gateway';
 import { runWithCorrelation } from '../observability/correlation-context';
 
@@ -38,6 +38,22 @@ function setup() {
 afterEach(async () => { for (const g of gateways.splice(0)) await g.onApplicationShutdown(); setSystemTime(); });
 
 describe('WebSocket gateway security and liveness', () => {
+  test('a pending rendered artifact retains the authenticated socket for a durable retry', async () => {
+    const h = setup(); await h.authenticate();
+    const original = h.client.sent.find(message => message.type === 'presentation.changed').presentation;
+    const context = { deliveryId: 'pending-render', signal: new AbortController().signal };
+    h.presentations.getForDevice.mockRejectedValueOnce(new NotAcceptableException('No compatible published artifact for the device render target'));
+    await expect(h.gateway.pushPresentation(7, context)).rejects.toThrow();
+    expect(h.gateway.isConnected(7)).toBe(true);
+    expect(h.client.code).toBeUndefined();
+    h.presentations.getForDevice.mockResolvedValue({ ...original, revision: 2, renderRevision: 1 });
+    await h.gateway.pushPresentation(7, context);
+    expect(h.client.sent.at(-1).presentation).toMatchObject({ revision: 2, renderRevision: 1 });
+    h.revoke();
+    await h.gateway.pushPresentation(7, context);
+    expect(h.client.code).toBe(4401);
+  });
+
   test('delivery logs require a successful send callback and retain explicit job correlation', async () => {
     const h = setup(); await h.authenticate();
     const records: any[] = [];
