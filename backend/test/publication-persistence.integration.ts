@@ -1,7 +1,7 @@
 import { PresentationService as ProductionPresentationService } from '../src/device-platform/presentation.service';
 import { DeviceArtifactResolverService } from '../src/device-platform/device-artifact-resolver.service';
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import type { PresentationManifest } from '@inker/contracts';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -363,6 +363,32 @@ describe("publication persistence boundary", () => {
       expect(JSON.stringify(await prisma.publicationRevision.findMany())).not.toContain('secret-metadata');
       expect(JSON.stringify(await prisma.outboxEvent.findMany())).not.toContain(filename);
     } finally { unlinkSync(file); }
+  });
+
+  test('WP-17 a rolled-back SQLite receipt conflict retries without changing publication state', async () => {
+    const d = await target();
+    await publisher.publish('receipt-conflict', command([d.id]));
+    const event = await prisma.outboxEvent.findFirstOrThrow({ where: { eventType: 'device.publication.desired-revision.changed' } });
+    const key = parseOutboxEvent(event).key;
+    await prisma.outboxEffect.create({ data: { key, eventId: event.eventId } });
+    const delivery = await prisma.outboxDelivery.create({ data: { effectKey: key, deviceId: d.id } });
+    const before = await prisma.devicePublicationState.findUniqueOrThrow({ where: { deviceId: d.id } });
+    let conflicts = 0;
+    const client = new Proxy(prisma, { get(target, property) {
+      if (property === '$transaction') return async (...args: any[]) => {
+        if (conflicts++ === 0) throw new Prisma.PrismaClientKnownRequestError(
+          'simulated rolled-back SQLite conflict', { code: 'P2034', clientVersion: Prisma.prismaVersion.client });
+        return (target.$transaction as any)(...args);
+      };
+      return Reflect.get(target, property);
+    } });
+    const manifest = await new PresentationService(client as any).getForDevice(d.id,
+      { deliveryId: delivery.deliveryId, signal: new AbortController().signal });
+    expect(conflicts).toBe(2);
+    expect(manifest.revision).toBe(1);
+    expect(canonicalJson((await prisma.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: delivery.deliveryId } })).presentation)).toBe(canonicalJson(manifest));
+    expect(await prisma.devicePublicationState.findUniqueOrThrow({ where: { deviceId: d.id } })).toEqual(before);
+    expect(await prisma.publicationRevision.count()).toBe(1);
   });
 
   test('WP-17 retry snapshots never mint revisions and preserve their original content after a new publish', async () => {

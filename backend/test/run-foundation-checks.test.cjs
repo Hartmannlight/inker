@@ -138,3 +138,12 @@ test('failed test reporting permits repository filenames but never test names or
   expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
   expect(JSON.stringify(reader.counts)).not.toContain('/secret');
 });
+
+
+test('a failed integration title maps to a static source line without printing its text', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('test/publication-persistence.integration.ts:\n(fail) publication persistence boundary > WP-17 retry snapshots never mint revisions and preserve their original content after a new publish [12ms]\n'));
+  expect(reader.counts.failedFile).toBe('test/publication-persistence.integration.ts');
+  expect(reader.counts.failedTestLine).toBeGreaterThan(300);
+  expect(JSON.stringify(reader.counts)).not.toContain('snapshots');
+});

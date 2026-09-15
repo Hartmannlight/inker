@@ -117,16 +117,26 @@ function safeEnvironment(env, image) {
   return result;
 }
 function summaryReader() {
-  let line = '', dropping = false, currentTestFile;
-  const testFiles = new Set(discover(path.join(ROOT, 'backend'), name => /\.(?:test|spec)\.[cm]?[jt]s$/.test(name))
+  let line = '', dropping = false, currentTestFile, currentTests = [];
+  const testFiles = new Set(discover(path.join(ROOT, 'backend'), name => /\.(?:test|spec|integration)\.[cm]?[jt]s$/.test(name))
     .map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/')));
   const counts = { passed: null, failed: null, assertions: null };
   const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
   function accept() {
     const text = line.replace(ansi, '').trim();
     const filename = text.endsWith(':') ? text.slice(0, -1).replaceAll('\\', '/') : '';
-    if (testFiles.has(filename)) currentTestFile = filename;
-    if (/^\(fail\) /.test(text) && currentTestFile) counts.failedFile = currentTestFile;
+    if (testFiles.has(filename)) {
+      currentTestFile = filename;
+      currentTests = fs.readFileSync(path.join(ROOT, 'backend', filename), 'utf8').split('\n').flatMap((source, index) => {
+        const title = /\btest\(\s*(['"])(.*?)\1/.exec(source);
+        return title ? [{ title: title[2], line: index + 1 }] : [];
+      });
+    }
+    if (/^\(fail\) /.test(text) && currentTestFile) {
+      counts.failedFile = currentTestFile;
+      const failed = currentTests.find(test => text.includes(test.title));
+      if (failed) counts.failedTestLine = failed.line;
+    }
     const match = /^(\d{1,7}) (pass|fail|expect\(\) calls)$/.exec(text);
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);
     const diagnostic = /^FOUNDATION_DIAGNOSTIC ([A-Z0-9_]+)$/.exec(text);
