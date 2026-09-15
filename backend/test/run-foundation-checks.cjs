@@ -142,14 +142,15 @@ function summaryReader() {
     if (testFiles.has(filename)) {
       currentTestFile = filename;
       currentTests = fs.readFileSync(path.join(ROOT, 'backend', filename), 'utf8').split('\n').flatMap((source, index) => {
-        const title = /\btest\(\s*(['"])(.*?)\1/.exec(source);
+        const title = /\b(?:test|it)\(\s*(['"])(.*?)\1/.exec(source);
         return title ? [{ title: title[2], line: index + 1 }] : [];
       });
     }
     if (/^\(fail\) /.test(text) && currentTestFile) {
-      counts.failedFile = currentTestFile;
       const failed = currentTests.find(test => text.includes(test.title));
-      if (failed) counts.failedTestLine = failed.line;
+      // Bun repeats failures after the final file; do not attribute that recap
+      // to the last successful file or overwrite a previously located failure.
+      if (failed) { counts.failedFile = currentTestFile; counts.failedTestLine = failed.line; }
     }
     const match = /^(\d{1,7}) (pass|fail|expect\(\) calls)$/.exec(text);
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);

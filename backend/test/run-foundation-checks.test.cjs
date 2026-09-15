@@ -134,7 +134,7 @@ test('fixture locations expose bounded line numbers only', () => {
 test('failed test reporting permits repository filenames but never test names or unknown paths', () => {
   const reader = summaryReader();
   reader.write(Buffer.from('test/run-foundation-checks.test.cjs:\n(fail) PRIVATE_SECRET [12ms]\n/secret/path.test.ts:\n(fail) PRIVATE_SECRET\n'));
-  expect(reader.counts.failedFile).toBe('test/run-foundation-checks.test.cjs');
+  expect(reader.counts.failedFile).toBeUndefined();
   expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
   expect(JSON.stringify(reader.counts)).not.toContain('/secret');
 });
@@ -145,6 +145,8 @@ test('a failed integration title maps to a static source line without printing i
   reader.write(Buffer.from('test/publication-persistence.integration.ts:\n(fail) publication persistence boundary > WP-17 retry snapshots never mint revisions and preserve their original content after a new publish [12ms]\n'));
   expect(reader.counts.failedFile).toBe('test/publication-persistence.integration.ts');
   expect(reader.counts.failedTestLine).toBeGreaterThan(300);
+  reader.write(Buffer.from('src/common/utils/crypto.util.test.ts:\n(fail) publication persistence boundary > WP-17 retry snapshots never mint revisions and preserve their original content after a new publish [12ms]\n'));
+  expect(reader.counts.failedFile).toBe('test/publication-persistence.integration.ts');
   expect(JSON.stringify(reader.counts)).not.toContain('snapshots');
 });
 

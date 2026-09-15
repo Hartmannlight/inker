@@ -10,6 +10,8 @@ import { renderSnapshot, validateRenderedArtifact } from './snapshot-renderer';
 import { intentCorrelationId, outboxCorrelation } from '../events/outbox-correlation';
 import { observeRender, emitStructuredEvent } from '../observability/runtime-observability';
 import { sqliteWrite } from '../common/utils/sqlite-write.util';
+import { currentCorrelation } from '../observability/correlation-context';
+import { PUBLICATION_EVENT_TYPES } from '../publications/publication-persistence.types';
 
 export const RENDER_REQUESTED = 'render.requested';
 export const RENDER_READY = 'render.artifact.ready';
@@ -63,11 +65,20 @@ export class RenderCacheService {
       if (!device?.isActive || !device.publicationState?.desiredRevision) return;
       const currentTarget = targetFor(resolveDeviceConfiguration(device.profile, device.deliveryPolicy, device.capabilitiesOverride));
       if (canonicalJson(currentTarget) !== canonicalJson(target) || renderKey(device.publicationState.desiredRevision, currentTarget) !== key) return;
+      // Startup reconciliation can win the race against processing the original
+      // assignment event. Recover its durable correlation instead of inventing
+      // a new trace for the same render and subsequent WebSocket delivery.
+      const assignment = currentCorrelation() ? null : await tx.outboxEvent.findFirst({ where: {
+        eventType: PUBLICATION_EVENT_TYPES.desiredRevisionChanged,
+        aggregateType: 'DevicePublicationState', aggregateId: String(deviceId),
+        aggregateRevision: String(device.publicationState.desiredSequence),
+      }, select: { eventId: true, correlationId: true } });
+      const correlationId = assignment ? outboxCorrelation(assignment).correlationId : intentCorrelationId();
       let request = await tx.renderRequest.findUnique({ where: { key } });
       if (!request) {
         request = await tx.renderRequest.create({ data: { key, publicationRevisionId: device.publicationState.desiredRevision.publicationRevisionId,
           target: target as unknown as Prisma.InputJsonValue, rendererVersion: RENDERER_VERSION } });
-        await tx.outboxEvent.create({ data: { correlationId: intentCorrelationId(), eventType: RENDER_REQUESTED, aggregateType: 'RenderRequest',
+        await tx.outboxEvent.create({ data: { correlationId, eventType: RENDER_REQUESTED, aggregateType: 'RenderRequest',
           aggregateId: key, aggregateRevision: '1', payloadVersion: 1, payload: { renderKey: key } } });
       }
       const binding = await tx.renderBinding.findUnique({ where: { deviceId_variant: { deviceId, variant } } });
@@ -78,7 +89,7 @@ export class RenderCacheService {
         } : {}) } });
       if (request.completedAt && binding?.readyKey !== key) {
         const updated = await tx.device.update({ where: { id: deviceId }, data: { renderRevision: { increment: 1 } } });
-        await tx.outboxEvent.create({ data: { correlationId: intentCorrelationId(), eventType: RENDER_READY, aggregateType: 'RenderRequest',
+        await tx.outboxEvent.create({ data: { correlationId, eventType: RENDER_READY, aggregateType: 'RenderRequest',
           aggregateId: key, aggregateRevision: `${deviceId}-${updated.renderRevision}`, payloadVersion: 1,
           payload: { renderKey: key, deviceIds: [deviceId] } } });
       }

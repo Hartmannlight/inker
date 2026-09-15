@@ -125,6 +125,22 @@ describe('WP-19 persistent render cache', () => {
     return { key: key!, event };
   }
 
+  test('startup reconciliation preserves the durable assignment trace through render completion', async () => {
+    const assignment = await prisma.outboxEvent.findFirstOrThrow({ where: {
+      eventType: 'device.publication.desired-revision.changed', aggregateId: String(device.id),
+      aggregateRevision: String(device.publicationState!.desiredSequence),
+    } });
+    expect(assignment.correlationId).not.toBeNull();
+    await cache.reconcile();
+    const requested = await prisma.outboxEvent.findFirstOrThrow({ where: { eventType: RENDER_REQUESTED } });
+    expect(requested.correlationId).toBe(assignment.correlationId);
+    const event = await claimRender(requested.aggregateId);
+    await cache.render(event);
+    const ready = await prisma.outboxEvent.findFirstOrThrow({ where: { eventType: RENDER_READY } });
+    expect(ready.correlationId).toBe(assignment.correlationId);
+    expect(await outbox.ack(event)).toBe(true);
+  });
+
   async function read() {
     device = await reload();
     return cache.read(device, device.publicationState!.desiredRevision!);
