@@ -1,13 +1,13 @@
 # WP-01 – Toolchain- und Testbaseline
 
-Stand: 2026-08-24
+Stand der verbindlichen Versionen: 2026-09-16 (ursprüngliche Testbaseline: 2026-08-24)
 
 ## Verbindliche Versionen
 
 | Werkzeug | Version | Verwendung |
 |---|---:|---|
-| Bun | `1.3.14` | Kanonische Runtime und Paketmanager für Backend und Frontend |
-| Node.js | `22.22.3` | LTS-Hilfsruntime für Prisma im Container; kein Paketmanager |
+| Bun | `1.4.2` | Kanonische Runtime und Paketmanager für Backend und Frontend |
+| Node.js | `22.23.2` | LTS-Hilfsruntime für Prisma im Container; kein Paketmanager |
 | Prisma CLI/Client | `6.19.3` | Durch `backend/bun.lock` festgelegt |
 | Redis | `8.0.2` (`5:8.0.2-3+deb13u2`) | Im Produktionsimage installierte Queue-Runtime |
 | Docker Engine | `28.5.2` | Referenzversion für Build und Smoke-Test |
@@ -29,6 +29,16 @@ geprüften Lockfile-Diff sind nicht Teil des reproduzierbaren Workflows.
 Node.js bleibt ausschließlich für Prisma im Container verfügbar. `bunx` wird nur
 für interaktive Entwicklungsbefehle verwendet; die Prüfskripte lösen ihre lokal
 gesperrten Binärdateien über `bun run` auf und laden nichts implizit nach.
+
+## Sicherheitsupdates der Abhängigkeiten
+
+Bun 1.4.2 unterstützt den gezielten `path-to-regexp`-Override für
+`@nestjs/serve-static`. Express behält seine kompatible 0.1.x-Version; Nest
+verwendet weiterhin 3.x. Ein globaler Router-Override würde diese APIs vermischen.
+Die weiteren Overrides halten Prisma-Konfiguration, Uploads, YAML und HTTP-
+Hilfsbibliotheken auf behobenen Versionen. Sharp 0.35.4 und die aktualisierten
+Axios-, LiquidJS- und WebSocket-Pakete werden durch die vollständigen Produktions-,
+Renderer-, Last- und Backup-Gates geprüft. Die Scan-Policy bleibt unverändert.
 
 ## Kanonische Prüfungen
 

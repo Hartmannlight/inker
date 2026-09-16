@@ -241,7 +241,9 @@ async function verify(state, role) {
   const next = r.db(state, role, 'p.sourceSnapshot.findFirstOrThrow({where:{sourceDefinitionId:input.id},orderBy:{revision:"desc"}})', { id: state.sourceId });
   assert.equal(next.errorCode, null); assert.deepEqual(next.data, state.snapshot.data);
   const migration = r.db(state, role, 'p.$queryRawUnsafe("SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name")');
-  assert.equal(migration.at(-1).migration_name, '20260907000000_foundation_batch_checkpoints');
+  const expectedMigrations = JSON.parse(r.exec(state, role, ['bun', '-e',
+    "console.log(JSON.stringify(require('node:fs').readdirSync('/app/prisma/migrations').filter(name => /^20/.test(name)).sort()))"]));
+  assert.deepEqual(migration.map(row => row.migration_name), expectedMigrations);
   r.exec(state, role, ['node', '/app/node_modules/prisma/build/index.js', 'migrate', 'diff', '--exit-code', '--from-url', 'file:/app/uploads/inker.db', '--to-schema-datamodel', '/app/prisma/schema.prisma']);
   r.audit(state, role); r.control(state, role, 'stop');
 }
@@ -288,6 +290,8 @@ if (require.main === module) main().catch(error => {
   }).slice(0, 6) : [];
   const actual = typeof error?.actual === 'number' && Number.isFinite(error.actual) ? error.actual : undefined;
   const expected = typeof error?.expected === 'number' && Number.isFinite(error.expected) ? error.expected : undefined;
+  const fixtureFrame = frames.find(frame => frame.file === 'foundation-backup-restore.cjs');
+  if (fixtureFrame) console.error(`FOUNDATION_FIXTURE_LINE ${fixtureFrame.line}`);
   console.error(JSON.stringify({ code, stage, frames, actual, expected })); process.exitCode = 1;
 });
 module.exports = { MISSING_SECRET_REFUSAL, isExpectedMissingSecretRefusal, archives, previousVersion, seed };

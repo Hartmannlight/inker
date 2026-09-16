@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { enroll, capabilitiesOverride } = require('./device-enrollment-client.cjs');
 const { randomBytes, randomUUID, createHash } = require('node:crypto');
 
 module.exports = async function checkSources({ request, db, until, renderedFor, connect, secrets, base, setStage, login }) {
@@ -25,10 +26,8 @@ module.exports = async function checkSources({ request, db, until, renderedFor, 
   const a = source.snapshot;
   assert.deepEqual(a.data, input.configuration.data);
   setStage('WP21 immutable source publication and white pixels');
-  const device = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP21 source pixels', deviceType: 'web-display' } })).body;
-  secrets.push(device.pairingToken);
-  const pair = await request('/api/web-displays/pair', { method: 'POST', data: { externalId: device.externalId, pairingToken: device.pairingToken } });
-  assert.equal(pair.response.status, 201); const token = pair.body.credential; secrets.push(token);
+  const device = (await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP21 source pixels', deviceType: 'web-display', capabilitiesOverride } })).body;
+  const token = await enroll(request, device, secrets);
   const live = connect(device, token), auth = { Authorization: `Bearer ${token}` };
   await until(() => live.messages.some(message => message.type === 'presentation.changed'));
   async function publish(snapshotId, expectedRevision) {

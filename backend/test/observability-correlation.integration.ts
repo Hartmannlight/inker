@@ -12,7 +12,7 @@ import { OutboxStore } from '../src/events/outbox.store';
 import { OutboxDispatcher } from '../src/events/outbox-dispatcher.service';
 import { EventsService } from '../src/events/events.service';
 import { PublicationPersistenceService } from '../src/publications/publication-persistence.service';
-import { PublishService } from '../src/publications/publish.service';
+import { PublishService } from './fixtures/services';
 import { TimerService } from '../src/timers/timer.service';
 import { TimerWorkerService } from '../src/timers/timer-worker.service';
 import { TIMER_CHANGED } from '../src/timers/timer.events';
@@ -20,7 +20,7 @@ import { TIMER_DUE } from '../src/timers/timer-scheduling';
 import { MaintenanceService } from '../src/jobs/maintenance.service';
 import { scheduleSource, SOURCE_REFRESH } from '../src/sources/source-job';
 import { scheduleRemote, REMOTE_SYNC } from '../src/federation/remote-job';
-import { PlaybackService } from '../src/playback/playback.service';
+import { PlaybackService } from './fixtures/services';
 import { DeviceUpdateCoordinator } from '../src/device-platform/device-update-coordinator.service';
 
 const root = resolve(import.meta.dir, '..');
@@ -111,7 +111,7 @@ describe('WP-28 durable API/outbox/worker/delivery correlation', () => {
     const child = await p.outboxEvent.findFirstOrThrow({ where: { aggregateId: timer.timerId, eventType: TIMER_CHANGED, aggregateRevision: '2' } });
     expect(child.correlationId).toBe(context.correlationId);
     expect((await p.outboxEvent.findUniqueOrThrow({ where: { eventId: event!.eventId } })).status).toBe('delivered');
-    expect(logs.mock.calls.some(call => call[0].code === 'JOB_COMPLETED' && call[0].correlationId === context.correlationId)).toBe(true);
+    expect(logs.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].code === 'JOB_COMPLETED' && call[0].correlationId === context.correlationId)).toBe(true);
     expect(currentCorrelation()).toBeUndefined();
   });
 
@@ -157,7 +157,7 @@ describe('WP-28 durable API/outbox/worker/delivery correlation', () => {
     expect(await store.ack(first)).toBe(false); expect(await store.ack(retry)).toBe(true);
     expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-adapter-secret');
     // An adapter's successful no-op is not evidence that bytes reached a socket.
-    expect(logs.mock.calls.some(call => call[0].code === 'DEVICE_DELIVERED')).toBe(false);
+    expect(logs.mock.calls.some((call: [Record<string, unknown>, ...unknown[]]) => call[0].code === 'DEVICE_DELIVERED')).toBe(false);
     expect(currentCorrelation()).toBeUndefined();
   });
 

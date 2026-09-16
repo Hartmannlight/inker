@@ -14,7 +14,7 @@ import { PublicationPersistenceService } from '../src/publications/publication-p
 import { PUBLICATION_EVENT_TYPES } from '../src/publications/publication-persistence.types';
 import { canonicalJson, publicationArtifacts, sha256 } from '../src/publications/publication-content';
 import { PULL_FIXTURE_ARTIFACTS } from '../src/device-platform/pull-fixture-artifacts';
-import { PlaybackService } from '../src/playback/playback.service';
+import { PlaybackService } from './fixtures/services';
 import { RemoteSubscriptionsService } from '../src/federation/remote-subscriptions.service';
 import { RemoteImportService } from '../src/federation/remote-import.service';
 import { RemoteWorkerService } from '../src/federation/remote-worker.service';
@@ -85,6 +85,8 @@ class HookedImporter extends RemoteImportService {
 // sharing a Prisma engine/client, or requiring a second fixture file. No transaction mocks.
 const childProgram = `
 import { PrismaClient } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { EncryptionService } from './src/common/services/encryption.service';
 import { RemoteWorkerService } from './src/federation/remote-worker.service';
 import { RemoteTransport } from './src/federation/remote-transport';
 import { RemoteImportService } from './src/federation/remote-import.service';
@@ -109,7 +111,8 @@ class Transport extends RemoteTransport {
   }
 }
 class Worker extends RemoteWorkerService { createTransport() { return new Transport(); } }
-const store = new OutboxStore(p), worker = new Worker(p, store, new RemoteImportService(p, new PublicationPersistenceService(p)));
+const encryption = new EncryptionService(new ConfigService({ encryption: { secretPath: process.env.INKER_INSTANCE_SECRET_PATH } }));
+const store = new OutboxStore(p), worker = new Worker(p, store, new RemoteImportService(p, new PublicationPersistenceService(p)), encryption);
 try {
   const event = await worker.claim(input.owner);
   if (!event) console.log(JSON.stringify({ claimed: false, requests }));
@@ -165,9 +168,9 @@ describe('WP-27 real SQLite remote intent, import and worker fences', () => {
     secondService = new RemoteSubscriptionsService(other as PrismaService, encryption, new PublicationPersistenceService(other as PrismaService));
     store = new OutboxStore(p as PrismaService); secondStore = new OutboxStore(other as PrismaService);
     importer = new HookedImporter(p as PrismaService, publications);
-    worker = new FixtureWorker(p as PrismaService, store, importer);
+    worker = new FixtureWorker(p as PrismaService, store, importer, encryption);
     second = new FixtureWorker(other as PrismaService, secondStore,
-      new RemoteImportService(other as PrismaService, new PublicationPersistenceService(other as PrismaService)));
+      new RemoteImportService(other as PrismaService, new PublicationPersistenceService(other as PrismaService)), encryption);
   }, 30_000);
 
   afterEach(async () => {

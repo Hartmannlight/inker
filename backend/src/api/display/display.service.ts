@@ -837,7 +837,7 @@ export class DisplayService {
   /**
    * Check if a screen design contains a clock widget
    */
-  private hasClockWidget(screenDesign: DisplayPlaylistItem['screenDesign']): boolean {
+  private hasClockWidget(screenDesign: { widgets: { template: { name: string } | null }[] } | null): boolean {
     if (!screenDesign?.widgets || !Array.isArray(screenDesign.widgets)) {
       return false;
     }
@@ -853,7 +853,7 @@ export class DisplayService {
    * This ensures the device wakes up exactly when the minute changes
    */
   private getRefreshRateForScreen(
-    currentScreen: Pick<DisplayPlaylistItem, 'screenDesign'> | null | undefined,
+    currentScreen: { screenDesign: { widgets: { template: { name: string } | null }[] } | null } | null | undefined,
     deviceRefreshRate: number,
   ): number {
     let refreshRate = deviceRefreshRate;
@@ -894,7 +894,7 @@ export class DisplayService {
    * This ensures the clock updates exactly when the minute changes (e.g., 20:00 -> 20:01)
    */
   getNextRefreshTimestamp(
-    currentScreen: Pick<DisplayPlaylistItem, 'screenDesign'> | null | undefined,
+    currentScreen: { screenDesign: { widgets: { template: { name: string } | null }[] } | null } | null | undefined,
     deviceRefreshRate: number,
   ): number | null {
     let refreshMs = deviceRefreshRate * 1000;

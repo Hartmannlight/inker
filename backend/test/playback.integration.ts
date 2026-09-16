@@ -1,3 +1,4 @@
+import { PresentationService as ProductionPresentationService } from '../src/device-platform/presentation.service';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PrismaClient, type OutboxEvent } from "@prisma/client";
 import type { PresentationManifest } from "@inker/contracts";
@@ -6,9 +7,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Test } from "@nestjs/testing";
-import { PlaybackService } from "../src/playback/playback.service";
+import { PlaybackService } from './fixtures/services';
 import { PublicationPersistenceService } from "../src/publications/publication-persistence.service";
-import { PublishService } from "../src/publications/publish.service";
+import { PublishService } from './fixtures/services';
 import { PublicationCleanupService } from "../src/publications/publication-cleanup.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { OutboxStore } from "../src/events/outbox.store";
@@ -19,7 +20,7 @@ import {
 } from "../src/playback/playback.events";
 import { DevicePlatformModule } from "../src/device-platform/device-platform.module";
 import { EventsModule } from "../src/events/events.module";
-import { PresentationService } from "../src/device-platform/presentation.service";
+import { PresentationService, fixtureConfig } from './fixtures/services';
 import { PullContentService } from "../src/device-platform/pull-content.service";
 
 const root = resolve(import.meta.dir, "..");
@@ -92,6 +93,7 @@ describe("WP-18 persistent playback", () => {
         name: "playback",
         externalId: "playback",
         profileId: "browser-hd-1920x1080",
+        capabilitiesOverride: { display: { width: 800, height: 480, colorSpace: "monochrome", bitDepth: 1, renderFormats: ["png"], mimeTypes: ["image/png"] } },
         deliveryPolicyId: "reference-connected-browser",
         lastSeenAt: new Date(),
       },
@@ -671,7 +673,7 @@ describe("WP-18 persistent playback", () => {
     });
     await playback.execute(pull.id, body());
     const module = await Test.createTestingModule({
-      imports: [DevicePlatformModule, EventsModule],
+      imports: [fixtureConfig(directory), DevicePlatformModule, EventsModule],
     })
       .overrideProvider(PrismaService)
       .useValue(p)
@@ -680,7 +682,7 @@ describe("WP-18 persistent playback", () => {
     await app.init();
     try {
       const read = async () => [
-        await module.get(PresentationService).getForDevice(deviceId),
+        await module.get(ProductionPresentationService).getForDevice(deviceId),
         stableTimerManifest((await module.get(PullContentService).read(pull)).manifest),
       ];
       const before = await read();

@@ -19,6 +19,7 @@ const E2E = [
   ['remote-container-fixture.cjs', 'smoke'], ['operations-container-fixture.cjs', 'smoke'],
   ['foundation-load.cjs'], ['foundation-backup-restore.cjs'],
 ];
+const { codes: diagnosticCodes } = require('./foundation-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '../..');
 function fail(code) { throw new Error(code); }
 function imageValid(image) {
@@ -79,7 +80,12 @@ function buildPlan(root, config) {
   bun('static', 'backend-unit', 'backend', 'test');
   bun('static', 'backend-build', 'backend', 'run', 'build');
   for (const script of ['typecheck', 'test', 'build']) bun('static', `frontend-${script}`, 'frontend', 'run', script);
-  add('image', 'production-image', 'docker', '.', ['build', '--tag', config.image, '.'], 2_400_000);
+  const imageLabels = /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? '') ? [
+    '--label', `org.opencontainers.image.revision=${process.env.GITHUB_SHA}`,
+    '--label', 'org.opencontainers.image.source=https://github.com/Hartmannlight/inker',
+  ] : [];
+  add('image', 'production-image', 'docker', '.', ['build', '--pull', '--no-cache', ...imageLabels, '--tag', config.image, '.'], 2_400_000);
+  integrations.sort((a, b) => Number(b.endsWith('outbox-redis.integration.ts')) - Number(a.endsWith('outbox-redis.integration.ts')));
   for (const file of integrations) {
     const relative = path.relative(path.join(root, 'backend'), file).split(path.sep).join('/');
     bun('integration', relative, 'backend', 'test', `./${relative}`);
@@ -89,7 +95,7 @@ function buildPlan(root, config) {
 }
 function typecheckConfig(root) {
   const files = ['backend/src', 'backend/test'].flatMap(directory => discover(path.join(root, directory),
-    name => /(?:\.test|\.spec|\.integration)\.ts$/.test(name)));
+    name => /(?:\.test|\.spec|\.integration|\.d)\.ts$/.test(name)));
   if (!files.length) fail('FOUNDATION_TEST_TYPES_MISSING');
   return { extends: path.join(root, 'backend/tsconfig.json'), files, include: [], exclude: [],
     compilerOptions: { noEmit: true, incremental: false, module: 'ESNext', moduleResolution: 'Node' } };
@@ -115,13 +121,67 @@ function safeEnvironment(env, image) {
   return result;
 }
 function summaryReader() {
-  let line = '', dropping = false;
+  let line = '', dropping = false, currentTestFile, currentTests = [];
+  const smokeStages = new Map(), fixtureFiles = new Map();
+  for (const relative of [...E2E.map(([file]) => `test/${file}`), ...discover(path.join(ROOT, 'backend/test/fixtures'),
+    name => name.endsWith('-container-check.cjs')).map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/'))]) {
+    const sourceLines = fs.readFileSync(path.join(ROOT, 'backend', relative), 'utf8').split('\n');
+    fixtureFiles.set(path.basename(relative), { file: relative, lines: sourceLines.length });
+    sourceLines.forEach((source, index) => {
+      for (const match of source.matchAll(/(?:\bstage\s*=\s*|\bsetStage\(\s*)(['"])(.*?)\1/g))
+        smokeStages.set(match[2], { file: relative, line: index + 1 });
+    });
+  }
+  const testFiles = new Set(discover(path.join(ROOT, 'backend'), name => /\.(?:test|spec|integration)\.[cm]?[jt]s$/.test(name))
+    .map(file => path.relative(path.join(ROOT, 'backend'), file).split(path.sep).join('/')));
   const counts = { passed: null, failed: null, assertions: null };
   const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
   function accept() {
     const text = line.replace(ansi, '').trim();
+    const filename = text.endsWith(':') ? text.slice(0, -1).replaceAll('\\', '/') : '';
+    if (testFiles.has(filename)) {
+      currentTestFile = filename;
+      currentTests = fs.readFileSync(path.join(ROOT, 'backend', filename), 'utf8').split('\n').flatMap((source, index) => {
+        const title = /\b(?:test|it)\(\s*(['"])(.*?)\1/.exec(source);
+        return title ? [{ title: title[2], line: index + 1 }] : [];
+      });
+    }
+    if (/^\(fail\) /.test(text) && currentTestFile) {
+      const failed = currentTests.find(test => text.includes(test.title));
+      // Bun repeats failures after the final file; do not attribute that recap
+      // to the last successful file or overwrite a previously located failure.
+      if (failed) { counts.failedFile = currentTestFile; counts.failedTestLine = failed.line; }
+    }
     const match = /^(\d{1,7}) (pass|fail|expect\(\) calls)$/.exec(text);
     if (match) counts[match[2] === 'pass' ? 'passed' : match[2] === 'fail' ? 'failed' : 'assertions'] = Number(match[1]);
+    const diagnostic = /^FOUNDATION_DIAGNOSTIC ([A-Z0-9_]+)$/.exec(text);
+    if (diagnostic && diagnosticCodes.has(diagnostic[1])) counts.diagnostic = diagnostic[1];
+    const location = /^FOUNDATION_FIXTURE_LINE ([1-9][0-9]{0,4})$/.exec(text);
+    if (location) counts.fixtureLine = Number(location[1]);
+    // Fixture JSON may contain assertion values. Copy only locations validated
+    // against checked-in sources, never arbitrary stage names or error text.
+    if (text.startsWith('{')) {
+      try {
+        const value = JSON.parse(text);
+        const stage = smokeStages.get(value.stage);
+        if (stage) { counts.fixtureStageFile = stage.file; counts.fixtureStageLine = stage.line; }
+        if (Array.isArray(value.frames)) {
+          const frames = value.frames.slice(0, 6).flatMap(frame => {
+            const source = fixtureFiles.get(frame?.file);
+            return source && Number.isInteger(frame.line) && frame.line > 0 && frame.line <= source.lines
+              ? [{ file: source.file, line: frame.line }] : [];
+          });
+          if (frames.length) counts.fixtureFrames = frames;
+        }
+      } catch { /* Invalid or oversized diagnostics remain discarded. */ }
+    }
+    const smokeStage = /^WP-15 production smoke failed at (.+)$/.exec(text);
+    const knownStage = smokeStage && smokeStages.get(smokeStage[1]);
+    if (knownStage) { counts.smokeStageFile = knownStage.file; counts.smokeStageLine = knownStage.line; }
+    const smokeLocation = /^Smoke source location: ([1-9][0-9]{0,4}):[1-9][0-9]{0,4}$/.exec(text);
+    if (smokeLocation) counts.smokeLine = Number(smokeLocation[1]);
+    const httpAssertion = /^Numeric assertion: actual=([1-5][0-9]{2}) expected=([1-5][0-9]{2})$/.exec(text);
+    if (httpAssertion) counts.httpAssertion = { actual: Number(httpAssertion[1]), expected: Number(httpAssertion[2]) };
     line = ''; dropping = false;
   }
   return { counts, write(chunk) {
@@ -143,7 +203,7 @@ function runStep(step, { root, env, node = process.execPath, bun = 'bun', testCo
     child.stderr.on('data', chunk => readers[1].write(chunk));
     const finish = code => {
       if (settled) return; settled = true; clearTimeout(timeout);
-      const counts = Object.fromEntries(Object.keys(readers[0].counts).map(key => [key, readers[1].counts[key] ?? readers[0].counts[key]]));
+      const counts = Object.fromEntries([...new Set(readers.flatMap(reader => Object.keys(reader.counts)))].map(key => [key, readers[1].counts[key] ?? readers[0].counts[key]]));
       resolve({ gate: step.id, outcome: timedOut ? 'timeout' : code === 0 ? 'passed' : 'failed',
         exitCode: Number.isInteger(code) ? code : null, durationMs: Date.now() - started, ...counts });
     };

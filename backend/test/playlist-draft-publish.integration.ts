@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PublicationPersistenceService } from '../src/publications/publication-persistence.service';
-import { PublishService } from '../src/publications/publish.service';
-import { PlaybackService } from '../src/playback/playback.service';
+import { PublishService } from './fixtures/services';
+import { PlaybackService } from './fixtures/services';
 import { PULL_FIXTURE_ARTIFACTS } from '../src/device-platform/pull-fixture-artifacts';
 
 const backendRoot = resolve(import.meta.dir, '..');

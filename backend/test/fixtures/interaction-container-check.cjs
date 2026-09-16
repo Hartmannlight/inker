@@ -1,15 +1,14 @@
 const assert = require('node:assert/strict');
+const { enroll, capabilitiesOverride } = require('./device-enrollment-client.cjs');
 const { randomUUID } = require('node:crypto');
 
 // Only the parent smoke's freshly created container and volumes are used.
 module.exports = async function check({ request, db, renderedFor, secrets, setStage }) {
   setStage('WP23 interaction fixture');
-  const created = await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP23 touch', deviceType: 'web-display' } });
+  const created = await request('/api/devices', { method: 'POST', admin: true, data: { name: 'WP23 touch', deviceType: 'web-display', capabilitiesOverride } });
   assert.equal(created.response.status, 201);
-  const device = created.body; secrets.push(device.pairingToken);
-  const paired = await request('/api/web-displays/pair', { method: 'POST', data: { externalId: device.externalId, pairingToken: device.pairingToken } });
-  assert.equal(paired.response.status, 201);
-  const token = paired.body.credential; secrets.push(token);
+  const device = created.body;
+  const token = await enroll(request, device, secrets);
   const headers = { Authorization: `Bearer ${token}` };
   const actions = [{ action: 'view.next', targetId: 'next', payloadSchemaVersion: '1.0' }];
   const revisions = [];

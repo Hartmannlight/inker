@@ -10,7 +10,7 @@ import sharp from 'sharp';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { generateToken, hashToken } from '../src/common/utils/crypto.util';
 import { PublicationPersistenceService } from '../src/publications/publication-persistence.service';
-import { PublishService } from '../src/publications/publish.service';
+import { PublishService } from './fixtures/services';
 import { ArtifactStore } from '../src/render-cache/artifact-store';
 import { RenderCacheService, RENDER_REQUESTED } from '../src/render-cache/render-cache.service';
 import { OutboxStore } from '../src/events/outbox.store';

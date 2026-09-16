@@ -1,3 +1,5 @@
+import { DeviceArtifactResolverService } from '../src/device-platform/device-artifact-resolver.service';
+import { fixtureArtifacts } from './fixtures/services';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawn } from 'bun';
 import { PrismaClient, type OutboxEvent, type Prisma } from '@prisma/client';
@@ -11,14 +13,14 @@ import { DiscoveryModule } from '@nestjs/core';
 import { parsePresentationManifest } from '@inker/contracts';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PublicationPersistenceService } from '../src/publications/publication-persistence.service';
-import { PublishService } from '../src/publications/publish.service';
+import { PublishService } from './fixtures/services';
 import { sha256 } from '../src/publications/publication-content';
 import { ArtifactStore } from '../src/render-cache/artifact-store';
 import { RenderCacheService, RENDER_READY, RENDER_REQUESTED } from '../src/render-cache/render-cache.service';
 import { RENDERER_VERSION } from '../src/render-cache/render-input';
 import { renderSnapshot } from '../src/render-cache/snapshot-renderer';
 import { OutboxStore } from '../src/events/outbox.store';
-import { PresentationService } from '../src/device-platform/presentation.service';
+import { PresentationService } from './fixtures/services';
 import { PullContentService } from '../src/device-platform/pull-content.service';
 import { ProfileResolverService } from '../src/device-platform/profile-resolver.service';
 import { DeviceConfigurationService } from '../src/device-platform/device-configuration.service';
@@ -122,6 +124,22 @@ describe('WP-19 persistent render cache', () => {
     expect(await outbox.ack(event)).toBe(true);
     return { key: key!, event };
   }
+
+  test('startup reconciliation preserves the durable assignment trace through render completion', async () => {
+    const assignment = await prisma.outboxEvent.findFirstOrThrow({ where: {
+      eventType: 'device.publication.desired-revision.changed', aggregateId: String(device.id),
+      aggregateRevision: String(device.publicationState!.desiredSequence),
+    } });
+    expect(assignment.correlationId).not.toBeNull();
+    await cache.reconcile();
+    const requested = await prisma.outboxEvent.findFirstOrThrow({ where: { eventType: RENDER_REQUESTED } });
+    expect(requested.correlationId).toBe(assignment.correlationId);
+    const event = await claimRender(requested.aggregateId);
+    await cache.render(event);
+    const ready = await prisma.outboxEvent.findFirstOrThrow({ where: { eventType: RENDER_READY } });
+    expect(ready.correlationId).toBe(assignment.correlationId);
+    expect(await outbox.ack(event)).toBe(true);
+  });
 
   async function read() {
     device = await reload();
@@ -336,6 +354,7 @@ describe('WP-19 persistent render cache', () => {
     const { key } = await requestAndRender();
     pullModule = await Test.createTestingModule({ imports: [DiscoveryModule], providers: [
       { provide: PrismaService, useValue: prisma }, { provide: RenderCacheService, useValue: cache },
+      { provide: DeviceArtifactResolverService, useValue: fixtureArtifacts(prisma as PrismaService, cache) },
       { provide: DeliveryPolicyRegistry, useValue: new DeliveryPolicyRegistry([
         new SleepyDeliveryPolicy(), new ResponsivePullDeliveryPolicy(),
       ]) },

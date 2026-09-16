@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { enroll, capabilitiesOverride } = require('./device-enrollment-client.cjs');
 const { randomUUID } = require('node:crypto');
 
 module.exports = async function check({ request, db, renderedFor, until, secrets, setStage, connect, worker }) {
@@ -6,12 +7,10 @@ module.exports = async function check({ request, db, renderedFor, until, secrets
   const clients = [];
   const actions = ['create', 'pause', 'resume', 'cancel', 'acknowledge'].map(action => ({ action: `timer.${action}`, payloadSchemaVersion: '1.0' }));
   for (let index = 0; index < 2; index++) {
-    const created = await request('/api/devices', { method: 'POST', admin: true, data: { name: `WP24 timer ${index}`, deviceType: 'web-display' } });
+    const created = await request('/api/devices', { method: 'POST', admin: true, data: { name: `WP24 timer ${index}`, deviceType: 'web-display', capabilitiesOverride } });
     assert.equal(created.response.status, 201);
-    secrets.push(created.body.pairingToken);
-    const paired = await request('/api/web-displays/pair', { method: 'POST', data: { externalId: created.body.externalId, pairingToken: created.body.pairingToken } });
-    assert.equal(paired.response.status, 201); secrets.push(paired.body.credential);
-    clients.push({ device: created.body, token: paired.body.credential, headers: { Authorization: `Bearer ${paired.body.credential}` } });
+    const token = await enroll(request, created.body, secrets);
+    clients.push({ device: created.body, token, headers: { Authorization: `Bearer ${token}` } });
   }
   const publication = await request('/api/publications/wp24-timers/publish', { method: 'POST', admin: true, data: {
     idempotencyKey: randomUUID(), expectedRevision: 0, deviceIds: clients.map(client => client.device.id),

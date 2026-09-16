@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Build shared contracts
 # =============================================================================
-FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS contracts-builder
+FROM oven/bun:1.4.2-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f AS contracts-builder
 
 WORKDIR /contracts
 
@@ -17,7 +17,7 @@ RUN bun run build
 # =============================================================================
 # Stage 2: Build frontend
 # =============================================================================
-FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS frontend-builder
+FROM oven/bun:1.4.2-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f AS frontend-builder
 
 WORKDIR /app
 
@@ -33,12 +33,12 @@ RUN bun run build
 # =============================================================================
 # Stage 3: Install backend production dependencies
 # =============================================================================
-FROM oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS backend-install
+FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS backend-install
 
 WORKDIR /app
 
 # Node.js binary for Prisma generate (bun segfaults with Prisma CLI)
-COPY --from=node:22.22.3-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.23.2-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
@@ -76,14 +76,17 @@ RUN bun install --frozen-lockfile && \
     rm -rf node_modules/@img/sharp-libvips-linuxmusl-x64 \
            node_modules/@img/sharp-linuxmusl-x64
 
+# The browser revision follows the locked Puppeteer package, not an independent pin.
+RUN node --input-type=module -e "import {PUPPETEER_REVISIONS} from 'puppeteer'; console.log(PUPPETEER_REVISIONS['chrome-headless-shell']);" > /tmp/chrome-version
+
 # =============================================================================
 # Stage 4: Build backend
 # =============================================================================
-FROM oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS backend-builder
+FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS backend-builder
 
 WORKDIR /app
 
-COPY --from=node:22.22.3-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.23.2-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 /usr/local/bin/node /usr/local/bin/node
 
 # The builder also runs the renderer unit suite. Keep Chromium's shared-library
 # set here so that those tests execute in CI without affecting the runtime image.
@@ -112,19 +115,17 @@ RUN bun run build
 # =============================================================================
 FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS production
 
+# renovate: datasource=github-releases depName=just-containers/s6-overlay
 ARG S6_OVERLAY_VERSION=3.2.1.0
-# Keep the rendering browser aligned with the revision expected by Puppeteer
-# 23.11.0. Do not resolve "stable" at build time: browser updates can change
-# font metrics and therefore device pixels for an otherwise identical commit.
-ARG CHROME_VERSION=131.0.6778.204
+COPY --from=backend-install /tmp/chrome-version /tmp/chrome-version
 # Provided automatically by `docker buildx` (amd64 | arm64). Falls back to the build host's
 # Debian arch so a plain `docker build` also works.
 ARG TARGETARCH
 
 # Install all system packages in one layer
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     # Nginx
-    nginx redis-server=5:8.0.2-3+deb13u2 redis-tools=5:8.0.2-3+deb13u2 \
+    nginx redis-server redis-tools \
     # Chrome headless shell dependencies
     wget ca-certificates openssl unzip \
     fonts-liberation fonts-symbola fonts-noto-cjk fontconfig \
@@ -135,6 +136,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     && \
     # Resolve target arch (buildx provides TARGETARCH; fall back to host arch for plain builds)
+    CHROME_VERSION="$(cat /tmp/chrome-version)" && rm /tmp/chrome-version && \
     TARGET_ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" && \
     # Install the headless browser per architecture, symlinked to a fixed path so the rest of
     # the image (and PUPPETEER_EXECUTABLE_PATH) is arch-agnostic.
@@ -183,11 +185,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
            /var/cache/debconf/*-old
 
 # Install Bun runtime (copy from build image)
-COPY --from=oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
 # Node.js binary for Prisma CLI (Bun's baseline mode crashes on non-AVX2 hardware)
-COPY --from=node:22.22.3-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.23.2-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 /usr/local/bin/node /usr/local/bin/node
 
 # Puppeteer configuration — fixed symlink resolves to the right browser per architecture
 # (chrome-headless-shell on amd64, distro chromium on arm64; both linked in the layer above)

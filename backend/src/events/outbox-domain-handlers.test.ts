@@ -16,9 +16,9 @@ function setup() {
     playback: mock(async () => undefined),
     renderCache: mock(async () => undefined),
     maintenance: mock(async () => undefined),
-    sources: mock(async () => 'complete' as const),
+    sources: mock(async (): Promise<'complete' | 'failed'> => 'complete'),
     timers: mock(async () => undefined),
-    remotes: mock(async () => 'complete' as const),
+    remotes: mock(async (): Promise<'complete' | 'failed'> => 'complete'),
   };
   return {
     calls,

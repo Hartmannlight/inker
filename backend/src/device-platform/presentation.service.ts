@@ -7,6 +7,7 @@ import type { DeliveryContext } from '../events/outbox.types';
 import { DeviceArtifactResolverService } from './device-artifact-resolver.service';
 import { PullArtifactLeaseService } from './pull-artifact-lease.service';
 import { readDisplayControl } from './display-control';
+import { sqliteWrite } from '../common/utils/sqlite-write.util';
 
 @Injectable()
 export class PresentationService {
@@ -22,7 +23,7 @@ export class PresentationService {
     const cached = await this.prisma.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: context.deliveryId } });
     if (cached.deviceId !== deviceId) throw new Error('OUTBOX_DEVICE_MISMATCH');
     if (cached.presentation) return this.validate(cached.presentation);
-    return this.prisma.$transaction(async tx => {
+    return sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
       // Technical receipt only. Neither initial delivery nor retries publish,
       // rotate playlists, change device state or increment a domain revision.
       await tx.$executeRaw`UPDATE outbox_deliveries SET device_id = device_id WHERE delivery_id = ${context.deliveryId} AND device_id = ${deviceId}`;
@@ -34,7 +35,7 @@ export class PresentationService {
       await tx.outboxDelivery.update({ where: { deliveryId: context.deliveryId },
         data: { presentation: presentation as unknown as Prisma.InputJsonValue } });
       return presentation;
-    });
+    }));
   }
 
   async artifact(deviceId: number, hash: string) {

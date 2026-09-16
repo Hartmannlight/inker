@@ -1,3 +1,4 @@
+import { describe, it, expect } from 'bun:test';
 import { floydSteinbergDither } from './raster.util';
 
 describe('floydSteinbergDither', () => {

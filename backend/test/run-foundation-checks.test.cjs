@@ -111,3 +111,67 @@ test('hung subprocess has a real deadline instead of a fabricated success', asyn
   expect(result.outcome).toBe('timeout');
   expect(result.durationMs).toBeLessThan(5000);
 });
+
+
+test('only allowlisted fixture stages survive diagnostics, never arbitrary error values', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('FOUNDATION_DIAGNOSTIC OUTBOX_WORKER_CONNECTION_READINESS\n'));
+  reader.write(Buffer.from('FOUNDATION_DIAGNOSTIC PRIVATE_SECRET\nFOUNDATION_DIAGNOSTIC OUTBOX_START token=secret\n'));
+  expect(reader.counts.diagnostic).toBe('OUTBOX_WORKER_CONNECTION_READINESS');
+  expect(JSON.stringify(reader.counts)).not.toContain('secret');
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+});
+
+
+test('fixture locations expose bounded line numbers only', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('FOUNDATION_FIXTURE_LINE 140\nFOUNDATION_FIXTURE_LINE 999999999\nFOUNDATION_FIXTURE_LINE 141 secret\n'));
+  expect(reader.counts.fixtureLine).toBe(140);
+  expect(JSON.stringify(reader.counts)).not.toContain('secret');
+});
+
+
+test('failed test reporting permits repository filenames but never test names or unknown paths', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('test/run-foundation-checks.test.cjs:\n(fail) PRIVATE_SECRET [12ms]\n/secret/path.test.ts:\n(fail) PRIVATE_SECRET\n'));
+  expect(reader.counts.failedFile).toBeUndefined();
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('/secret');
+});
+
+
+test('a failed integration title maps to a static source line without printing its text', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('test/publication-persistence.integration.ts:\n(fail) publication persistence boundary > WP-17 retry snapshots never mint revisions and preserve their original content after a new publish [12ms]\n'));
+  expect(reader.counts.failedFile).toBe('test/publication-persistence.integration.ts');
+  expect(reader.counts.failedTestLine).toBeGreaterThan(300);
+  reader.write(Buffer.from('src/common/utils/crypto.util.test.ts:\n(fail) publication persistence boundary > WP-17 retry snapshots never mint revisions and preserve their original content after a new publish [12ms]\n'));
+  expect(reader.counts.failedFile).toBe('test/publication-persistence.integration.ts');
+  expect(JSON.stringify(reader.counts)).not.toContain('snapshots');
+});
+
+test('fixture JSON retains known source locations without leaking values or paths', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from(JSON.stringify({ stage: 'Redis recovery with real worker samples', secret: 'PRIVATE_SECRET',
+    frames: [{ file: 'operations-container-fixture.cjs', line: 267, column: 'PRIVATE_SECRET' },
+      { file: '/private/secret.cjs', line: 1 }, { file: 'operations-container-fixture.cjs', line: 999999999 }] }) + '\n'));
+  reader.write(Buffer.from('{"stage":"PRIVATE_SECRET","frames":[null],"message":"PRIVATE_SECRET"}\n'));
+  expect(reader.counts.fixtureStageFile).toBe('test/operations-container-fixture.cjs');
+  expect(reader.counts.fixtureStageLine).toBeGreaterThan(200);
+  expect(reader.counts.fixtureFrames).toEqual([{ file: 'test/operations-container-fixture.cjs', line: 267 }]);
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('/private');
+});
+
+test('container smoke diagnostics expose static source locations only', () => {
+  const reader = summaryReader();
+  reader.write(Buffer.from('WP-15 production smoke failed at explicit publish\nSmoke source location: 131:7\n'));
+  reader.write(Buffer.from('WP-15 production smoke failed at PRIVATE_SECRET\nSmoke source location: 999999999:1\n'));
+  expect(reader.counts.smokeStageFile).toBe('test/websocket-container-smoke.cjs');
+  expect(reader.counts.smokeStageLine).toBeGreaterThan(100);
+  expect(reader.counts.smokeLine).toBe(131);
+  expect(JSON.stringify(reader.counts)).not.toContain('PRIVATE_SECRET');
+  expect(JSON.stringify(reader.counts)).not.toContain('explicit publish');
+  reader.write(Buffer.from('Numeric assertion: actual=500 expected=200\nNumeric assertion: actual=123456 expected=654321\n'));
+  expect(reader.counts.httpAssertion).toEqual({ actual: 500, expected: 200 });
+});

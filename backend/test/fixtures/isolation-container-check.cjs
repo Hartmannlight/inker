@@ -66,9 +66,16 @@ module.exports = async function checkIsolation({ request, db, until, secrets, ba
   assert.deepEqual(source.snapshot.data, { value: 21 });
 
   setStage('WP22 hard parent deadline independent of guest interrupt');
-  const dataSource = db(`console.log(JSON.stringify(await p.dataSource.create({data:{name:'WP22 persisted fixture',type:'json',url:'https://example.invalid/never-fetch',lastData:{value:7},lastFetchedAt:new Date()}})));`);
+  const dataSource = await request('/api/sources', { method: 'POST', admin: true, data: {
+    protocolVersion: '1.0', name: 'WP22 persisted fixture', connectorType: 'fixture', schemaVersion: '1',
+    configuration: { data: { value: 7 } }, refreshIntervalSeconds: 3600, timeoutMs: 2000,
+    concurrencyGroup: 'wp22-preview',
+  } });
+  assert.equal(dataSource.response.status, 201);
+  const sourceDefinitionId = dataSource.body.definition.sourceDefinitionId;
+  await until(async () => (await request(`/api/sources/${sourceDefinitionId}`, { admin: true })).body.snapshot?.freshness.state === 'fresh');
   const widget = await request('/api/custom-widgets', { method: 'POST', admin: true, data: {
-    name: 'WP22 adversarial fixture', dataSourceId: dataSource.id, displayType: 'script',
+    name: 'WP22 adversarial fixture', sourceDefinitionId, displayType: 'script',
     config: { scriptCode: 'while(true){}', scriptOutputMode: 'value' },
   } });
   assert.equal(widget.response.status, 201);

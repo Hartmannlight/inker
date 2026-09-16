@@ -1,0 +1,37 @@
+name: Container Release
+'on':
+  push:
+    branches:
+    - main
+    tags:
+    - v*
+  workflow_dispatch: null
+permissions:
+  contents: read
+concurrency:
+  group: container-release
+  cancel-in-progress: false
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: candidate-amd64
+        path: artifacts
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+    - run: docker load -i artifacts/image.tar
+    - uses: Hartmannlight/pipeline-toolkit/actions/scan@abb469f033ee28e00ba1061a47dddfc7d961129a
+    - uses: Hartmannlight/pipeline-toolkit/actions/publish@abb469f033ee28e00ba1061a47dddfc7d961129a
+      with:
+        image: ghcr.io/hartmannlight/inker
+        token: ${{ secrets.GITHUB_TOKEN }}
