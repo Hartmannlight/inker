@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Logger as NestLogger } from '@nestjs/common';
 import { Writable } from 'node:stream';
+import { once } from 'node:events';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -167,9 +168,22 @@ describe('bounded rotating file configuration', () => {
         const sink = winston.createLogger({ ...configuration, transports: files });
         sinks.push(sink);
         const logger = new SafeLogger(sink, role);
+        // Wait for real file opens and disk writes, not a fixed scheduling delay.
+        const flushFiles = async () => {
+          for (const file of files) {
+            const transport = file as any;
+            if (transport._opening || transport._rotate) await once(file, 'open');
+            await new Promise<void>((resolve, reject) => {
+              transport._dest.write('', (error?: Error | null) => error ? reject(error) : resolve());
+            });
+          }
+        };
+        await flushFiles();
         for (let index = 0; index < 50; index++) {
+          const logged = files.map(file => once(file, 'logged'));
           logger.error({ code: 'SOURCE_TIMEOUT', message: `entry ${index} ${'x'.repeat(200)}` });
-          await new Promise(resolve => setTimeout(resolve, 5));
+          await Promise.all(logged);
+          await flushFiles();
         }
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error('LOG_DRAIN_TIMEOUT')), 3000);
@@ -181,11 +195,18 @@ describe('bounded rotating file configuration', () => {
         const retained = names.filter(name => name.startsWith(`${role}-${kind}`));
         expect(retained.length).toBeGreaterThan(1);
         expect(retained.length).toBeLessThanOrEqual(LOG_FILE_POLICY.filesPerStream);
+        const messages: string[] = [];
         for (const name of retained) {
           const contents = await readFile(join(directory, name), 'utf8');
-          expect(contents.trim().split(/\r?\n/).every(line => JSON.parse(line).role === role)).toBe(true);
+          // Rotation may leave the newly opened active file empty.
+          const records = contents.trim() ? contents.trim().split(/\r?\n/).map(line => JSON.parse(line)) : [];
+          expect(records.every(record => record.role === role)).toBe(true);
+          messages.push(...records.map(record => record.message));
+          if (name !== `${role}-${kind}.log`) expect(records.length).toBeGreaterThan(0);
+          if (process.platform !== 'win32') expect((await stat(join(directory, name))).mode & 0o777).toBe(0o600);
           expect((await stat(join(directory, name))).size).toBeLessThanOrEqual(1024 + SAFE_LOG_LIMITS.recordBytes);
         }
+        expect(messages.some(message => message.startsWith('entry 49 '))).toBe(true);
       }
     } finally {
       if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous;

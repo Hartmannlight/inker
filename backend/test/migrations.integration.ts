@@ -106,6 +106,8 @@ afterEach(() => {
   }
 });
 
+// Prisma CLI subprocesses can exceed Bun's 5s default on shared runners.
+// Keep the same bounded 30s budget as the existing deployment migration tests.
 describe("Prisma migration baseline", () => {
   test.each([
     ['WP-26', '20260904000000_federation_shares', '20260903000000_timers', ['federation_identity', 'share_credentials']],
@@ -391,7 +393,7 @@ describe("Prisma migration baseline", () => {
     applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
 
   test('WP-22 adds nullable bounded transformation code without rewriting sources or snapshots', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp22-upgrade.db');
@@ -421,7 +423,7 @@ describe("Prisma migration baseline", () => {
     applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
 
   test('WP-21 adds empty source storage without changing publications, renders or outbox', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp21-upgrade.db');
@@ -449,7 +451,7 @@ describe("Prisma migration baseline", () => {
     applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
   test('WP-20 startup seed is repeatable and preserves existing configuration', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp20-seed.db');
     expect((await deploy(databasePath)).exitCode).toBe(0);
@@ -507,7 +509,7 @@ describe("Prisma migration baseline", () => {
     applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
 
   test('recipe bridge preserves legacy content and adds immutable revision targets', async () => {
     const databasePath = join(createTemporaryDirectory(), 'recipe-bridge-upgrade.db');
@@ -560,7 +562,7 @@ describe("Prisma migration baseline", () => {
     } finally { database.close(); }
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
   test('WP-18 upgrades WP-17 without adopting drafts or changing desired state, credentials or outbox', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp18-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
@@ -592,7 +594,7 @@ describe("Prisma migration baseline", () => {
     applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
   test('WP-17 preserves published state and delivery identity while invalidating only legacy retry snapshots', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp17-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
@@ -625,7 +627,7 @@ describe("Prisma migration baseline", () => {
     applySql(databasePath, migrationNames(migrations, name => name > latest).map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
   test('UX-02 migrates valid legacy Grafana panel children to worker-owned sources without decrypting credentials', async () => {
     const databasePath = join(createTemporaryDirectory(), 'ux02-grafana-upgrade.db');
     const migrations = join(prismaDirectory, 'migrations');
@@ -668,7 +670,7 @@ describe("Prisma migration baseline", () => {
       .map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
 
   test('WP-29 upgrades existing effects to frozen snapshots and adds empty checkpoints', async () => {
     const databasePath = join(createTemporaryDirectory(), 'wp29-checkpoints-upgrade.db');
@@ -693,7 +695,7 @@ describe("Prisma migration baseline", () => {
       .map(name => join(migrations, name, 'migration.sql')));
     const comparison = await compareWithDatamodel(databasePath);
     expect(comparison.exitCode, comparison.output).toBe(0);
-  });
+  }, 30_000);
   test("installs a fresh database and is idempotent on restart", async () => {
     const databasePath = join(createTemporaryDirectory(), "fresh.db");
 
