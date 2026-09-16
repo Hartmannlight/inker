@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { randomUUID, randomBytes, createHash } = require('node:crypto');
 const { writeFileSync, mkdirSync } = require('node:fs');
 const path = require('node:path');
+const { monitorEventLoopDelay } = require('node:perf_hooks');
 const { WebSocket } = require('ws');
 const { parseDeviceServerMessage, parseOperationsStatus, parsePresentationManifest, parseTimerFeed } = require('../../contracts/dist/index.cjs');
 const fixture = require('./remote-container-fixture.cjs');
@@ -79,6 +80,25 @@ function diagnose(error) {
     ...(Number.isFinite(error?.actual) && Number.isFinite(error?.expected) ? { actual: error.actual, expected: error.expected } : {}),
     ...(frame ? { file: frame[1], line: Number(frame[2]), column: Number(frame[3]) } : {}) };
 }
+// Export only fixed route groups and bounded numeric fields, never log messages,
+// paths, IDs, headers or credentials. The slowest requests distinguish server
+// latency from delays in the load generator without publishing raw fixture logs.
+function requestTimingEvidence(log) {
+  const routes = new Set(['live', 'health', 'ready', 'auth', 'pairing', 'devices', 'sources', 'publications', 'display', 'operations', 'other']);
+  const slowest = [];
+  for (const line of log.split('\n')) {
+    let row; try { row = JSON.parse(line); } catch { continue; }
+    if (!row || typeof row !== 'object') continue;
+    if (row.message && typeof row.message === 'object') row = { ...row, ...row.message };
+    if (!['REQUEST_COMPLETED', 'REQUEST_FAILED'].includes(row.code) || !routes.has(row.route)
+      || !Number.isFinite(row.durationMs) || row.durationMs < 500 || row.durationMs > 86400000
+      || !Number.isInteger(row.statusCode) || row.statusCode < 100 || row.statusCode > 599) continue;
+    slowest.push({ route: row.route, durationMs: row.durationMs, statusCode: row.statusCode });
+    slowest.sort((a, b) => b.durationMs - a.durationMs);
+    if (slowest.length > 20) slowest.length = 20;
+  }
+  return slowest;
+}
 async function saveFailureDiagnostics(state) {
   const output = await r.exec(state, ['bun', '-e', `const fs=require('node:fs');const dir='/app/logs';const chunks=[];let size=0;
     if(fs.existsSync(dir))for(const name of fs.readdirSync(dir).sort()){
@@ -88,7 +108,7 @@ async function saveFailureDiagnostics(state) {
   r.noSecrets(state, output);
   const failureLogPath = path.resolve(__dirname, `../../.tmp/foundation-load-${state.runId}-failure.log`);
   writeFileSync(failureLogPath, output);
-  return { file: path.basename(failureLogPath), bytes: Buffer.byteLength(output), sha256: hash(output) };
+  return { file: path.basename(failureLogPath), bytes: Buffer.byteLength(output), sha256: hash(output), slowestServerRequests: requestTimingEvidence(output) };
 }
 function assertLiveHealthy(state) {
   if (state.reconnectFailure) throw state.reconnectFailure;
@@ -398,6 +418,7 @@ async function workload(state, name, durationMs, action) {
   stage = name; await r.owned(state); const before = await counts(state);
   const phase = { name, display: [], control: [], memoryBytes: [], memoryPeakBytes: 0, queueAge: {}, queueSamples: {}, unknownQueueSamples: 0,
     operations: 0, touchEvents: 0, start: Date.now() };
+  const eventLoop = monitorEventLoopDelay({ resolution: 20 }); eventLoop.enable();
   let stop = false, failure;
   const loop = async (interval, operation) => {
     while (!stop && !failure) {
@@ -422,9 +443,10 @@ async function workload(state, name, durationMs, action) {
   const start = performance.now();
   const check = () => { if (failure) throw failure; assertLiveHealthy(state); };
   try { if (action) await action(phase, check); await sleep(Math.max(0, durationMs - (performance.now() - start))); }
-  finally { stop = true; await Promise.all(jobs); }
+  finally { stop = true; await Promise.all(jobs); eventLoop.disable(); }
   if (failure) throw failure;
   const result = { name, elapsedMs: performance.now() - start, display: summary(phase.display), control: summary(phase.control),
+    loadGeneratorEventLoop: { maxMs: eventLoop.max / 1e6, p95Ms: eventLoop.percentile(95) / 1e6 },
     operations: phase.operations, touchEvents: phase.touchEvents, queueAgeSeconds: phase.queueAge,
     queueSamples: phase.queueSamples, unknownQueueSamples: phase.unknownQueueSamples,
     memorySampleMaxBytes: Math.max(...phase.memoryBytes), memoryPeakBytes: phase.memoryPeakBytes, dbRowWrites: countDelta(before, await counts(state)) };
@@ -727,6 +749,6 @@ if (require.main === module) main().catch(error => {
   if (diagnostic.line) console.error(`FOUNDATION_FIXTURE_LINE ${diagnostic.line}`);
   console.error(JSON.stringify(diagnostic)); process.exitCode = 1;
 });
-module.exports = { limits, percentile, summary, diagnose, executionOverlap, attachLiveState, acceptTimerFeed,
+module.exports = { limits, percentile, summary, diagnose, requestTimingEvidence, executionOverlap, attachLiveState, acceptTimerFeed,
   exchangeEnrollmentWithRateLimit, close, isRecoverableDeliveryLeaseClose, deliveryLeaseBackoffMs,
   recordDeliveryLeaseClose, completeDeliveryLeaseRecovery, pumpLeaseReconnects, assertNoManualLeaseRecovery };
