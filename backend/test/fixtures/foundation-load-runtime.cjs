@@ -47,6 +47,12 @@ function noSecrets(state, value) {
 function acceptAdminCookie(state, headers) {
   return runtime.acceptAdminCookie(state, 'home', headers);
 }
+function httpFailureCode(error) {
+  if (error?.code === 'ABORT_ERR') return 'FOUNDATION_HTTP_TIMEOUT';
+  if (['ECONNRESET', 'EPIPE'].includes(error?.code)) return 'FOUNDATION_HTTP_RESET';
+  if (error?.code === 'ECONNREFUSED') return 'FOUNDATION_HTTP_UNAVAILABLE';
+  return 'FOUNDATION_HTTP_FAILED';
+}
 function request(state, requestPath, { method = 'GET', data, admin = false, headers = {}, timeoutMs = 10000 } = {}) {
   check(requestPath.startsWith('/') && !requestPath.startsWith('//'), 'FOUNDATION_PATH_INVALID');
   check(Number.isInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 10000, 'FOUNDATION_HTTP_TIMEOUT_INVALID');
@@ -60,7 +66,7 @@ function request(state, requestPath, { method = 'GET', data, admin = false, head
         ...(admin ? { Cookie: state.servers.home.cookie, 'X-CSRF-Token': state.servers.home.csrf } : {}), ...headers,
       } }, response => {
       let size = 0; const chunks = [];
-      response.on('error', () => reject(new Error('FOUNDATION_HTTP_FAILED')));
+      response.on('error', error => reject(new Error(httpFailureCode(error))));
       response.on('data', chunk => { size += chunk.length; if (size > 3 * 1024 * 1024) response.destroy(new Error('FOUNDATION_HTTP_LIMIT')); else chunks.push(chunk); });
       response.on('end', () => {
         const durationMs = performance.now() - start;
@@ -70,7 +76,7 @@ function request(state, requestPath, { method = 'GET', data, admin = false, head
         } catch { reject(new Error('FOUNDATION_SESSION_COOKIE_INVALID')); }
       });
     });
-    req.on('error', () => reject(new Error('FOUNDATION_HTTP_FAILED'))); req.end(bytes);
+    req.on('error', error => reject(new Error(httpFailureCode(error)))); req.end(bytes);
   });
 }
 function json(response) {
@@ -113,4 +119,4 @@ async function wait(predicate, milliseconds = 90000) {
   while (Date.now() < end) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 250)); }
   throw new Error('FOUNDATION_CONDITION_TIMEOUT');
 }
-module.exports = { base, docker, owned, exec, control, service, resources, noSecrets, acceptAdminCookie, request, json, db, memory, workerEvents, wait };
+module.exports = { httpFailureCode, base, docker, owned, exec, control, service, resources, noSecrets, acceptAdminCookie, request, json, db, memory, workerEvents, wait };

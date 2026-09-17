@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { executionOverlap, attachLiveState, acceptTimerFeed, exchangeEnrollmentWithRateLimit, close,
+const { requestTimingEvidence, executionOverlap, attachLiveState, acceptTimerFeed, exchangeEnrollmentWithRateLimit, close,
   isRecoverableDeliveryLeaseClose, deliveryLeaseBackoffMs, recordDeliveryLeaseClose,
   completeDeliveryLeaseRecovery, pumpLeaseReconnects, assertNoManualLeaseRecovery } = require('./foundation-load.cjs');
-const { acceptAdminCookie } = require('./fixtures/foundation-load-runtime.cjs');
+const { httpFailureCode, acceptAdminCookie } = require('./fixtures/foundation-load-runtime.cjs');
 const { MISSING_SECRET_REFUSAL, isExpectedMissingSecretRefusal } = require('./foundation-backup-restore.cjs');
 const event = (eventId, queue, code, ms, attempt = 1) => ({ eventId, queue, code, attempt,
   timestamp: new Date(ms).toISOString(), ...(queue === 'source-refresh' ? { sourceDefinitionId: 'slow' } : {}) });
@@ -250,4 +250,31 @@ test('missing-secret restore gate accepts only the exact fail-closed refusal', (
   assert.equal(isExpectedMissingSecretRefusal(2, Buffer.from(MISSING_SECRET_REFUSAL)), false);
   assert.equal(isExpectedMissingSecretRefusal(1, Buffer.from('API_START_FAILED')), false);
   assert.equal(isExpectedMissingSecretRefusal(1, Buffer.from(`${MISSING_SECRET_REFUSAL}\nunexpected`)), false);
+});
+
+
+test('failure timing evidence is bounded and cannot export arbitrary log fields', () => {
+  const row = { code: 'REQUEST_COMPLETED', route: 'display', statusCode: 200, durationMs: 5100,
+    message: 'secret', path: '/secret', authorization: 'secret' };
+  const lines = [JSON.stringify(row), 'not JSON', 'null', JSON.stringify({ ...row, route: 'secret' }),
+    JSON.stringify({ ...row, durationMs: 'secret' }), JSON.stringify({ ...row, statusCode: 'secret' }),
+    JSON.stringify({ ...row, durationMs: -1 }), JSON.stringify({ ...row, durationMs: 1e9 }),
+    JSON.stringify({ ...row, durationMs: 499 }), JSON.stringify({ ...row, code: 'OTHER' }),
+    JSON.stringify({ message: { ...row, route: 'auth', durationMs: 700 } })];
+  assert.deepEqual(requestTimingEvidence(lines.join('\n')), [
+    { route: 'display', statusCode: 200, durationMs: 5100 }, { route: 'auth', statusCode: 200, durationMs: 700 },
+  ]);
+  const bounded = requestTimingEvidence(Array.from({ length: 100 }, (_, i) => JSON.stringify({ ...row, durationMs: 500 + i })).join('\n'));
+  assert.equal(bounded.length, 20); assert.equal(bounded[0].durationMs, 599); assert.equal(bounded[19].durationMs, 580);
+  assert.ok(!JSON.stringify(bounded).includes('secret'));
+});
+
+
+test('HTTP failures expose only fixed categories without request or credential data', () => {
+  assert.equal(httpFailureCode({ code: 'ABORT_ERR', message: 'secret' }), 'FOUNDATION_HTTP_TIMEOUT');
+  assert.equal(httpFailureCode({ code: 'ECONNRESET' }), 'FOUNDATION_HTTP_RESET');
+  assert.equal(httpFailureCode({ code: 'EPIPE' }), 'FOUNDATION_HTTP_RESET');
+  assert.equal(httpFailureCode({ code: 'ECONNREFUSED' }), 'FOUNDATION_HTTP_UNAVAILABLE');
+  assert.equal(httpFailureCode({ code: 'secret', message: 'secret' }), 'FOUNDATION_HTTP_FAILED');
+  assert.equal(httpFailureCode(null), 'FOUNDATION_HTTP_FAILED');
 });
