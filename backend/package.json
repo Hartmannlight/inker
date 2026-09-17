@@ -67,7 +67,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.16.0",
+    "@eslint/js": "^9.39.5",
     "@nestjs/cli": "^10.2.1",
     "@nestjs/schematics": "^10.1.0",
     "@nestjs/testing": "^10.3.0",
@@ -80,7 +80,7 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
-    "eslint": "^9.16.0",
+    "eslint": "^9.39.5",
     "globals": "^15.13.0",
     "prettier": "^3.1.1",
     "prisma": "^6.2.0",
