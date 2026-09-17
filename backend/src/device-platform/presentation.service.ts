@@ -23,6 +23,12 @@ export class PresentationService {
     const cached = await this.prisma.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: context.deliveryId } });
     if (cached.deviceId !== deviceId) throw new Error('OUTBOX_DEVICE_MISMATCH');
     if (cached.presentation) return this.validate(cached.presentation);
+    // Artifact resolution can read through other services and render a dynamic
+    // design. Do not hold SQLite's writer/only pooled connection across that
+    // work. The selected revision is immutable; the first committed receipt
+    // below remains authoritative for concurrent deliveries and retries.
+    const presentation = await this.build(deviceId, this.prisma);
+    context.signal.throwIfAborted();
     return sqliteWrite(this.prisma, () => this.prisma.$transaction(async tx => {
       // Technical receipt only. Neither initial delivery nor retries publish,
       // rotate playlists, change device state or increment a domain revision.
@@ -30,7 +36,6 @@ export class PresentationService {
       const receipt = await tx.outboxDelivery.findUniqueOrThrow({ where: { deliveryId: context.deliveryId } });
       if (receipt.deviceId !== deviceId) throw new Error('OUTBOX_DEVICE_MISMATCH');
       if (receipt.presentation) return this.validate(receipt.presentation);
-      const presentation = await this.build(deviceId, tx);
       context.signal.throwIfAborted();
       await tx.outboxDelivery.update({ where: { deliveryId: context.deliveryId },
         data: { presentation: presentation as unknown as Prisma.InputJsonValue } });

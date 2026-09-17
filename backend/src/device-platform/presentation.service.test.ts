@@ -47,6 +47,38 @@ describe('PresentationService', () => {
     expect(prisma.publicationRevision.create.calls).toHaveLength(0);
   });
 
+  it('resolves the manifest before taking the writer and preserves a concurrent receipt', async () => {
+    const saved = await service.getForDevice(3);
+    const concurrent = { ...saved, revision: saved.revision + 1 };
+    const device = await prisma.device.findUnique();
+    let inTransaction = false, reads = 0;
+    prisma.device.findUnique.mockImplementation(async () => {
+      expect(inTransaction).toBe(false);
+      reads++;
+      return device;
+    });
+    const receipt = { findUniqueOrThrow: async () => ({ deviceId: 3, presentation: inTransaction ? concurrent : null }) };
+    Object.assign(prisma.outboxDelivery, receipt);
+    prisma.$transaction.mockImplementation(async (callback: any) => {
+      inTransaction = true;
+      try { return await callback({ ...prisma, $executeRaw: async () => 1 }); }
+      finally { inTransaction = false; }
+    });
+    expect(await service.getForDevice(3, { deliveryId: 'delivery', signal: new AbortController().signal })).toEqual(concurrent);
+    expect(reads).toBe(1);
+    expect(prisma.outboxDelivery.update.calls).toHaveLength(0);
+  });
+
+  it('does not persist a presentation if cancellation arrives during resolution', async () => {
+    const device = await prisma.device.findUnique();
+    const abort = new AbortController();
+    Object.assign(prisma.outboxDelivery, { findUniqueOrThrow: async () => ({ deviceId: 3, presentation: null }) });
+    prisma.device.findUnique.mockImplementation(async () => { abort.abort(); return device; });
+    await expect(service.getForDevice(3, { deliveryId: 'delivery', signal: abort.signal })).rejects.toThrow();
+    expect(prisma.$transaction.calls).toHaveLength(0);
+    expect(prisma.outboxDelivery.update.calls).toHaveLength(0);
+  });
+
   it('uses the same device-themed dynamic artifact for the admin preview', async () => {
     const device = await prisma.device.findUnique();
     const content = { schemaVersion: 1, image: { png: Buffer.from('old').toString('base64'), width: 480, height: 480, sha256: sha256(Buffer.from('old')) } };

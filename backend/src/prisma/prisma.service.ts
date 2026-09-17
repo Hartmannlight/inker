@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { sqliteConnectionUrl } from './sqlite-connection';
 
 type PrismaLoggingOptions = {
   log: [
@@ -20,6 +21,7 @@ export class PrismaService extends PrismaClient<PrismaLoggingOptions> implements
 
   constructor() {
     super({
+      ...(process.env.DATABASE_URL ? { datasources: { db: { url: sqliteConnectionUrl(process.env.DATABASE_URL) } } } : {}),
       log: [
         { level: 'query', emit: 'event' },
         { level: 'error', emit: 'stdout' },
