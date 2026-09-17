@@ -443,7 +443,10 @@ async function workload(state, name, durationMs, action) {
   const start = performance.now();
   const check = () => { if (failure) throw failure; assertLiveHealthy(state); };
   try { if (action) await action(phase, check); await sleep(Math.max(0, durationMs - (performance.now() - start))); }
+  catch (error) { failure ??= error; }
   finally { stop = true; await Promise.all(jobs); eventLoop.disable(); }
+  lastPhaseResult = { name, elapsedMs: performance.now() - start, display: summary(phase.display), control: summary(phase.control),
+    loadGeneratorEventLoop: { maxMs: eventLoop.max / 1e6, p95Ms: eventLoop.percentile(95) / 1e6 } };
   if (failure) throw failure;
   const result = { name, elapsedMs: performance.now() - start, display: summary(phase.display), control: summary(phase.control),
     loadGeneratorEventLoop: { maxMs: eventLoop.max / 1e6, p95Ms: eventLoop.percentile(95) / 1e6 },

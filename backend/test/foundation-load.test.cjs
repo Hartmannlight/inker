@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { requestTimingEvidence, executionOverlap, attachLiveState, acceptTimerFeed, exchangeEnrollmentWithRateLimit, close,
   isRecoverableDeliveryLeaseClose, deliveryLeaseBackoffMs, recordDeliveryLeaseClose,
   completeDeliveryLeaseRecovery, pumpLeaseReconnects, assertNoManualLeaseRecovery } = require('./foundation-load.cjs');
-const { acceptAdminCookie } = require('./fixtures/foundation-load-runtime.cjs');
+const { httpFailureCode, acceptAdminCookie } = require('./fixtures/foundation-load-runtime.cjs');
 const { MISSING_SECRET_REFUSAL, isExpectedMissingSecretRefusal } = require('./foundation-backup-restore.cjs');
 const event = (eventId, queue, code, ms, attempt = 1) => ({ eventId, queue, code, attempt,
   timestamp: new Date(ms).toISOString(), ...(queue === 'source-refresh' ? { sourceDefinitionId: 'slow' } : {}) });
@@ -267,4 +267,14 @@ test('failure timing evidence is bounded and cannot export arbitrary log fields'
   const bounded = requestTimingEvidence(Array.from({ length: 100 }, (_, i) => JSON.stringify({ ...row, durationMs: 500 + i })).join('\n'));
   assert.equal(bounded.length, 20); assert.equal(bounded[0].durationMs, 599); assert.equal(bounded[19].durationMs, 580);
   assert.ok(!JSON.stringify(bounded).includes('secret'));
+});
+
+
+test('HTTP failures expose only fixed categories without request or credential data', () => {
+  assert.equal(httpFailureCode({ code: 'ABORT_ERR', message: 'secret' }), 'FOUNDATION_HTTP_TIMEOUT');
+  assert.equal(httpFailureCode({ code: 'ECONNRESET' }), 'FOUNDATION_HTTP_RESET');
+  assert.equal(httpFailureCode({ code: 'EPIPE' }), 'FOUNDATION_HTTP_RESET');
+  assert.equal(httpFailureCode({ code: 'ECONNREFUSED' }), 'FOUNDATION_HTTP_UNAVAILABLE');
+  assert.equal(httpFailureCode({ code: 'secret', message: 'secret' }), 'FOUNDATION_HTTP_FAILED');
+  assert.equal(httpFailureCode(null), 'FOUNDATION_HTTP_FAILED');
 });
