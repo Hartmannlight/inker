@@ -462,7 +462,7 @@ describe("WP-18 persistent playback", () => {
     const controller = new AbortController();
     const pending = delayed.advanceDue(event, controller.signal);
     try {
-      await inside;
+      await Promise.race([inside, pending.then(() => { throw new Error('Playback completed before the transaction hold'); })]);
       expect(writes.some(query => query.includes('device_publication_states'))).toBe(true);
       // A real timer cancels work after domain writes, before commit. No production fail switch.
       const timer = setTimeout(() => { controller.abort('sensitive-test-reason'); release(); }, 25);
@@ -470,16 +470,24 @@ describe("WP-18 persistent playback", () => {
       finally { clearTimeout(timer); }
     } finally { release(); }
     expect(await snapshot()).toEqual(before);
-    await p.outboxEvent.update({ where: { eventId: event.eventId }, data: {
-      claimUntil: new Date(Date.now() + 25),
-    } });
     const beforeLease = await snapshot();
+    // A scheduling gap longer than the short lease must be harmless during setup.
+    await new Promise(resolve => setTimeout(resolve, 50));
     let leaseEntered!: () => void, leaseRelease!: () => void;
     const leaseInside = new Promise<void>(resolve => { leaseEntered = resolve; });
     const leaseHeld = new Promise<void>(resolve => { leaseRelease = resolve; });
     class LeaseHeldPublicationPersistence extends PublicationPersistenceService {
       override async setDesiredRevision(...args: Parameters<PublicationPersistenceService['setDesiredRevision']>) {
         const result = await super.setDesiredRevision(...args);
+        // Start the short lease only after entering the real transaction and
+        // performing the domain writes. Snapshot/setup latency must not expire
+        // the claim before the scenario under test can begin. This lease edit
+        // is part of the same transaction, so rollback restores it as well.
+        const transaction = args[2];
+        if (!transaction) throw new Error('Expected the playback transaction');
+        await transaction.outboxEvent.update({ where: { eventId: event.eventId }, data: {
+          claimUntil: new Date(Date.now() + 25),
+        } });
         leaseEntered();
         await leaseHeld;
         return result;
@@ -489,7 +497,7 @@ describe("WP-18 persistent playback", () => {
       new LeaseHeldPublicationPersistence(p as PrismaService), { now: () => now });
     const leasePending = leaseDelayed.advanceDue(event);
     try {
-      await leaseInside;
+      await Promise.race([leaseInside, leasePending.then(() => { throw new Error('Playback completed before the lease hold'); })]);
       await new Promise(resolve => setTimeout(resolve, 35));
       leaseRelease();
       await expect(leasePending).rejects.toThrow('OUTBOX_CLAIM_EXPIRED');
