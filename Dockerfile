@@ -38,7 +38,7 @@ FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52
 WORKDIR /app
 
 # Node.js binary for Prisma generate (bun segfaults with Prisma CLI)
-COPY --from=node:22.23.2-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.23.2-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9 /usr/local/bin/node /usr/local/bin/node
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
@@ -86,7 +86,7 @@ FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52
 
 WORKDIR /app
 
-COPY --from=node:22.23.2-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.23.2-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9 /usr/local/bin/node /usr/local/bin/node
 
 # The builder also runs the renderer unit suite. Keep Chromium's shared-library
 # set here so that those tests execute in CI without affecting the runtime image.
@@ -189,7 +189,7 @@ COPY --from=oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
 # Node.js binary for Prisma CLI (Bun's baseline mode crashes on non-AVX2 hardware)
-COPY --from=node:22.23.2-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22.23.2-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9 /usr/local/bin/node /usr/local/bin/node
 
 # Puppeteer configuration — fixed symlink resolves to the right browser per architecture
 # (chrome-headless-shell on amd64, distro chromium on arm64; both linked in the layer above)
