@@ -50,7 +50,7 @@
     "bullmq": "^5.81.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
-    "compression": "^1.7.4",
+    "compression": "^1.8.2",
     "helmet": "^7.1.0",
     "ioredis": "5.11.1",
     "joi": "^17.13.7",
@@ -62,7 +62,7 @@
     "quickjs-emscripten": "0.32.0",
     "reflect-metadata": "^0.1.14",
     "rxjs": "^7.8.2",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "winston": "^3.11.0",
     "ws": "^8.22.0"
   },
@@ -89,6 +89,7 @@
     "typescript": "^5.3.3"
   },
   "overrides": {
+    "proxy-addr": "^2.0.8",
     "qs": "^6.14.1",
     "basic-ftp": "^5.2.0",
     "lodash": "^4.18.0",
