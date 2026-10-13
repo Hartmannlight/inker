@@ -1,5 +1,5 @@
 import { Resolver } from 'node:dns/promises';
-import { connect as tlsConnect, checkServerIdentity, type TLSSocket } from 'node:tls';
+import { connect as tlsConnect, checkServerIdentity, type PeerCertificate, type TLSSocket } from 'node:tls';
 import { isIP } from 'node:net';
 
 const DEADLINE_MS = 5000;
@@ -279,15 +279,17 @@ export class RemoteTransport {
           };
           // Connect to the validated numeric address: no second DNS resolution,
           // proxy environment, pooled socket or HTTP/2 negotiation can intervene.
-          socket = tlsConnect({ host: selected.address, port: Number(parsed.port) || 443,
+          const connected = tlsConnect({ host: selected.address, port: Number(parsed.port) || 443,
             servername: isIP(host) ? undefined : host, rejectUnauthorized: true, minVersion: 'TLSv1.2', ca: this.ca,
-            ALPNProtocols: ['http/1.1'], checkServerIdentity: (_serverName, cert) => checkServerIdentity(host, cert),
+            ALPNProtocols: ['http/1.1'], checkServerIdentity: (_serverName: string, cert: PeerCertificate) => checkServerIdentity(host, cert),
           });
-          socket.on('error', () => fail('REQUEST_FAILED'));
-          socket.on('data', (chunk: Buffer) => parse(() => parser.feed(chunk)));
-          socket.on('end', () => parse(() => parser.end()));
-          socket.on('close', () => { if (!settled) fail('REQUEST_FAILED'); });
-          socket.once('secureConnect', () => {
+          if (!connected) { fail('REQUEST_FAILED'); return; }
+          socket = connected;
+          connected.on('error', () => fail('REQUEST_FAILED'));
+          connected.on('data', (chunk: Buffer) => parse(() => parser.feed(chunk)));
+          connected.on('end', () => parse(() => parser.end()));
+          connected.on('close', () => { if (!settled) fail('REQUEST_FAILED'); });
+          connected.once('secureConnect', () => {
             if (settled) { close(); return; }
             if (!socket?.authorized || (socket.alpnProtocol && socket.alpnProtocol !== 'http/1.1')) { fail('REQUEST_FAILED'); return; }
             const headers = [`GET ${path} HTTP/1.1`, `Host: ${parsed.host}`, 'Accept-Encoding: identity', 'Connection: close',
